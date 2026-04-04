@@ -3,18 +3,16 @@
 # MateClaw
 
 [![GitHub 仓库](https://img.shields.io/badge/GitHub-仓库-black.svg?logo=github)](https://github.com/matevip/mateclaw)
-[![文档](https://img.shields.io/badge/文档-在线-green.svg?logo=readthedocs&label=Docs)](https://claw.mate.vip/docs)
-[![在线演示](https://img.shields.io/badge/演示-在线-orange.svg?logo=vercel&label=Demo)](https://claw-demo.mate.vip)
-[![官网](https://img.shields.io/badge/官网-claw.mate.vip-blue.svg?logo=googlechrome&label=Site)](https://claw.mate.vip)
+[![文档](https://img.shields.io/badge/文档-在线-green.svg?logo=readthedocs&label=Docs)](https://mateclaw.mate.vip/)
 [![Java 版本](https://img.shields.io/badge/Java-17+-blue.svg?logo=openjdk&label=Java)](https://adoptium.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-brightgreen.svg?logo=springboot)](https://spring.io/projects/spring-boot)
 [![Vue](https://img.shields.io/badge/Vue-3-4FC08D.svg?logo=vuedotjs)](https://vuejs.org/)
 [![最后提交](https://img.shields.io/github/last-commit/matevip/mateclaw)](https://github.com/matevip/mateclaw)
-[![许可证](https://img.shields.io/badge/license-Apache--2.0-red.svg?logo=opensourceinitiative&label=License)](LICENSE)
+[![许可证](https://img.shields.io/badge/license-MIT-red.svg?logo=opensourceinitiative&label=License)](LICENSE)
 [![GitHub Star](https://img.shields.io/github/stars/matevip/mateclaw?style=flat&logo=github&color=yellow&label=Stars)](https://github.com/matevip/mateclaw/stargazers)
 [![GitHub Fork](https://img.shields.io/github/forks/matevip/mateclaw?style=flat&logo=github&color=purple&label=Forks)](https://github.com/matevip/mateclaw/network)
 
-[[官网](https://claw.mate.vip)] [[在线演示](https://claw-demo.mate.vip)] [[文档](https://claw.mate.vip/docs)] [[English](README.md)]
+[[文档](https://mateclaw.mate.vip/)] [[English](README.md)]
 
 <p align="center">
   <img src="mateclaw-ui/public/logo/mateclaw_logo_s.png" alt="MateClaw Logo" width="120">
@@ -327,4 +325,4 @@ pnpm dev
 
 ## 许可证
 
-MateClaw 基于 [Apache License 2.0](LICENSE) 发布。
+MateClaw 基于 [MIT 许可证](LICENSE) 发布。

@@ -106,6 +106,7 @@ export default {
     deleteConversationFailed: '删除会话失败',
     switchModelFailed: '切换模型失败',
     uploadFailed: '文件上传失败',
+    dropToUpload: '拖放文件到此处上传',
     copyFailed: '复制失败',
     dateToday: '今天',
     dateYesterday: '昨天',

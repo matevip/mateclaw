@@ -59,7 +59,26 @@
     </div>
 
     <!-- 主聊天区域 -->
-    <div class="chat-area">
+    <div
+      class="chat-area"
+      @dragenter.prevent="onDragEnter"
+      @dragover.prevent
+      @dragleave="onDragLeave"
+      @drop.prevent="onDrop"
+    >
+      <!-- 拖拽上传遮罩 -->
+      <Transition name="fade">
+        <div v-if="isDragging" class="drop-overlay">
+          <div class="drop-overlay__content">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span>{{ $t('chat.dropToUpload') }}</span>
+          </div>
+        </div>
+      </Transition>
       <!-- 头部 -->
       <div class="chat-header">
         <div class="chat-header-left">
@@ -202,6 +221,33 @@ const providers = ref<ProviderInfo[]>([])
 const activeModels = ref<ActiveModelsInfo | null>(null)
 const pendingAttachments = ref<ChatAttachment[]>([])
 const uploadingAttachment = ref(false)
+
+// 拖拽上传
+const isDragging = ref(false)
+let dragCounter = 0
+
+function onDragEnter(e: DragEvent) {
+  dragCounter++
+  if (e.dataTransfer?.types.includes('Files')) {
+    isDragging.value = true
+  }
+}
+
+function onDragLeave() {
+  dragCounter--
+  if (dragCounter === 0) {
+    isDragging.value = false
+  }
+}
+
+function onDrop(e: DragEvent) {
+  dragCounter = 0
+  isDragging.value = false
+  const files = Array.from(e.dataTransfer?.files || [])
+  if (files.length) {
+    handleFileSelect(files)
+  }
+}
 
 const messageListRef = ref<InstanceType<typeof MessageList> | null>(null)
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
@@ -1094,6 +1140,43 @@ function handleCodeCopy(e: MouseEvent) {
   flex-direction: column;
   overflow: hidden;
   background: var(--mc-chat-bg);
+  position: relative;
+}
+
+/* 拖拽上传遮罩 */
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(217, 119, 87, 0.06);
+  backdrop-filter: blur(2px);
+}
+
+.drop-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px 60px;
+  border: 2px dashed var(--mc-primary, #D97757);
+  border-radius: 16px;
+  background: var(--mc-bg-elevated, #f8fafc);
+  color: var(--mc-primary, #D97757);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 
 .chat-header {

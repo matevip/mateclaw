@@ -6,6 +6,10 @@ server:
 spring:
   application:
     name: mateclaw-server
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 200MB
   profiles:
     active: dev
 
