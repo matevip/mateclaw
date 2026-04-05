@@ -36,7 +36,7 @@ A personal AI assistant system built with **Java + Vue 3**, powered by [Spring A
 >
 > **Every Channel** — Web console, DingTalk, Feishu, WeChat Work, Telegram, Discord, QQ. One MateClaw, connect as needed.
 >
-> **Multi-Provider Models** — DashScope (Qwen), OpenAI, Ollama, DeepSeek, OpenRouter, Zhipu AI, Volcano Engine, and more. Configure in the web UI.
+> **Multi-Provider Models** — 20+ providers: DashScope, OpenAI, Anthropic, Google Gemini, DeepSeek, Kimi, MiniMax, Zhipu AI, Volcano Engine, OpenRouter, Ollama, LM Studio, llama.cpp, MLX, and more. Configure in the web UI.
 >
 > **Desktop App** — Electron-based desktop application with auto-update support. Download and double-click to run.
 
@@ -171,7 +171,7 @@ mateclaw/
 | Layer | Technology |
 |-------|-----------|
 | Backend Framework | Spring Boot 3.5 + Spring AI Alibaba 1.1 |
-| LLM Integration | DashScope, OpenAI, Ollama, DeepSeek, OpenRouter, Zhipu, Volcano Engine |
+| LLM Integration | DashScope, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, MiniMax, Zhipu, Volcano Engine, OpenRouter, Ollama, LM Studio, llama.cpp, MLX |
 | Agent Engine | StateGraph (ReAct + Plan-and-Execute) |
 | Database | H2 (dev) / MySQL 8.0+ (prod) |
 | ORM | MyBatis Plus 3.5 |
@@ -228,14 +228,25 @@ Configure in the web UI (Settings → Models). Supported providers:
 
 | Provider | Models |
 |----------|--------|
-| DashScope (Alibaba) | Qwen-Max, Qwen-Plus, Qwen-Turbo, Qwen-Long, QVQ |
-| OpenAI | GPT-4o, GPT-4o-mini, o1, o3 |
+| **Cloud Providers** | |
+| DashScope (Alibaba) | Qwen3.5-Max, Qwen3.5-Plus, Qwen3-Max, Qwen3-Plus, Qwen-Max, Qwen-Plus, Qwen-Turbo, Qwen-Long, DeepSeek-V3.2 |
+| ModelScope | Qwen3.5-122B-A10B, GLM-5 |
+| Aliyun Coding Plan | Qwen3.5-Plus, Qwen3-Coder-Next, GLM-5, GLM-4.7, MiniMax-M2.5, Kimi-K2.5 |
+| OpenAI | GPT-5.2, GPT-5, GPT-5-Mini, GPT-5-Nano, GPT-4.1, GPT-4.1-Mini, GPT-4.1-Nano, o3, o4-mini, GPT-4o |
+| Azure OpenAI | GPT-5, GPT-4.1, GPT-4o and more |
+| Anthropic | Claude Opus 4.6, Claude Sonnet 4.6 (via model discovery) |
+| Google Gemini | Gemini 3.1 Pro, Gemini 3 Flash, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.0 Flash |
 | DeepSeek | DeepSeek-Chat, DeepSeek-Reasoner |
-| Ollama | Any locally-served model |
-| OpenRouter | Access 200+ models via unified API |
-| Zhipu AI | GLM-4-Plus, GLM-4-Flash |
-| Volcano Engine | Doubao-Pro, Doubao-Lite |
-| SiliconFlow | DeepSeek, Qwen via SiliconFlow |
+| Kimi (Moonshot) | Kimi-K2.5, Kimi-K2-Thinking, Kimi for Coding (CN / International / Code) |
+| MiniMax | MiniMax-M2.7, MiniMax-M2.5 (International / China) |
+| Zhipu AI | GLM-5.1, GLM-5, GLM-5-Turbo, GLM-5V-Turbo (CN / International) |
+| Volcano Engine | Doubao-1.5-Pro-256K, Doubao-1.5-Lite, Doubao-1.5-Thinking-Pro, Doubao-1.5-Vision-Pro |
+| OpenRouter | GPT-5, Claude Opus 4.6, Gemini 2.5 Pro, Llama 4 Maverick, DeepSeek R1, and 200+ more |
+| **Local Providers** | |
+| Ollama | Qwen3, Gemma 4, Gemma 3, Llama 3.1, DeepSeek R1, Mistral (auto-detected on startup) |
+| LM Studio | Any locally-served model |
+| llama.cpp | Any locally-served model |
+| MLX (Apple Silicon) | Any locally-served model |
 
 ### Security
 

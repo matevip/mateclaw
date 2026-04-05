@@ -36,7 +36,7 @@
 >
 > **全域触达** — Web 控制台、钉钉、飞书、企业微信、Telegram、Discord、QQ。一个 MateClaw，按需连接。
 >
-> **多厂商模型** — DashScope（通义千问）、OpenAI、Ollama、DeepSeek、OpenRouter、智谱、火山引擎等。在 Web 界面中配置。
+> **多厂商模型** — 20+ 厂商：DashScope、OpenAI、Anthropic、Google Gemini、DeepSeek、Kimi、MiniMax、智谱、火山引擎、OpenRouter、Ollama、LM Studio、llama.cpp、MLX 等。在 Web 界面中配置。
 >
 > **桌面应用** — 基于 Electron 的桌面应用，支持自动更新。下载即用。
 
@@ -171,7 +171,7 @@ mateclaw/
 | 层次 | 技术选型 |
 |------|---------|
 | 后端框架 | Spring Boot 3.5 + Spring AI Alibaba 1.1 |
-| 大模型接入 | DashScope、OpenAI、Ollama、DeepSeek、OpenRouter、智谱、火山引擎 |
+| 大模型接入 | DashScope、OpenAI、Anthropic、Gemini、DeepSeek、Kimi、MiniMax、智谱、火山引擎、OpenRouter、Ollama、LM Studio、llama.cpp、MLX |
 | Agent 引擎 | StateGraph（ReAct + Plan-and-Execute） |
 | 数据库 | H2（开发）/ MySQL 8.0+（生产） |
 | ORM | MyBatis Plus 3.5 |
@@ -228,14 +228,25 @@ mateclaw/
 
 | 厂商 | 模型 |
 |------|------|
-| DashScope（阿里云） | Qwen-Max、Qwen-Plus、Qwen-Turbo、Qwen-Long、QVQ |
-| OpenAI | GPT-4o、GPT-4o-mini、o1、o3 |
+| **云端厂商** | |
+| DashScope（阿里云） | Qwen3.5-Max、Qwen3.5-Plus、Qwen3-Max、Qwen3-Plus、Qwen-Max、Qwen-Plus、Qwen-Turbo、Qwen-Long、DeepSeek-V3.2 |
+| ModelScope | Qwen3.5-122B-A10B、GLM-5 |
+| 阿里云百炼 Coding Plan | Qwen3.5-Plus、Qwen3-Coder-Next、GLM-5、GLM-4.7、MiniMax-M2.5、Kimi-K2.5 |
+| OpenAI | GPT-5.2、GPT-5、GPT-5-Mini、GPT-5-Nano、GPT-4.1、GPT-4.1-Mini、GPT-4.1-Nano、o3、o4-mini、GPT-4o |
+| Azure OpenAI | GPT-5、GPT-4.1、GPT-4o 等 |
+| Anthropic | Claude Opus 4.6、Claude Sonnet 4.6（通过模型发现） |
+| Google Gemini | Gemini 3.1 Pro、Gemini 3 Flash、Gemini 2.5 Pro、Gemini 2.5 Flash、Gemini 2.0 Flash |
 | DeepSeek | DeepSeek-Chat、DeepSeek-Reasoner |
-| Ollama | 任意本地服务的模型 |
-| OpenRouter | 通过统一 API 接入 200+ 模型 |
-| 智谱 AI | GLM-4-Plus、GLM-4-Flash |
-| 火山引擎 | 豆包-Pro、豆包-Lite |
-| 硅基流动 | DeepSeek、Qwen via SiliconFlow |
+| Kimi（月之暗面） | Kimi-K2.5、Kimi-K2-Thinking、Kimi for Coding（国内版 / 国际版 / Code 版） |
+| MiniMax | MiniMax-M2.7、MiniMax-M2.5（国际版 / 国内版） |
+| 智谱 AI | GLM-5.1、GLM-5、GLM-5-Turbo、GLM-5V-Turbo（国内版 / 国际版） |
+| 火山引擎 | 豆包-1.5-Pro-256K、豆包-1.5-Lite、豆包-1.5-Thinking-Pro、豆包-1.5-Vision-Pro |
+| OpenRouter | GPT-5、Claude Opus 4.6、Gemini 2.5 Pro、Llama 4 Maverick、DeepSeek R1 及 200+ 模型 |
+| **本地厂商** | |
+| Ollama | Qwen3、Gemma 4、Gemma 3、Llama 3.1、DeepSeek R1、Mistral（启动时自动检测） |
+| LM Studio | 任意本地服务的模型 |
+| llama.cpp | 任意本地服务的模型 |
+| MLX（Apple Silicon） | 任意本地服务的模型 |
 
 ### 安全
 
