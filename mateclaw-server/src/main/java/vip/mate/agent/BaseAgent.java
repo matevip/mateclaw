@@ -285,11 +285,14 @@ public abstract class BaseAgent {
                 continue;
             }
 
-            // 解析媒体文件路径：先尝试原始 path，再尝试拼接工作目录
+            // 解析媒体文件路径：先尝试 path，再尝试 mediaId（IM 渠道下载后存在 mediaId 中），再拼接工作目录
             Path mediaPath = resolveImagePath(part.getPath());
+            if (mediaPath == null && part.getMediaId() != null) {
+                mediaPath = resolveImagePath(part.getMediaId());
+            }
             if (mediaPath == null) {
-                log.warn("[{}] {} file not found for attachment: {}, path: {}",
-                        agentName, isVideo ? "Video" : "Image", part.getFileName(), part.getPath());
+                log.warn("[{}] {} file not found for attachment: {}, path: {}, mediaId: {}",
+                        agentName, isVideo ? "Video" : "Image", part.getFileName(), part.getPath(), part.getMediaId());
                 continue;
             }
             try {
