@@ -113,10 +113,24 @@ public class ToolGuardSchemaMigration implements ApplicationRunner {
      * 为 mate_tool_guard_config 补充审计配置列（向已有表兼容迁移）
      */
     private void migrateGuardConfigAuditColumns() {
-        safeExecute("ALTER TABLE mate_tool_guard_config ADD COLUMN audit_enabled BOOLEAN NOT NULL DEFAULT TRUE");
-        safeExecute("ALTER TABLE mate_tool_guard_config ADD COLUMN audit_min_severity VARCHAR(16) NOT NULL DEFAULT 'INFO'");
-        safeExecute("ALTER TABLE mate_tool_guard_config ADD COLUMN audit_retention_days INT NOT NULL DEFAULT 90");
+        safeAddColumn("mate_tool_guard_config", "audit_enabled", "BOOLEAN NOT NULL DEFAULT TRUE");
+        safeAddColumn("mate_tool_guard_config", "audit_min_severity", "VARCHAR(16) NOT NULL DEFAULT 'INFO'");
+        safeAddColumn("mate_tool_guard_config", "audit_retention_days", "INT NOT NULL DEFAULT 90");
         log.info("[ToolGuardSchemaMigration] audit columns migration done");
+    }
+
+    private void safeAddColumn(String table, String column, String definition) {
+        try {
+            Integer count = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?",
+                    Integer.class, table.toUpperCase(), column.toUpperCase());
+            if (count != null && count > 0) {
+                return;
+            }
+            jdbcTemplate.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
+        } catch (Exception e) {
+            log.debug("[ToolGuardSchemaMigration] Column migration skipped: {}", e.getMessage());
+        }
     }
 
     private void safeExecute(String sql) {
