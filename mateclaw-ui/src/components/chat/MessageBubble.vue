@@ -221,6 +221,19 @@
             />
             <span class="message-attachment-image__name">{{ attachment.name }}</span>
           </div>
+          <div
+            v-for="attachment in videoAttachments"
+            :key="attachment.storedName"
+            class="message-attachment-video"
+          >
+            <video
+              :src="getDisplayUrl(attachment)"
+              controls
+              preload="metadata"
+              playsinline
+            />
+            <span class="message-attachment-video__name">{{ attachment.name }}</span>
+          </div>
           <button
             v-for="attachment in fileAttachments"
             :key="attachment.storedName"
@@ -293,7 +306,7 @@ import type { ChatErrorInfo } from '@/types/chatError'
 
 const { renderMarkdown } = useMarkdownRenderer()
 const { t } = useI18n()
-const { blobUrls, loadAllImages, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
+const { blobUrls, loadAllImages, loadAllVideos, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
 
 interface Props {
   message: Message
@@ -462,11 +475,17 @@ onBeforeUnmount(() => {
 // --- 附件 ---
 const attachments = computed(() => props.message.attachments || [])
 const imageAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('image/')))
-const fileAttachments = computed(() => attachments.value.filter(a => !a.contentType?.startsWith('image/')))
+const videoAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('video/')))
+const fileAttachments = computed(() => attachments.value.filter(a =>
+  !a.contentType?.startsWith('image/') && !a.contentType?.startsWith('video/')
+))
 
-// 增量加载图片附件的鉴权 blob URL（watch 覆盖首次 + 后续变化）
+// 增量加载图片/视频附件的鉴权 blob URL（watch 覆盖首次 + 后续变化）
 watch(imageAttachments, (atts) => {
   if (atts.length > 0) loadAllImages(atts)
+}, { immediate: true })
+watch(videoAttachments, (atts) => {
+  if (atts.length > 0) loadAllVideos(atts)
 }, { immediate: true })
 
 // --- 时间 ---
@@ -1316,6 +1335,27 @@ watch(isGenerating, (generating) => {
 }
 
 .message-attachment-image__name {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.76;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-attachment-video {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.message-attachment-video video {
+  max-width: 400px;
+  max-height: 280px;
+  border-radius: 12px;
+}
+
+.message-attachment-video__name {
   display: block;
   margin-top: 4px;
   font-size: 12px;

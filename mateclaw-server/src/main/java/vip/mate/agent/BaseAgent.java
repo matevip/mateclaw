@@ -225,42 +225,78 @@ public abstract class BaseAgent {
         };
     }
 
+    private static final long MAX_VIDEO_SIZE_BYTES = 20 * 1024 * 1024; // 20MB
+
     /**
-     * 构建 UserMessage，支持 multimodal：如果消息包含图片附件，直接注入 Spring AI Media 对象，
-     * 让模型在 prompt 中直接看到图片，不需要再调 MCP read_media_file 工具。
+     * 判断当前模型是否支持视频输入。
+     * 仅已知支持视频分析的视觉模型（Qwen-VL、GPT-4o、Gemini 等）才注入视频 Media。
+     */
+    private boolean modelSupportsVideo() {
+        if (modelName == null) return false;
+        String n = modelName.toLowerCase();
+        return (n.contains("qwen") && n.contains("vl"))
+                || n.contains("gpt-4o")
+                || n.contains("gemini")
+                || (n.contains("glm") && n.contains("v"));
+    }
+
+    /**
+     * 构建 UserMessage，支持 multimodal：如果消息包含图片/视频附件，直接注入 Spring AI Media 对象，
+     * 让模型在 prompt 中直接看到媒体内容，不需要再调 MCP read_media_file 工具。
      */
     protected UserMessage buildUserMessage(MessageEntity message, String renderedContent) {
         List<MessageContentPart> parts = conversationService.parseMessageParts(message);
         List<Media> mediaList = new ArrayList<>();
+        boolean videoSupported = modelSupportsVideo();
 
         for (MessageContentPart part : parts) {
-            if (part == null || !"file".equals(part.getType())) {
-                continue;
-            }
+            if (part == null) continue;
+            String partType = part.getType();
             String contentType = part.getContentType();
-            if (contentType == null || !contentType.startsWith("image/")) {
-                continue;
-            }
+            if (contentType == null) continue;
+
+            boolean isImage = "file".equals(partType) && contentType.startsWith("image/");
+            boolean isVideo = ("video".equals(partType) || "file".equals(partType)) && contentType.startsWith("video/");
+
+            if (!isImage && !isVideo) continue;
+
             // SVG 是 XML 文本，不是光栅图片，LLM multimodal API 不支持
-            if (contentType.contains("svg")) {
+            if (isImage && contentType.contains("svg")) {
                 log.debug("[{}] Skipping SVG attachment (not supported by multimodal API): {}",
                         agentName, part.getFileName());
                 continue;
             }
-            // 解析图片文件路径：先尝试原始 path，再尝试拼接工作目录
-            Path imagePath = resolveImagePath(part.getPath());
-            if (imagePath == null) {
-                log.warn("[{}] Image file not found for attachment: {}, path: {}",
-                        agentName, part.getFileName(), part.getPath());
+
+            // 视频仅在模型支持时注入，否则跳过（避免发送给非视觉模型导致 400 错误）
+            if (isVideo && !videoSupported) {
+                log.debug("[{}] Skipping video attachment (model '{}' does not support video): {}",
+                        agentName, modelName, part.getFileName());
+                continue;
+            }
+
+            // 视频文件大小保护
+            if (isVideo && part.getFileSize() != null && part.getFileSize() > MAX_VIDEO_SIZE_BYTES) {
+                log.warn("[{}] Skipping oversized video attachment ({}MB > 20MB): {}",
+                        agentName, part.getFileSize() / (1024 * 1024), part.getFileName());
+                continue;
+            }
+
+            // 解析媒体文件路径：先尝试原始 path，再尝试拼接工作目录
+            Path mediaPath = resolveImagePath(part.getPath());
+            if (mediaPath == null) {
+                log.warn("[{}] {} file not found for attachment: {}, path: {}",
+                        agentName, isVideo ? "Video" : "Image", part.getFileName(), part.getPath());
                 continue;
             }
             try {
                 MimeType mimeType = MimeType.valueOf(contentType);
-                Media media = new Media(mimeType, new FileSystemResource(imagePath));
+                Media media = new Media(mimeType, new FileSystemResource(mediaPath));
                 mediaList.add(media);
-                log.debug("[{}] Injected image into prompt: {} ({})", agentName, part.getFileName(), imagePath);
+                log.debug("[{}] Injected {} into prompt: {} ({})",
+                        agentName, isVideo ? "video" : "image", part.getFileName(), mediaPath);
             } catch (Exception e) {
-                log.warn("[{}] Failed to create Media for image {}: {}", agentName, part.getFileName(), e.getMessage());
+                log.warn("[{}] Failed to create Media for {} {}: {}",
+                        agentName, isVideo ? "video" : "image", part.getFileName(), e.getMessage());
             }
         }
 

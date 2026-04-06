@@ -915,9 +915,10 @@ async function handleFileSelect(files: File[]) {
     for (const file of files) {
       const res: any = await chatApi.uploadFile(currentConversationId.value, file)
       const data = res.data || {}
-      // 图片使用本地 ObjectURL 预览（避免 /api/v1/chat/files/ 需要 JWT 认证导致 <img> 加载失败）
-      const isImage = (data.contentType || file.type || '').startsWith('image/')
-      const previewUrl = isImage ? URL.createObjectURL(file) : data.url
+      // 图片/视频使用本地 ObjectURL 预览（避免 /api/v1/chat/files/ 需要 JWT 认证导致加载失败）
+      const ct = data.contentType || file.type || ''
+      const isPreviewable = ct.startsWith('image/') || ct.startsWith('video/')
+      const previewUrl = isPreviewable ? URL.createObjectURL(file) : data.url
       pendingAttachments.value.push({
         name: data.fileName || file.name,
         size: data.size || file.size,
@@ -959,8 +960,12 @@ function buildOutgoingParts(text: string, attachments: ChatAttachment[]): Messag
   const parts: MessageContentPart[] = []
   if (text) parts.push({ type: 'text', text })
   for (const attachment of attachments) {
+    const ct = attachment.contentType || ''
+    const partType: MessageContentPart['type'] = ct.startsWith('video/') ? 'video'
+      : ct.startsWith('image/') ? 'image'
+      : 'file'
     parts.push({
-      type: 'file',
+      type: partType,
       fileUrl: attachment.url,
       fileName: attachment.name,
       storedName: attachment.storedName,
@@ -1029,8 +1034,8 @@ function normalizeMessage(raw: Message): Message {
   // interrupted 是合法的历史状态（interrupt-with-followup），不映射为 stopped
   if (!msg.status) msg.status = 'completed'
 
-  // 从 file-type contentParts 恢复 attachments（历史消息 API 不返回单独的 attachments 字段）
-  const fileParts = msg.contentParts.filter(p => p.type === 'file' && p.fileUrl)
+  // 从 file/image/video contentParts 恢复 attachments（历史消息 API 不返回单独的 attachments 字段）
+  const fileParts = msg.contentParts.filter(p => (p.type === 'file' || p.type === 'image' || p.type === 'video') && p.fileUrl)
   if (fileParts.length > 0 && (!msg.attachments || msg.attachments.length === 0)) {
     msg.attachments = fileParts.map(p => ({
       name: p.fileName || 'unknown',

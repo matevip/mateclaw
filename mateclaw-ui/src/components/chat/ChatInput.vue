@@ -17,6 +17,7 @@
         :class="{
           'attachment-chip--dir': attachment.contentType === 'inode/directory',
           'attachment-chip--image': attachment.contentType?.startsWith('image/'),
+          'attachment-chip--video': attachment.contentType?.startsWith('video/'),
         }"
       >
         <!-- 图片缩略图预览（优先用本地 previewUrl，避免 JWT 认证问题） -->
@@ -26,6 +27,14 @@
           :alt="attachment.name"
           class="attachment-chip__thumbnail"
           loading="lazy"
+        />
+        <!-- 视频缩略图预览 -->
+        <video
+          v-else-if="attachment.contentType?.startsWith('video/') && (attachment.previewUrl || attachment.url)"
+          :src="attachment.previewUrl || attachment.url"
+          class="attachment-chip__thumbnail"
+          preload="metadata"
+          muted
         />
         <component
           :is="attachment.url ? 'a' : 'span'"
@@ -416,7 +425,8 @@ defineExpose({
   padding: 6px 8px 6px 12px;
 }
 
-.attachment-chip--image {
+.attachment-chip--image,
+.attachment-chip--video {
   padding: 4px 6px;
 }
 

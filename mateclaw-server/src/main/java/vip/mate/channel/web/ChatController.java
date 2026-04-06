@@ -867,6 +867,10 @@ public class ChatController {
 
         Resource resource = new FileSystemResource(filePath);
         String contentType = Files.probeContentType(filePath);
+        // probeContentType 在部分平台不识别视频格式，通过扩展名 fallback
+        if (contentType == null) {
+            contentType = guessContentTypeByExtension(filePath.getFileName().toString());
+        }
         MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
         if (contentType != null) {
             try {
@@ -1107,6 +1111,8 @@ public class ChatController {
             switch (part.getType()) {
                 case "text", "thinking" -> appendPromptLine(builder, part.getText());
                 case "file" -> appendPromptLine(builder, "附件: " + safe(part.getFileName()) + " (" + safe(part.getPath()) + ")");
+                case "image" -> appendPromptLine(builder, "图片附件: " + safe(part.getFileName()) + " (" + safe(part.getPath()) + ")");
+                case "video" -> appendPromptLine(builder, "视频附件: " + safe(part.getFileName()) + " (" + safe(part.getPath()) + ")");
                 default -> appendPromptLine(builder, part.getText());
             }
         }
@@ -1125,6 +1131,19 @@ public class ChatController {
 
     private String safe(String text) {
         return text == null ? "" : text;
+    }
+
+    private static final java.util.Map<String, String> MEDIA_CONTENT_TYPES = java.util.Map.of(
+            "mp4", "video/mp4", "webm", "video/webm", "mov", "video/quicktime",
+            "avi", "video/x-msvideo", "mkv", "video/x-matroska", "mpeg", "video/mpeg",
+            "mp3", "audio/mpeg", "wav", "audio/wav", "ogg", "audio/ogg"
+    );
+
+    private static String guessContentTypeByExtension(String fileName) {
+        if (fileName == null) return null;
+        int dot = fileName.lastIndexOf('.');
+        if (dot < 0 || dot == fileName.length() - 1) return null;
+        return MEDIA_CONTENT_TYPES.get(fileName.substring(dot + 1).toLowerCase());
     }
 
     /**

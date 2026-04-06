@@ -782,6 +782,7 @@ public class AgentGraphBuilder {
                     MultiValueMap<String, String> additionalHttpHeader) {
                 chatRequest = patchReasoningContent(chatRequest);
                 chatRequest = stripReasoningEffortIfIncompatible(chatRequest);
+                chatRequest = patchVideoMediaContent(chatRequest);
                 if (kimiSearchEnabled) {
                     chatRequest = injectKimiWebSearch(chatRequest);
                 }
@@ -800,6 +801,7 @@ public class AgentGraphBuilder {
                     MultiValueMap<String, String> additionalHttpHeader) {
                 chatRequest = patchReasoningContent(chatRequest);
                 chatRequest = stripReasoningEffortIfIncompatible(chatRequest);
+                chatRequest = patchVideoMediaContent(chatRequest);
                 if (kimiSearchEnabled) {
                     chatRequest = injectKimiWebSearch(chatRequest);
                 }
@@ -1376,6 +1378,121 @@ public class AgentGraphBuilder {
     private static boolean requiresReasoningContentPatch(String modelName) {
         ModelFamily family = ModelFamily.detect(modelName);
         return family.isThinking();
+    }
+
+    /**
+     * 将 Spring AI 错误地序列化为 image_url 的视频内容块转换为 video_url 格式。
+     * <p>
+     * Spring AI 1.x 的 MediaContent 没有 video_url 类型，所有非 audio/pdf 的 Media
+     * 都被序列化为 image_url。智谱 GLM-5V 等模型要求视频使用 video_url 格式，
+     * 否则会报"图片输入格式/解析错误"。
+     * <p>
+     * 此方法遍历 user 消息的 rawContent，将 data:video/* 前缀的 image_url 替换为 video_url。
+     */
+    @SuppressWarnings("unchecked")
+    private static OpenAiApi.ChatCompletionRequest patchVideoMediaContent(OpenAiApi.ChatCompletionRequest request) {
+        if (request.messages() == null || request.messages().isEmpty()) {
+            return request;
+        }
+
+        boolean needsPatch = false;
+        for (var msg : request.messages()) {
+            if (msg.role() == OpenAiApi.ChatCompletionMessage.Role.USER) {
+                Object raw = msg.rawContent();
+                if (raw instanceof List<?> parts) {
+                    for (Object part : parts) {
+                        // 检查是否为 MediaContent record
+                        if (part instanceof OpenAiApi.ChatCompletionMessage.MediaContent mc
+                                && "image_url".equals(mc.type())
+                                && mc.imageUrl() != null
+                                && mc.imageUrl().url() != null
+                                && mc.imageUrl().url().startsWith("data:video/")) {
+                            needsPatch = true;
+                            break;
+                        }
+                        // 检查是否为 Map（Spring AI 内部用 LinkedHashMap 表示 content parts）
+                        if (part instanceof java.util.Map<?,?> map) {
+                            Object type = map.get("type");
+                            if ("image_url".equals(type)) {
+                                Object imgUrlObj = map.get("image_url");
+                                if (imgUrlObj instanceof java.util.Map<?,?> imgUrl) {
+                                    Object url = imgUrl.get("url");
+                                    if (url instanceof String urlStr && urlStr.startsWith("data:video/")) {
+                                        needsPatch = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (needsPatch) break;
+        }
+        if (!needsPatch) {
+            return request;
+        }
+
+        List<OpenAiApi.ChatCompletionMessage> patched = request.messages().stream().map(msg -> {
+            if (msg.role() != OpenAiApi.ChatCompletionMessage.Role.USER || !(msg.rawContent() instanceof List<?> parts)) {
+                return msg;
+            }
+            List<Object> newParts = new ArrayList<>();
+            for (Object part : parts) {
+                String videoDataUrl = null;
+
+                // 场景 1：MediaContent record（Spring AI 原生构建）
+                if (part instanceof OpenAiApi.ChatCompletionMessage.MediaContent mc
+                        && "image_url".equals(mc.type())
+                        && mc.imageUrl() != null && mc.imageUrl().url() != null
+                        && mc.imageUrl().url().startsWith("data:video/")) {
+                    videoDataUrl = mc.imageUrl().url();
+                }
+                // 场景 2：Map（Jackson 反序列化或 Spring AI 内部用 Map 表示）
+                if (videoDataUrl == null && part instanceof java.util.Map<?,?> map
+                        && "image_url".equals(map.get("type"))) {
+                    Object imgUrlObj = map.get("image_url");
+                    if (imgUrlObj instanceof java.util.Map<?,?> imgUrl) {
+                        Object url = imgUrl.get("url");
+                        if (url instanceof String urlStr && urlStr.startsWith("data:video/")) {
+                            videoDataUrl = urlStr;
+                        }
+                    }
+                }
+
+                if (videoDataUrl != null) {
+                    // 替换为 video_url 格式
+                    newParts.add(Map.of(
+                            "type", "video_url",
+                            "video_url", Map.of("url", videoDataUrl)
+                    ));
+                } else {
+                    newParts.add(part);
+                }
+            }
+            return new OpenAiApi.ChatCompletionMessage(
+                    newParts, msg.role(), msg.name(), msg.toolCallId(),
+                    msg.toolCalls(), msg.refusal(), msg.audioOutput(),
+                    msg.annotations(), msg.reasoningContent());
+        }).toList();
+
+        return new OpenAiApi.ChatCompletionRequest(
+                patched,
+                request.model(), request.store(), request.metadata(),
+                request.frequencyPenalty(), request.logitBias(),
+                request.logprobs(), request.topLogprobs(),
+                request.maxTokens(), request.maxCompletionTokens(),
+                request.n(), request.outputModalities(), request.audioParameters(),
+                request.presencePenalty(), request.responseFormat(),
+                request.seed(), request.serviceTier(), request.stop(),
+                request.stream(), request.streamOptions(),
+                request.temperature(), request.topP(),
+                request.tools(), request.toolChoice(), request.parallelToolCalls(),
+                request.user(), request.reasoningEffort(),
+                request.webSearchOptions(), request.verbosity(),
+                request.promptCacheKey(), request.safetyIdentifier(),
+                request.extraBody()
+        );
     }
 
     private void logOpenAiRequest(ModelProviderEntity provider, OpenAiApi.ChatCompletionRequest chatRequest) {

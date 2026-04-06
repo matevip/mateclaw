@@ -143,7 +143,7 @@ export interface MessageMetadata {
 }
 
 export interface MessageContentPart {
-  type: 'text' | 'thinking' | 'file' | 'tool_call'
+  type: 'text' | 'thinking' | 'image' | 'file' | 'audio' | 'video' | 'tool_call'
   text?: string
   fileUrl?: string
   fileName?: string
