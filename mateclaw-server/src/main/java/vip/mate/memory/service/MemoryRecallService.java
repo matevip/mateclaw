@@ -11,8 +11,6 @@ import vip.mate.memory.MemoryProperties;
 import vip.mate.memory.model.MemoryRecallEntity;
 import vip.mate.memory.repository.MemoryRecallMapper;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
@@ -45,7 +43,7 @@ public class MemoryRecallService {
             return;
         }
 
-        String snippetHash = sha256(snippetText);
+        // snippet preview 只取前 200 字符（避免对大文件做完整 SHA-256）
         String preview = snippetText != null && snippetText.length() > 200
                 ? snippetText.substring(0, 200)
                 : snippetText;
@@ -63,10 +61,8 @@ public class MemoryRecallService {
             existing.setRecallCount(existing.getRecallCount() + 1);
             existing.setDailyCount(existing.getDailyCount() + 1);
             existing.setLastRecalledAt(now);
-            existing.setSnippetHash(snippetHash);
             existing.setSnippetPreview(preview);
 
-            // 追加 query hash（去重，最多 MAX_QUERY_HASHES 个）
             if (userQueryHash != null) {
                 List<String> hashes = parseQueryHashes(existing.getQueryHashes());
                 if (!hashes.contains(userQueryHash) && hashes.size() < MAX_QUERY_HASHES) {
@@ -77,25 +73,31 @@ public class MemoryRecallService {
 
             recallMapper.updateById(existing);
         } else {
-            MemoryRecallEntity entity = new MemoryRecallEntity();
-            entity.setAgentId(agentId);
-            entity.setFilename(filename);
-            entity.setSnippetHash(snippetHash);
-            entity.setSnippetPreview(preview);
-            entity.setRecallCount(1);
-            entity.setDailyCount(1);
-            entity.setLastRecalledAt(now);
-            entity.setPromoted(false);
-            entity.setScore(0.0);
-            entity.setCreateTime(now);
-            entity.setUpdateTime(now);
-            entity.setDeleted(0);
+            // 防并发：trackRecalls 和 trackActiveRetrieval 可能同时插入同一 filename
+            try {
+                MemoryRecallEntity entity = new MemoryRecallEntity();
+                entity.setAgentId(agentId);
+                entity.setFilename(filename);
+                entity.setSnippetPreview(preview);
+                entity.setRecallCount(1);
+                entity.setDailyCount(1);
+                entity.setLastRecalledAt(now);
+                entity.setPromoted(false);
+                entity.setScore(0.0);
+                entity.setCreateTime(now);
+                entity.setUpdateTime(now);
+                entity.setDeleted(0);
 
-            if (userQueryHash != null) {
-                entity.setQueryHashes(toJson(List.of(userQueryHash)));
+                if (userQueryHash != null) {
+                    entity.setQueryHashes(toJson(List.of(userQueryHash)));
+                }
+
+                recallMapper.insert(entity);
+            } catch (org.springframework.dao.DuplicateKeyException e) {
+                // 并发插入冲突，退化为更新
+                log.debug("[MemoryRecall] Concurrent insert for {}, retrying as update", filename);
+                recordRecall(agentId, filename, snippetText, userQueryHash);
             }
-
-            recallMapper.insert(entity);
         }
     }
 
@@ -133,17 +135,20 @@ public class MemoryRecallService {
 
         LocalDateTime now = LocalDateTime.now();
 
+        // 预解析 queryHashes，避免重复 JSON 反序列化（每条记录只解析一次）
+        Map<Long, List<String>> queryHashCache = new HashMap<>();
+        for (MemoryRecallEntity e : candidates) {
+            queryHashCache.put(e.getId(), parseQueryHashes(e.getQueryHashes()));
+        }
+
         // 前置硬门控：不满足的直接跳过评分
         int minRecallCount = properties.getEmergenceMinRecallCount();
         int minUniqueQueries = properties.getEmergenceMinUniqueQueries();
         int maxAgeDays = properties.getEmergenceMaxAgeDays();
 
         candidates = candidates.stream().filter(e -> {
-            // 门控 1：最少召回次数
             if (e.getRecallCount() < minRecallCount) return false;
-            // 门控 2：最少不同查询数
-            if (parseQueryHashes(e.getQueryHashes()).size() < minUniqueQueries) return false;
-            // 门控 3：最大年龄
+            if (queryHashCache.getOrDefault(e.getId(), Collections.emptyList()).size() < minUniqueQueries) return false;
             if (maxAgeDays > 0 && e.getCreateTime() != null) {
                 long ageDays = ChronoUnit.DAYS.between(e.getCreateTime(), now);
                 if (ageDays > maxAgeDays) return false;
@@ -160,43 +165,40 @@ public class MemoryRecallService {
                 .mapToInt(MemoryRecallEntity::getRecallCount)
                 .max().orElse(1);
         int maxQueryDiversity = candidates.stream()
-                .mapToInt(e -> parseQueryHashes(e.getQueryHashes()).size())
+                .mapToInt(e -> queryHashCache.getOrDefault(e.getId(), Collections.emptyList()).size())
                 .max().orElse(1);
 
         double halfLifeDays = 7.0;
         double threshold = properties.getEmergenceScoreThreshold();
 
         for (MemoryRecallEntity entry : candidates) {
-            // 1. 频率 (0.30)
             double frequency = (double) entry.getRecallCount() / Math.max(maxRecallCount, 1);
 
-            // 2. 时效性 (0.25) — 指数衰减
             double recency = 0.0;
             if (entry.getLastRecalledAt() != null) {
                 long daysSinceRecall = ChronoUnit.DAYS.between(entry.getLastRecalledAt(), now);
-                recency = Math.exp(-0.693 * daysSinceRecall / halfLifeDays); // ln(2) ≈ 0.693
+                recency = Math.exp(-0.693 * daysSinceRecall / halfLifeDays);
             }
 
-            // 3. 查询多样性 (0.20)
-            int queryCount = parseQueryHashes(entry.getQueryHashes()).size();
+            int queryCount = queryHashCache.getOrDefault(entry.getId(), Collections.emptyList()).size();
             double diversity = (double) queryCount / Math.max(maxQueryDiversity, 1);
 
-            // 4. 内容新鲜度 (0.15) — 根据文件名日期
             double freshness = computeFreshness(entry.getFilename(), now);
 
-            // 5. 召回速度 (0.10) — dailyCount / recallCount
             double velocity = entry.getRecallCount() > 0
                     ? (double) entry.getDailyCount() / entry.getRecallCount()
                     : 0.0;
 
-            double score = 0.30 * frequency
-                    + 0.25 * recency
-                    + 0.20 * diversity
-                    + 0.15 * freshness
-                    + 0.10 * velocity;
+            entry.setScore(0.30 * frequency + 0.25 * recency + 0.20 * diversity
+                    + 0.15 * freshness + 0.10 * velocity);
+        }
 
-            entry.setScore(score);
-            recallMapper.updateById(entry);
+        // 批量更新分数（一次 SQL 替代 N 次）
+        for (MemoryRecallEntity entry : candidates) {
+            recallMapper.update(null,
+                    new LambdaUpdateWrapper<MemoryRecallEntity>()
+                            .eq(MemoryRecallEntity::getId, entry.getId())
+                            .set(MemoryRecallEntity::getScore, entry.getScore()));
         }
 
         return candidates.stream()
@@ -316,18 +318,4 @@ public class MemoryRecallService {
         }
     }
 
-    private String sha256(String text) {
-        if (text == null || text.isBlank()) return null;
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(text.getBytes(StandardCharsets.UTF_8));
-            StringBuilder hex = new StringBuilder();
-            for (byte b : hash) {
-                hex.append(String.format("%02x", b));
-            }
-            return hex.toString();
-        } catch (Exception e) {
-            return null;
-        }
-    }
 }

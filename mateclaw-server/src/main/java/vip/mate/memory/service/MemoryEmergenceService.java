@@ -212,11 +212,23 @@ public class MemoryEmergenceService {
                 diary.append("\n");
             }
 
-            // 读取现有 DREAMS.md，追加到开头（最新在最上面）
+            // 读取现有 DREAMS.md，追加新日记
             String existing = readFileContentSafe(agentId, "DREAMS.md");
             String newContent = existing.isBlank()
                     ? "# Dreaming 整合日记\n\n" + diary
                     : existing + "\n" + diary;
+
+            // 防止无限膨胀：超过 20KB 时截断，只保留最近的内容
+            if (newContent.length() > 20_000) {
+                int cutPoint = newContent.length() - 16_000;
+                // 找到下一个 "## " 标记作为安全截断点
+                int safePoint = newContent.indexOf("\n## ", cutPoint);
+                if (safePoint > 0) {
+                    newContent = "# Dreaming 整合日记\n\n> 早期记录已归档\n\n"
+                            + newContent.substring(safePoint + 1);
+                }
+            }
+
             workspaceFileService.saveFile(agentId, "DREAMS.md", newContent);
             log.info("[Memory] Dream diary appended for agent={}", agentId);
         } catch (Exception e) {
