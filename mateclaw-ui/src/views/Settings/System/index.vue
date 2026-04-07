@@ -159,6 +159,36 @@
           />
         </div>
       </div>
+
+      <!-- Keyless Provider 配置 -->
+      <div class="setting-item">
+        <div class="setting-info">
+          <div class="setting-label">{{ t('settings.fields.duckduckgoEnabled') }}</div>
+          <div class="setting-hint">{{ t('settings.hints.duckduckgoEnabled') }}</div>
+        </div>
+        <div class="setting-control">
+          <label class="toggle-switch">
+            <input v-model="settings.duckduckgoEnabled" type="checkbox" :disabled="!settings.searchEnabled" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-item setting-item-vertical">
+        <div class="setting-info">
+          <div class="setting-label">{{ t('settings.fields.searxngBaseUrl') }}</div>
+          <div class="setting-hint">{{ t('settings.hints.searxngBaseUrl') }}</div>
+        </div>
+        <div class="setting-control-full">
+          <input
+            v-model="settings.searxngBaseUrl"
+            type="text"
+            class="form-input"
+            placeholder="http://searxng:8080"
+            :disabled="!settings.searchEnabled"
+          />
+        </div>
+      </div>
     </div>
 
     <div class="save-bar">
@@ -193,6 +223,8 @@ const settings = reactive<SystemSettings>({
   searchFallbackEnabled: false,
   serperBaseUrl: 'https://google.serper.dev/search',
   tavilyBaseUrl: 'https://api.tavily.com/search',
+  duckduckgoEnabled: true,
+  searxngBaseUrl: '',
 })
 
 onMounted(async () => {

@@ -330,6 +330,8 @@ export default {
       serperBaseUrl: 'Serper Base URL',
       tavilyApiKey: 'Tavily API Key',
       tavilyBaseUrl: 'Tavily Base URL',
+      duckduckgoEnabled: 'DuckDuckGo (Keyless)',
+      searxngBaseUrl: 'SearXNG Base URL',
     },
     hints: {
       provider: 'Current implementation applies DashScope model options at runtime.',
@@ -343,6 +345,8 @@ export default {
       serperBaseUrl: 'Usually no need to change unless using a custom proxy.',
       tavilyApiKey: 'API key for Tavily search, get it from tavily.com.',
       tavilyBaseUrl: 'Usually no need to change unless using a custom proxy.',
+      duckduckgoEnabled: 'Free keyless search fallback. No API key required. Enabled by default as a zero-config fallback.',
+      searxngBaseUrl: 'Self-hosted SearXNG instance URL. Auto-configured when deploying via Docker.',
     },
     searchTitle: 'Search Service',
     searchDesc: 'Configure the built-in search tool provider and API credentials',

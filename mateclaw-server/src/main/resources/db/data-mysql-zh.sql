@@ -296,6 +296,14 @@ INSERT INTO mate_system_setting (id, setting_key, setting_value, description, cr
 VALUES (1000000011, 'tavilyBaseUrl', 'https://api.tavily.com/search', 'Tavily 接口地址', NOW(), NOW())
 ON DUPLICATE KEY UPDATE setting_key=VALUES(setting_key), setting_value=VALUES(setting_value), description=VALUES(description), update_time=VALUES(update_time);
 
+INSERT INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+VALUES (1000000012, 'duckduckgoEnabled', 'true', 'DuckDuckGo 免 Key 搜索兜底（零配置可用）', NOW(), NOW())
+ON DUPLICATE KEY UPDATE setting_key=VALUES(setting_key), setting_value=VALUES(setting_value), description=VALUES(description), update_time=VALUES(update_time);
+
+INSERT INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+VALUES (1000000013, 'searxngBaseUrl', '', 'SearXNG 实例地址（Docker 部署时自动配置）', NOW(), NOW())
+ON DUPLICATE KEY UPDATE setting_key=VALUES(setting_key), setting_value=VALUES(setting_value), description=VALUES(description), update_time=VALUES(update_time);
+
 -- 内置工具：日期时间
 INSERT INTO mate_tool (id, name, display_name, description, tool_type, bean_name, icon, enabled, builtin, create_time, update_time, deleted)
 VALUES (1000000001, 'DateTimeTool', '日期时间', '获取当前日期和时间信息', 'builtin', 'dateTimeTool', '🕐', TRUE, TRUE, NOW(), NOW(), 0)

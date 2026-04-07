@@ -25,6 +25,23 @@ services:
       timeout: 5s
       retries: 5
 
+  # SearXNG 搜索引擎（keyless 搜索 provider，零配置可用）
+  searxng:
+    image: searxng/searxng:latest
+    container_name: mateclaw-searxng
+    restart: unless-stopped
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080
+    volumes:
+      - searxng_data:/etc/searxng
+    ports:
+      - "8088:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   # MateClaw 后端服务
   mateclaw-server:
     build:
@@ -34,6 +51,8 @@ services:
     restart: unless-stopped
     depends_on:
       mysql:
+        condition: service_healthy
+      searxng:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: mysql
@@ -52,3 +71,4 @@ services:
 volumes:
   mysql_data:
   server_data:
+  searxng_data:

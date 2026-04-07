@@ -499,6 +499,9 @@ export interface SystemSettings {
   tavilyBaseUrl: string
   serperApiKeyMasked?: string
   tavilyApiKeyMasked?: string
+  // Keyless 搜索 provider
+  duckduckgoEnabled: boolean
+  searxngBaseUrl: string
 }
 
 export interface ProviderModelInfo {

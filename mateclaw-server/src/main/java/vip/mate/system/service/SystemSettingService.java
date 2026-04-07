@@ -24,6 +24,8 @@ public class SystemSettingService {
     private static final String SERPER_BASE_URL_KEY = "serperBaseUrl";
     private static final String TAVILY_API_KEY_KEY = "tavilyApiKey";
     private static final String TAVILY_BASE_URL_KEY = "tavilyBaseUrl";
+    private static final String DUCKDUCKGO_ENABLED_KEY = "duckduckgoEnabled";
+    private static final String SEARXNG_BASE_URL_KEY = "searxngBaseUrl";
 
     private final SystemSettingMapper systemSettingMapper;
 
@@ -40,6 +42,9 @@ public class SystemSettingService {
         dto.setSearchFallbackEnabled(Boolean.parseBoolean(getValue(SEARCH_FALLBACK_ENABLED_KEY, "false")));
         dto.setSerperBaseUrl(getValue(SERPER_BASE_URL_KEY, "https://google.serper.dev/search"));
         dto.setTavilyBaseUrl(getValue(TAVILY_BASE_URL_KEY, "https://api.tavily.com/search"));
+        // Keyless provider 配置
+        dto.setDuckduckgoEnabled(Boolean.parseBoolean(getValue(DUCKDUCKGO_ENABLED_KEY, "true")));
+        dto.setSearxngBaseUrl(getValue(SEARXNG_BASE_URL_KEY, ""));
         // API Key 脱敏回显
         dto.setSerperApiKeyMasked(maskApiKey(getValue(SERPER_API_KEY_KEY, "")));
         dto.setTavilyApiKeyMasked(maskApiKey(getValue(TAVILY_API_KEY_KEY, "")));
@@ -58,6 +63,8 @@ public class SystemSettingService {
         dto.setSerperBaseUrl(getValue(SERPER_BASE_URL_KEY, "https://google.serper.dev/search"));
         dto.setTavilyApiKey(getValue(TAVILY_API_KEY_KEY, ""));
         dto.setTavilyBaseUrl(getValue(TAVILY_BASE_URL_KEY, "https://api.tavily.com/search"));
+        dto.setDuckduckgoEnabled(Boolean.parseBoolean(getValue(DUCKDUCKGO_ENABLED_KEY, "true")));
+        dto.setSearxngBaseUrl(getValue(SEARXNG_BASE_URL_KEY, ""));
         return dto;
     }
 
@@ -89,6 +96,13 @@ public class SystemSettingService {
         }
         if (dto.getTavilyBaseUrl() != null) {
             saveValue(TAVILY_BASE_URL_KEY, dto.getTavilyBaseUrl(), "Tavily 接口地址");
+        }
+        // Keyless provider 配置
+        if (dto.getDuckduckgoEnabled() != null) {
+            saveValue(DUCKDUCKGO_ENABLED_KEY, String.valueOf(dto.getDuckduckgoEnabled()), "DuckDuckGo 免 Key 搜索（零配置兜底）");
+        }
+        if (dto.getSearxngBaseUrl() != null) {
+            saveValue(SEARXNG_BASE_URL_KEY, dto.getSearxngBaseUrl(), "SearXNG 实例地址");
         }
         return getSettings();
     }

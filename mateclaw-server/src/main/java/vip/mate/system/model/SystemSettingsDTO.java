@@ -24,6 +24,12 @@ public class SystemSettingsDTO {
     private String tavilyApiKey;
     private String tavilyBaseUrl;
 
+    // ===== Keyless 搜索 provider 配置 =====
+    /** DuckDuckGo 是否启用（默认 true，作为零配置兜底） */
+    private Boolean duckduckgoEnabled;
+    /** SearXNG 实例地址（如 http://searxng:8080），为空则不使用 */
+    private String searxngBaseUrl;
+
     // 用于前端回显脱敏后的 API Key
     private String serperApiKeyMasked;
     private String tavilyApiKeyMasked;

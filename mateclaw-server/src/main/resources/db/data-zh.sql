@@ -300,6 +300,14 @@ MERGE INTO mate_system_setting (id, setting_key, setting_value, description, cre
 KEY (id)
 VALUES (1000000011, 'tavilyBaseUrl', 'https://api.tavily.com/search', 'Tavily 接口地址', NOW(), NOW());
 
+MERGE INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+KEY (id)
+VALUES (1000000012, 'duckduckgoEnabled', 'true', 'DuckDuckGo 免 Key 搜索兜底（零配置可用）', NOW(), NOW());
+
+MERGE INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+KEY (id)
+VALUES (1000000013, 'searxngBaseUrl', '', 'SearXNG 实例地址（Docker 部署时自动配置）', NOW(), NOW());
+
 -- 内置工具：日期时间
 MERGE INTO mate_tool (id, name, display_name, description, tool_type, bean_name, icon, enabled, builtin, create_time, update_time, deleted)
 KEY (id)

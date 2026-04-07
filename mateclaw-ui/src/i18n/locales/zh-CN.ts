@@ -330,6 +330,8 @@ export default {
       serperBaseUrl: 'Serper 接口地址',
       tavilyApiKey: 'Tavily API Key',
       tavilyBaseUrl: 'Tavily 接口地址',
+      duckduckgoEnabled: 'DuckDuckGo（免 Key）',
+      searxngBaseUrl: 'SearXNG 地址',
     },
     hints: {
       provider: '当前版本会把 DashScope 模型参数真实应用到 Agent 调用链路。',
@@ -343,6 +345,8 @@ export default {
       serperBaseUrl: '通常无需修改，除非使用自定义代理地址。',
       tavilyApiKey: '用于 Tavily 搜索服务，从 tavily.com 获取。',
       tavilyBaseUrl: '通常无需修改，除非使用自定义代理地址。',
+      duckduckgoEnabled: '免费搜索兜底，无需 API Key。默认开启，作为零配置下的搜索降级方案。',
+      searxngBaseUrl: '自部署 SearXNG 实例地址。Docker 部署时自动配置。',
     },
     searchTitle: '搜索服务',
     searchDesc: '配置内置搜索工具的提供商与 API 凭证',

@@ -294,6 +294,14 @@ MERGE INTO mate_system_setting (id, setting_key, setting_value, description, cre
 KEY (id)
 VALUES (1000000011, 'tavilyBaseUrl', 'https://api.tavily.com/search', 'Tavily base URL', NOW(), NOW());
 
+MERGE INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+KEY (id)
+VALUES (1000000012, 'duckduckgoEnabled', 'true', 'DuckDuckGo keyless search fallback (zero-config)', NOW(), NOW());
+
+MERGE INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+KEY (id)
+VALUES (1000000013, 'searxngBaseUrl', '', 'SearXNG instance base URL (auto-configured in Docker)', NOW(), NOW());
+
 -- Built-in tool: Date & Time
 MERGE INTO mate_tool (id, name, display_name, description, tool_type, bean_name, icon, enabled, builtin, create_time, update_time, deleted)
 KEY (id)
