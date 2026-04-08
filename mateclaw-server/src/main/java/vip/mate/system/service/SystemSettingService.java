@@ -44,11 +44,23 @@ public class SystemSettingService {
     private static final String TTS_AUTO_MODE_KEY = "ttsAutoMode";
     private static final String TTS_DEFAULT_VOICE_KEY = "ttsDefaultVoice";
     private static final String TTS_SPEED_KEY = "ttsSpeed";
+
+    // STT 配置 keys
+    private static final String STT_ENABLED_KEY = "sttEnabled";
+    private static final String STT_PROVIDER_KEY = "sttProvider";
+    private static final String STT_FALLBACK_ENABLED_KEY = "sttFallbackEnabled";
+
+    // 音乐生成配置 keys
+    private static final String MUSIC_ENABLED_KEY = "musicEnabled";
+    private static final String MUSIC_PROVIDER_KEY = "musicProvider";
+    private static final String MUSIC_FALLBACK_ENABLED_KEY = "musicFallbackEnabled";
     private static final String ZHIPU_API_KEY_KEY = "zhipuApiKey";
     private static final String ZHIPU_BASE_URL_KEY = "zhipuBaseUrl";
     private static final String FAL_API_KEY_KEY = "falApiKey";
     private static final String KLING_ACCESS_KEY_KEY = "klingAccessKey";
     private static final String KLING_SECRET_KEY_KEY = "klingSecretKey";
+    private static final String RUNWAY_API_KEY_KEY = "runwayApiKey";
+    private static final String MINIMAX_API_KEY_KEY = "minimaxApiKey";
 
     private final SystemSettingMapper systemSettingMapper;
 
@@ -81,6 +93,8 @@ public class SystemSettingService {
         dto.setFalApiKeyMasked(maskApiKey(getValue(FAL_API_KEY_KEY, "")));
         dto.setKlingAccessKeyMasked(maskApiKey(getValue(KLING_ACCESS_KEY_KEY, "")));
         dto.setKlingSecretKeyMasked(maskApiKey(getValue(KLING_SECRET_KEY_KEY, "")));
+        dto.setRunwayApiKeyMasked(maskApiKey(getValue(RUNWAY_API_KEY_KEY, "")));
+        dto.setMinimaxApiKeyMasked(maskApiKey(getValue(MINIMAX_API_KEY_KEY, "")));
 
         // 图片生成配置
         dto.setImageEnabled(Boolean.parseBoolean(getValue(IMAGE_ENABLED_KEY, "false")));
@@ -95,6 +109,16 @@ public class SystemSettingService {
         dto.setTtsDefaultVoice(getValue(TTS_DEFAULT_VOICE_KEY, ""));
         String speedStr = getValue(TTS_SPEED_KEY, "1.0");
         try { dto.setTtsSpeed(Double.parseDouble(speedStr)); } catch (NumberFormatException e) { dto.setTtsSpeed(1.0); }
+
+        // STT 配置
+        dto.setSttEnabled(Boolean.parseBoolean(getValue(STT_ENABLED_KEY, "false")));
+        dto.setSttProvider(getValue(STT_PROVIDER_KEY, "auto"));
+        dto.setSttFallbackEnabled(Boolean.parseBoolean(getValue(STT_FALLBACK_ENABLED_KEY, "true")));
+
+        // 音乐生成配置
+        dto.setMusicEnabled(Boolean.parseBoolean(getValue(MUSIC_ENABLED_KEY, "false")));
+        dto.setMusicProvider(getValue(MUSIC_PROVIDER_KEY, "auto"));
+        dto.setMusicFallbackEnabled(Boolean.parseBoolean(getValue(MUSIC_FALLBACK_ENABLED_KEY, "true")));
         return dto;
     }
 
@@ -111,6 +135,8 @@ public class SystemSettingService {
         dto.setFalApiKey(getValue(FAL_API_KEY_KEY, ""));
         dto.setKlingAccessKey(getValue(KLING_ACCESS_KEY_KEY, ""));
         dto.setKlingSecretKey(getValue(KLING_SECRET_KEY_KEY, ""));
+        dto.setRunwayApiKey(getValue(RUNWAY_API_KEY_KEY, ""));
+        dto.setMinimaxApiKey(getValue(MINIMAX_API_KEY_KEY, ""));
         return dto;
     }
 
@@ -193,6 +219,12 @@ public class SystemSettingService {
         if (dto.getKlingSecretKey() != null && !dto.getKlingSecretKey().isBlank()) {
             saveValue(KLING_SECRET_KEY_KEY, dto.getKlingSecretKey(), "快手可灵 Secret Key");
         }
+        if (dto.getRunwayApiKey() != null && !dto.getRunwayApiKey().isBlank()) {
+            saveValue(RUNWAY_API_KEY_KEY, dto.getRunwayApiKey(), "Runway API Key");
+        }
+        if (dto.getMinimaxApiKey() != null && !dto.getMinimaxApiKey().isBlank()) {
+            saveValue(MINIMAX_API_KEY_KEY, dto.getMinimaxApiKey(), "MiniMax API Key");
+        }
 
         // 图片生成配置
         if (dto.getImageEnabled() != null) {
@@ -223,6 +255,28 @@ public class SystemSettingService {
         }
         if (dto.getTtsSpeed() != null) {
             saveValue(TTS_SPEED_KEY, String.valueOf(dto.getTtsSpeed()), "TTS 默认语速");
+        }
+
+        // STT 配置
+        if (dto.getSttEnabled() != null) {
+            saveValue(STT_ENABLED_KEY, String.valueOf(dto.getSttEnabled()), "是否启用 STT 语音识别");
+        }
+        if (dto.getSttProvider() != null) {
+            saveValue(STT_PROVIDER_KEY, dto.getSttProvider(), "STT 首选 Provider");
+        }
+        if (dto.getSttFallbackEnabled() != null) {
+            saveValue(STT_FALLBACK_ENABLED_KEY, String.valueOf(dto.getSttFallbackEnabled()), "STT Provider 级 Fallback");
+        }
+
+        // 音乐生成配置
+        if (dto.getMusicEnabled() != null) {
+            saveValue(MUSIC_ENABLED_KEY, String.valueOf(dto.getMusicEnabled()), "是否启用音乐生成");
+        }
+        if (dto.getMusicProvider() != null) {
+            saveValue(MUSIC_PROVIDER_KEY, dto.getMusicProvider(), "音乐生成首选 Provider");
+        }
+        if (dto.getMusicFallbackEnabled() != null) {
+            saveValue(MUSIC_FALLBACK_ENABLED_KEY, String.valueOf(dto.getMusicFallbackEnabled()), "音乐 Provider 级 Fallback");
         }
         return getSettings();
     }

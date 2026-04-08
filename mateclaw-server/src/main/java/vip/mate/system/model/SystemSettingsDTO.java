@@ -61,6 +61,16 @@ public class SystemSettingsDTO {
     private String klingAccessKeyMasked;
     private String klingSecretKeyMasked;
 
+    // --- Runway ---
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private String runwayApiKey;
+    private String runwayApiKeyMasked;
+
+    // --- MiniMax (Hailuo) ---
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private String minimaxApiKey;
+    private String minimaxApiKeyMasked;
+
     // ===== 图片生成配置 =====
     /** 是否启用图片生成能力 */
     private Boolean imageEnabled;
@@ -82,4 +92,16 @@ public class SystemSettingsDTO {
     private String ttsDefaultVoice;
     /** 默认语速 0.5-2.0 */
     private Double ttsSpeed;
+
+    // ===== STT 语音识别配置 =====
+    private Boolean sttEnabled;
+    /** 首选 STT provider: auto / openai / dashscope */
+    private String sttProvider;
+    private Boolean sttFallbackEnabled;
+
+    // ===== 音乐生成配置 =====
+    private Boolean musicEnabled;
+    /** 首选音乐 provider: auto / google-lyria / minimax */
+    private String musicProvider;
+    private Boolean musicFallbackEnabled;
 }

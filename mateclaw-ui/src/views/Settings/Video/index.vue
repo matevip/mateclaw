@@ -33,6 +33,8 @@
             <option value="zhipu-cogvideo">智谱 CogVideoX</option>
             <option value="fal">fal.ai (Kling/Runway/Luma)</option>
             <option value="kling">快手可灵 Kling</option>
+            <option value="runway">Runway</option>
+            <option value="minimax">MiniMax (Hailuo)</option>
           </select>
         </div>
       </div>
@@ -175,6 +177,56 @@
           </div>
         </div>
       </div>
+
+      <!-- Runway -->
+      <div class="provider-section">
+        <div class="provider-header">
+          <span class="provider-name">Runway</span>
+          <span class="provider-tag">gen4.5 / gen4_turbo</span>
+        </div>
+        <div class="settings-card">
+          <div class="setting-item setting-item-vertical">
+            <div class="setting-info">
+              <div class="setting-label">{{ t('settings.fields.runwayApiKey') }}</div>
+              <div class="setting-hint">{{ t('settings.hints.runwayApiKey') }}</div>
+            </div>
+            <div class="setting-control-full">
+              <input
+                v-model="runwayApiKeyInput"
+                type="password"
+                class="form-input"
+                :placeholder="settings.runwayApiKeyMasked || t('settings.model.apiKeyInput')"
+                autocomplete="off"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MiniMax (Hailuo) -->
+      <div class="provider-section">
+        <div class="provider-header">
+          <span class="provider-name">MiniMax (Hailuo)</span>
+          <span class="provider-tag tag-free">{{ t('settings.videoProviderTags.freeQuota') }}</span>
+        </div>
+        <div class="settings-card">
+          <div class="setting-item setting-item-vertical">
+            <div class="setting-info">
+              <div class="setting-label">{{ t('settings.fields.minimaxApiKey') }}</div>
+              <div class="setting-hint">{{ t('settings.hints.minimaxApiKey') }}</div>
+            </div>
+            <div class="setting-control-full">
+              <input
+                v-model="minimaxApiKeyInput"
+                type="password"
+                class="form-input"
+                :placeholder="settings.minimaxApiKeyMasked || t('settings.model.apiKeyInput')"
+                autocomplete="off"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
     </template>
 
     <div class="save-bar">
@@ -199,6 +251,8 @@ const zhipuApiKeyInput = ref('')
 const falApiKeyInput = ref('')
 const klingAccessKeyInput = ref('')
 const klingSecretKeyInput = ref('')
+const runwayApiKeyInput = ref('')
+const minimaxApiKeyInput = ref('')
 
 const settings = reactive({
   videoEnabled: false,
@@ -209,6 +263,8 @@ const settings = reactive({
   falApiKeyMasked: '',
   klingAccessKeyMasked: '',
   klingSecretKeyMasked: '',
+  runwayApiKeyMasked: '',
+  minimaxApiKeyMasked: '',
 })
 
 onMounted(async () => {
@@ -226,11 +282,15 @@ async function loadSettings() {
   settings.falApiKeyMasked = data.falApiKeyMasked ?? ''
   settings.klingAccessKeyMasked = data.klingAccessKeyMasked ?? ''
   settings.klingSecretKeyMasked = data.klingSecretKeyMasked ?? ''
+  settings.runwayApiKeyMasked = data.runwayApiKeyMasked ?? ''
+  settings.minimaxApiKeyMasked = data.minimaxApiKeyMasked ?? ''
   // 清空密钥输入
   zhipuApiKeyInput.value = ''
   falApiKeyInput.value = ''
   klingAccessKeyInput.value = ''
   klingSecretKeyInput.value = ''
+  runwayApiKeyInput.value = ''
+  minimaxApiKeyInput.value = ''
 }
 
 async function onSaveSettings() {
@@ -244,6 +304,8 @@ async function onSaveSettings() {
   if (falApiKeyInput.value) payload.falApiKey = falApiKeyInput.value
   if (klingAccessKeyInput.value) payload.klingAccessKey = klingAccessKeyInput.value
   if (klingSecretKeyInput.value) payload.klingSecretKey = klingSecretKeyInput.value
+  if (runwayApiKeyInput.value) payload.runwayApiKey = runwayApiKeyInput.value
+  if (minimaxApiKeyInput.value) payload.minimaxApiKey = minimaxApiKeyInput.value
 
   await settingsApi.update(payload)
   await loadSettings()

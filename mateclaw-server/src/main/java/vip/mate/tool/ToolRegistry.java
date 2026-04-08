@@ -38,10 +38,12 @@ public class ToolRegistry {
      * 通过数据库 enabled 标志过滤，确保 UI 开关真正生效
      */
     public List<Object> getEnabledTools() {
-        // 1. 从数据库获取已启用的 beanName 集合
-        Set<String> enabledBeanNames = toolMapper.selectList(
+        // 1. 从数据库获取明确禁用的 beanName 黑名单
+        //    逻辑：只有 DB 中存在记录且 enabled=false 的才跳过
+        //    DB 中没有记录的 bean 默认启用（向后兼容 + 新工具自动可用）
+        Set<String> disabledBeanNames = toolMapper.selectList(
                 new LambdaQueryWrapper<ToolEntity>()
-                        .eq(ToolEntity::getEnabled, true)
+                        .eq(ToolEntity::getEnabled, false)
                         .isNotNull(ToolEntity::getBeanName)
         ).stream()
                 .map(ToolEntity::getBeanName)
@@ -59,13 +61,12 @@ public class ToolRegistry {
                     .anyMatch(m -> m.isAnnotationPresent(Tool.class));
 
             if (hasToolMethod) {
-                // 3. 如果 DB 中有该 beanName 的记录，则按 DB enabled 状态决定是否加入
-                //    如果 DB 中没有记录（未注册），默认加入（保持向后兼容）
-                if (enabledBeanNames.isEmpty() || enabledBeanNames.contains(beanName)) {
+                // 3. 只有 DB 中明确 enabled=false 的才跳过，其余全部启用
+                if (disabledBeanNames.contains(beanName)) {
+                    log.debug("Skipped disabled tool bean: {} (beanName={})", bean.getClass().getSimpleName(), beanName);
+                } else {
                     tools.add(bean);
                     log.debug("Registered tool bean: {} (beanName={})", bean.getClass().getSimpleName(), beanName);
-                } else {
-                    log.debug("Skipped disabled tool bean: {} (beanName={})", bean.getClass().getSimpleName(), beanName);
                 }
             }
         }

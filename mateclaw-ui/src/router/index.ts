@@ -98,6 +98,18 @@ const router = createRouter({
               meta: { title: 'Settings - TTS' },
             },
             {
+              path: 'stt',
+              name: 'SettingsStt',
+              component: () => import('@/views/Settings/Stt/index.vue'),
+              meta: { title: 'Settings - STT' },
+            },
+            {
+              path: 'music',
+              name: 'SettingsMusic',
+              component: () => import('@/views/Settings/Music/index.vue'),
+              meta: { title: 'Settings - Music' },
+            },
+            {
               path: 'video',
               name: 'SettingsVideo',
               component: () => import('@/views/Settings/Video/index.vue'),

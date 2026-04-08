@@ -33,6 +33,8 @@
             <option value="zhipu-cogview">智谱 CogView</option>
             <option value="openai">OpenAI (DALL-E)</option>
             <option value="fal">fal.ai (Flux)</option>
+            <option value="google-imagen">Google Imagen</option>
+            <option value="minimax">MiniMax Image</option>
           </select>
         </div>
       </div>
@@ -138,6 +140,36 @@
                 :placeholder="settings.falApiKeyMasked || t('settings.model.apiKeyInput')"
                 autocomplete="off"
               />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Google Imagen -->
+      <div class="provider-section">
+        <div class="provider-header">
+          <span class="provider-name">Google Imagen</span>
+          <span class="provider-tag">{{ t('settings.imageProviderTags.reuseLlmKey') }}</span>
+        </div>
+        <div class="settings-card">
+          <div class="setting-item">
+            <div class="setting-info">
+              <div class="setting-hint">{{ t('settings.hints.googleImagenInfo') }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MiniMax Image -->
+      <div class="provider-section">
+        <div class="provider-header">
+          <span class="provider-name">MiniMax Image</span>
+          <span class="provider-tag">{{ t('settings.imageProviderTags.sharedWithVideo') }}</span>
+        </div>
+        <div class="settings-card">
+          <div class="setting-item">
+            <div class="setting-info">
+              <div class="setting-hint">{{ t('settings.hints.minimaxImageInfo') }}</div>
             </div>
           </div>
         </div>

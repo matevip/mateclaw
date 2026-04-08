@@ -631,35 +631,45 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   stream.on('async_task_completed', (data) => {
     console.log('[useChat] Async task completed:', data)
     if (data.success && streamConversationId) {
+      let mediaPart: MessageContentPart | null = null
       if (data.videoUrl) {
-        // 视频生成完成
-        addMessage({
-          role: 'assistant',
-          content: '',
-          contentParts: [{
-            type: 'video',
-            fileUrl: data.videoUrl,
-            fileName: `video_${data.taskId}.mp4`,
-            contentType: 'video/mp4',
-          }] as MessageContentPart[],
-          status: 'completed',
-          conversationId: streamConversationId,
-        })
+        mediaPart = {
+          type: 'video',
+          fileUrl: data.videoUrl,
+          fileName: `video_${data.taskId}.mp4`,
+          contentType: 'video/mp4',
+        } as MessageContentPart
       } else if (data.imageUrl) {
-        // 图片生成完成
-        addMessage({
-          role: 'assistant',
-          content: '',
-          contentParts: [{
-            type: 'image',
-            fileUrl: data.imageUrl,
-            fileName: `image_${data.taskId}.png`,
-            contentType: 'image/png',
-          }] as MessageContentPart[],
-          status: 'completed',
-          conversationId: streamConversationId,
-        })
+        mediaPart = {
+          type: 'image',
+          fileUrl: data.imageUrl,
+          fileName: `image_${data.taskId}.png`,
+          contentType: 'image/png',
+        } as MessageContentPart
       }
+
+      if (!mediaPart) return
+
+      // 优先附加到当前 assistant 消息（避免图片跑到文字回复上方）
+      if (currentAssistantId.value) {
+        const msg = getMessage(currentAssistantId.value)
+        if (msg) {
+          const existingParts = (msg as any).contentParts || []
+          updateMessage(currentAssistantId.value, {
+            contentParts: [...existingParts, mediaPart],
+          } as any)
+          return
+        }
+      }
+
+      // 回退：Agent 已结束，新建独立消息
+      addMessage({
+        role: 'assistant',
+        content: '',
+        contentParts: [mediaPart],
+        status: 'completed',
+        conversationId: streamConversationId,
+      })
     }
   })
 
