@@ -54,8 +54,13 @@
         </template>
       </nav>
 
-      <!-- 底部用户信息 -->
+      <!-- 底部 -->
       <div class="sidebar-footer">
+        <!-- Doctor 健康指示器 -->
+        <button class="health-indicator" :class="healthStatus" @click="showDoctor = true" :title="t('doctor.title')">
+          <span class="health-dot"></span>
+          <span v-if="!sidebarCollapsed" class="health-label">{{ t('doctor.title') }}</span>
+        </button>
         <!-- 主题切换 -->
         <div class="theme-toggle-row">
           <button
@@ -104,6 +109,9 @@
       </div>
       <router-view />
     </main>
+
+    <OnboardingWizard v-if="showOnboarding" @close="showOnboarding = false" />
+    <DoctorDrawer :visible="showDoctor" @close="showDoctor = false" @status="onHealthStatus" />
   </div>
 </template>
 
@@ -114,12 +122,32 @@ import { useI18n } from 'vue-i18n'
 import { useThemeStore } from '@/stores/useThemeStore'
 import { version as appVersion } from '../../../package.json'
 import type { ThemeMode } from '@/stores/useThemeStore'
+import { http, setupApi } from '@/api/index'
+import OnboardingWizard from '@/views/Onboarding/OnboardingWizard.vue'
+import DoctorDrawer from '@/views/Doctor/DoctorDrawer.vue'
 
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
 const themeStore = useThemeStore()
 const sidebarCollapsed = ref(localStorage.getItem('mc-sidebar-collapsed') === 'true')
+const showOnboarding = ref(false)
+const showDoctor = ref(false)
+const healthStatus = ref('unknown')
+
+function onHealthStatus(status: string) {
+  healthStatus.value = status
+}
+
+async function fetchHealthStatus() {
+  try {
+    const res: any = await http.get('/system/health')
+    const data = res?.data || res
+    healthStatus.value = data?.overall || 'healthy'
+  } catch {
+    healthStatus.value = 'unknown'
+  }
+}
 
 // 移动端状态
 const isMobile = ref(false)
@@ -131,10 +159,25 @@ function handleMobileChange(e: MediaQueryListEvent | MediaQueryList) {
   if (!e.matches) mobileMenuOpen.value = false
 }
 
-onMounted(() => {
+onMounted(async () => {
   mobileQuery = window.matchMedia('(max-width: 768px)')
   handleMobileChange(mobileQuery)
   mobileQuery.addEventListener('change', handleMobileChange)
+
+  // Check onboarding status
+  if (!localStorage.getItem('mc-onboarding-done')) {
+    try {
+      const res: any = await setupApi.onboardingStatus()
+      if (res?.data && !res.data.hasDefaultModel) {
+        showOnboarding.value = true
+      }
+    } catch {
+      // If endpoint doesn't exist yet, skip onboarding
+    }
+  }
+
+  // Fetch initial health status for sidebar indicator
+  fetchHealthStatus()
 })
 
 onBeforeUnmount(() => {
@@ -171,19 +214,29 @@ const themeOptions = computed<{ value: ThemeMode; label: string; icon: string }[
 
 const navGroups = computed(() => [
   {
-    key: 'chat',
-    label: t('nav.chat'),
+    key: 'core',
+    label: t('nav.core'),
     items: [
       {
         path: '/chat',
         label: t('nav.chat'),
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
       },
+      {
+        path: '/agents',
+        label: t('nav.agents'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>`,
+      },
+      {
+        path: '/wiki',
+        label: t('nav.wiki'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>`,
+      },
     ],
   },
   {
-    key: 'control',
-    label: t('nav.control'),
+    key: 'connect',
+    label: t('nav.connect'),
     items: [
       {
         path: '/channels',
@@ -191,76 +244,30 @@ const navGroups = computed(() => [
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.73a16 16 0 0 0 6.29 6.29l1.62-1.62a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>`,
       },
       {
-        path: '/sessions',
-        label: t('nav.sessions'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
-      },
-      {
-        path: '/cron-jobs',
-        label: t('nav.cronJobs'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
-      },
-    ],
-  },
-  {
-    key: 'agent',
-    label: t('nav.agent'),
-    items: [
-      {
-        path: '/workspace',
-        label: t('nav.workspace'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>`,
-      },
-      {
         path: '/skills',
         label: t('nav.skills'),
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`,
-      },
-      {
-        path: '/wiki',
-        label: t('nav.wiki'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>`,
       },
       {
         path: '/tools',
         label: t('nav.tools'),
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
       },
-      {
-        path: '/datasources',
-        label: t('nav.datasources'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>`,
-      },
-      {
-        path: '/mcp-servers',
-        label: t('nav.mcpServers'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>`,
-      },
     ],
   },
   {
-    key: 'settings',
-    label: t('nav.settingsGroup'),
+    key: 'system',
+    label: t('nav.system'),
     items: [
       {
-        path: '/agents',
-        label: t('nav.agents'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>`,
+        path: '/settings/models',
+        label: t('nav.settings'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>`,
       },
       {
         path: '/security',
         label: t('nav.security'),
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
-      },
-      {
-        path: '/token-usage',
-        label: t('nav.tokenUsage'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>`,
-      },
-      {
-        path: '/settings/models',
-        label: t('nav.settings'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>`,
       },
     ],
   },
@@ -474,6 +481,13 @@ function logout() {
   border-top: 1px solid var(--mc-border-light);
   padding: 10px 12px;
 }
+.health-indicator { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: none; background: none; border-radius: 6px; cursor: pointer; color: var(--mc-text-secondary); font-size: 12px; margin-bottom: 6px; }
+.health-indicator:hover { background: var(--mc-bg-sunken); }
+.health-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.health-indicator.healthy .health-dot { background: var(--mc-success); }
+.health-indicator.warning .health-dot { background: var(--mc-primary); }
+.health-indicator.error .health-dot { background: var(--mc-danger); }
+.health-indicator.unknown .health-dot { background: var(--mc-text-tertiary); }
 
 /* 主题切换 */
 .theme-toggle-row {

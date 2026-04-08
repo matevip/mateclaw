@@ -8,29 +8,12 @@ const router = createRouter({
       component: () => import('@/views/layout/MainLayout.vue'),
       redirect: '/chat',
       children: [
+        // ==================== Core ====================
         {
           path: 'chat',
           name: 'Chat',
           component: () => import('@/views/ChatConsole.vue'),
           meta: { title: 'Chat' },
-        },
-        {
-          path: 'channels',
-          name: 'Channels',
-          component: () => import('@/views/Channels.vue'),
-          meta: { title: 'Channels' },
-        },
-        {
-          path: 'sessions',
-          name: 'Sessions',
-          component: () => import('@/views/Sessions.vue'),
-          meta: { title: 'Sessions' },
-        },
-        {
-          path: 'workspace',
-          name: 'Workspace',
-          component: () => import('@/views/AgentWorkspace.vue'),
-          meta: { title: 'Workspace' },
         },
         {
           path: 'agents',
@@ -39,16 +22,23 @@ const router = createRouter({
           meta: { title: 'Agents' },
         },
         {
-          path: 'skills',
-          name: 'Skills',
-          component: () => import('@/views/SkillMarket.vue'),
-          meta: { title: 'Skills' },
-        },
-        {
           path: 'wiki',
           name: 'Wiki',
           component: () => import('@/views/Wiki/index.vue'),
           meta: { title: 'Wiki' },
+        },
+        // ==================== Connect ====================
+        {
+          path: 'channels',
+          name: 'Channels',
+          component: () => import('@/views/Channels.vue'),
+          meta: { title: 'Channels' },
+        },
+        {
+          path: 'skills',
+          name: 'Skills',
+          component: () => import('@/views/SkillMarket.vue'),
+          meta: { title: 'Skills' },
         },
         {
           path: 'tools',
@@ -56,24 +46,7 @@ const router = createRouter({
           component: () => import('@/views/Tools.vue'),
           meta: { title: 'Tools' },
         },
-        {
-          path: 'datasources',
-          name: 'Datasources',
-          component: () => import('@/views/Datasources.vue'),
-          meta: { title: 'Datasources' },
-        },
-        {
-          path: 'mcp-servers',
-          name: 'McpServers',
-          component: () => import('@/views/McpServers.vue'),
-          meta: { title: 'MCP Servers' },
-        },
-        {
-          path: 'cron-jobs',
-          name: 'CronJobs',
-          component: () => import('@/views/CronJobs.vue'),
-          meta: { title: 'Cron Jobs' },
-        },
+        // ==================== Settings (absorbs advanced pages) ====================
         {
           path: 'settings',
           component: () => import('@/views/Settings/Layout.vue'),
@@ -121,6 +94,37 @@ const router = createRouter({
               component: () => import('@/views/Settings/Video/index.vue'),
               meta: { title: 'Settings - Video' },
             },
+            // Advanced (absorbed from top-level nav)
+            {
+              path: 'workspace',
+              name: 'SettingsWorkspace',
+              component: () => import('@/views/AgentWorkspace.vue'),
+              meta: { title: 'Settings - Workspace' },
+            },
+            {
+              path: 'cron-jobs',
+              name: 'SettingsCronJobs',
+              component: () => import('@/views/CronJobs.vue'),
+              meta: { title: 'Settings - Cron Jobs' },
+            },
+            {
+              path: 'datasources',
+              name: 'SettingsDatasources',
+              component: () => import('@/views/Datasources.vue'),
+              meta: { title: 'Settings - Datasources' },
+            },
+            {
+              path: 'mcp-servers',
+              name: 'SettingsMcpServers',
+              component: () => import('@/views/McpServers.vue'),
+              meta: { title: 'Settings - MCP Servers' },
+            },
+            {
+              path: 'token-usage',
+              name: 'SettingsTokenUsage',
+              component: () => import('@/views/TokenUsage.vue'),
+              meta: { title: 'Settings - Token Usage' },
+            },
             {
               path: 'about',
               name: 'SettingsAbout',
@@ -129,6 +133,7 @@ const router = createRouter({
             },
           ],
         },
+        // ==================== Security ====================
         {
           path: 'security',
           component: () => import('@/views/Security/Layout.vue'),
@@ -154,12 +159,13 @@ const router = createRouter({
             },
           ],
         },
-        {
-          path: 'token-usage',
-          name: 'TokenUsage',
-          component: () => import('@/views/TokenUsage.vue'),
-          meta: { title: 'Token Usage' },
-        },
+        // ==================== Redirects (backward compatibility) ====================
+        { path: 'sessions', redirect: '/chat' },
+        { path: 'workspace', redirect: '/settings/workspace' },
+        { path: 'cron-jobs', redirect: '/settings/cron-jobs' },
+        { path: 'datasources', redirect: '/settings/datasources' },
+        { path: 'mcp-servers', redirect: '/settings/mcp-servers' },
+        { path: 'token-usage', redirect: '/settings/token-usage' },
       ],
     },
     {

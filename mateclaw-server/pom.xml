@@ -6,7 +6,7 @@
 
     <groupId>vip.mate</groupId>
     <artifactId>mateclaw-server</artifactId>
-    <version>1.0.314</version>
+    <version>1.0.418-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <name>MateClaw Server</name>

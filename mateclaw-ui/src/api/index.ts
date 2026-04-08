@@ -259,6 +259,11 @@ export const oauthApi = {
   revoke: () => http.delete('/oauth/openai/revoke'),
 }
 
+// ==================== Setup ====================
+export const setupApi = {
+  onboardingStatus: () => http.get('/setup/onboarding-status'),
+}
+
 // ==================== Settings ====================
 export const settingsApi = {
   get: () => http.get('/settings'),

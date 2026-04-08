@@ -2,16 +2,18 @@
   <div class="settings-layout">
     <div class="settings-nav">
       <h2 class="nav-title">{{ t('settings.title') }}</h2>
-      <router-link
-        v-for="section in sections"
-        :key="section.id"
-        :to="section.path"
-        class="nav-item"
-        :class="{ active: isActive(section.path) }"
-      >
-        <span class="nav-icon" v-html="section.icon"></span>
-        {{ section.label }}
-      </router-link>
+      <template v-for="section in sections" :key="section.id">
+        <div v-if="section.isDivider" class="nav-divider">{{ section.label }}</div>
+        <router-link
+          v-else
+          :to="section.path"
+          class="nav-item"
+          :class="{ active: isActive(section.path) }"
+        >
+          <span class="nav-icon" v-html="section.icon"></span>
+          {{ section.label }}
+        </router-link>
+      </template>
     </div>
 
     <div class="settings-content">
@@ -71,6 +73,38 @@ const sections = computed(() => [
     label: t('settings.sections.video'),
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>',
   },
+  // Divider: Advanced
+  { id: 'divider-advanced', path: '', label: t('settings.sections.advanced'), icon: '', isDivider: true },
+  {
+    id: 'workspace',
+    path: '/settings/workspace',
+    label: t('nav.workspace'),
+    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>',
+  },
+  {
+    id: 'cron-jobs',
+    path: '/settings/cron-jobs',
+    label: t('nav.cronJobs'),
+    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+  },
+  {
+    id: 'datasources',
+    path: '/settings/datasources',
+    label: t('nav.datasources'),
+    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
+  },
+  {
+    id: 'mcp-servers',
+    path: '/settings/mcp-servers',
+    label: t('nav.mcpServers'),
+    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>',
+  },
+  {
+    id: 'token-usage',
+    path: '/settings/token-usage',
+    label: t('nav.tokenUsage'),
+    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
+  },
   {
     id: 'about',
     path: '/settings/about',
@@ -94,6 +128,7 @@ function isActive(path: string) {
 .nav-item + .nav-item { margin-top: 2px; }
 .nav-icon { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .nav-icon :deep(svg) { width: 18px; height: 18px; display: block; }
+.nav-divider { font-size: 11px; font-weight: 600; color: var(--mc-text-tertiary); text-transform: uppercase; letter-spacing: 0.05em; padding: 16px 8px 6px; margin-top: 4px; }
 .settings-content { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 24px; }
 
 @media (max-width: 900px) {
