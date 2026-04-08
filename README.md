@@ -1,6 +1,12 @@
 <div align="center">
 
+<p align="center">
+  <img src="mateclaw-ui/public/logo/mateclaw_logo_s.png" alt="MateClaw Logo" width="120">
+</p>
+
 # MateClaw
+
+<p align="center"><b>Build AI that thinks, acts, remembers, and ships.</b></p>
 
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repo-black.svg?logo=github)](https://github.com/matevip/mateclaw)
 [![Documentation](https://img.shields.io/badge/Docs-Website-green.svg?logo=readthedocs&label=Docs)](https://claw.mate.vip/docs)
@@ -11,49 +17,177 @@
 [![Vue](https://img.shields.io/badge/Vue-3-4FC08D.svg?logo=vuedotjs)](https://vuejs.org/)
 [![Last Commit](https://img.shields.io/github/last-commit/matevip/mateclaw)](https://github.com/matevip/mateclaw)
 [![License](https://img.shields.io/badge/license-Apache--2.0-red.svg?logo=opensourceinitiative&label=License)](LICENSE)
-[![GitHub Stars](https://img.shields.io/github/stars/matevip/mateclaw?style=flat&logo=github&color=yellow&label=Stars)](https://github.com/matevip/mateclaw/stargazers)
-[![GitHub Forks](https://img.shields.io/github/forks/matevip/mateclaw?style=flat&logo=github&color=purple&label=Forks)](https://github.com/matevip/mateclaw/network)
 
 [[Website](https://claw.mate.vip)] [[Live Demo](https://claw-demo.mate.vip)] [[Documentation](https://claw.mate.vip/docs)] [[中文](README_zh.md)]
 
-<p align="center">
-  <img src="mateclaw-ui/public/logo/mateclaw_logo_s.png" alt="MateClaw Logo" width="120">
-</p>
-
-<p align="center"><b>Your AI mate, always ready to lend a claw.</b></p>
-
 </div>
 
-A personal AI assistant system built with **Java + Vue 3**, powered by [Spring AI Alibaba](https://github.com/alibaba/spring-ai-alibaba). Features multi-agent orchestration, a flexible tool/skill system with MCP protocol support, multi-layer memory, and multi-channel adapters.
+MateClaw is a personal AI operating system built with **Java + Vue 3** and powered by [Spring AI Alibaba](https://github.com/alibaba/spring-ai-alibaba).
 
-> **Core capabilities:**
->
-> **Multi-Agent Orchestration** — ReAct (Thought → Action → Observation loop) and Plan-and-Execute (auto-decompose complex tasks into ordered sub-steps). Create multiple independent agents, each with their own personality and tools.
->
-> **Tool & Skill System** — Built-in tools (web search, date/time) + MCP protocol for external tool integration. Pre-configured GitHub and Filesystem MCP servers — enable and go. Install skill packages from ClawHub marketplace or custom sources.
->
-> **Multi-Layer Memory** — Short-term context window with auto-compression, event-driven post-conversation memory extraction, workspace files (PROFILE.md / MEMORY.md / daily notes), and scheduled memory consolidation.
->
-> **Every Channel** — Web console, DingTalk, Feishu, WeChat Work, Telegram, Discord, QQ. One MateClaw, connect as needed.
->
-> **Multi-Provider Models** — 20+ providers: DashScope, OpenAI, Anthropic, Google Gemini, DeepSeek, Kimi, MiniMax, Zhipu AI, Volcano Engine, OpenRouter, Ollama, LM Studio, llama.cpp, MLX, and more. Configure in the web UI.
->
-> **Desktop App** — Electron-based desktop application with auto-update support. Download and double-click to run.
+It is not just a chat box. It is a system for building AI workers that can reason, use tools, remember context, search the live web, digest knowledge into structured Wiki pages, generate media, and show up across the channels where work actually happens.
+
+The idea is simple:
+
+- Give each agent a clear role
+- Give it the right tools and guardrails
+- Let it keep memory instead of starting from zero
+- Let it work across chat, channels, documents, and media
+- Keep the whole system deployable by one team without turning into infrastructure theater
 
 ---
 
-## Table of Contents
+## What MateClaw Is
 
-- [Quick Start](#quick-start)
-- [Screenshots](#screenshots)
-- [Architecture](#architecture)
-- [Tech Stack](#tech-stack)
-- [Features](#features)
-- [Documentation](#documentation)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [Contact Us](#contact-us)
-- [License](#license)
+MateClaw sits at the intersection of four product ideas:
+
+1. **An AI console** for direct interaction
+2. **An agent runtime** for structured reasoning and tool use
+3. **A knowledge system** that turns raw information into reusable memory and Wiki pages
+4. **A deployment surface** that spans web, desktop, and external channels
+
+Most products do one of these. MateClaw is designed to make them work as one system.
+
+---
+
+## Product Principles
+
+### 1. Agents should do work, not just talk
+
+MateClaw supports ReAct and Plan-and-Execute agents so the model can break work down, call tools, observe results, and continue instead of stopping at a polished paragraph.
+
+### 2. Knowledge should be digested, not endlessly re-read
+
+Raw files are useful, but structured knowledge is better. MateClaw includes an LLM Wiki knowledge base that converts source materials into linked Wiki pages with summaries, backlinks, and on-demand retrieval.
+
+### 3. Memory should compound
+
+Conversations should not disappear. MateClaw combines short-term context management, post-conversation extraction, workspace memory files, and scheduled consolidation so agents can build continuity over time.
+
+### 4. Tools need control, not chaos
+
+Powerful tools without boundaries are a liability. MateClaw includes tool guard rules, approval flows, file-path protection, and runtime filtering so capability does not become recklessness.
+
+### 5. AI should live where work already happens
+
+A useful assistant cannot be trapped in one web page. MateClaw connects to desktop, browser, and external messaging/work channels so the agent can meet users where decisions are being made.
+
+---
+
+## What You Can Build With It
+
+### Personal AI Workspace
+
+- A persistent assistant with memory, tools, and workspace files
+- A desktop app with bundled backend and auto-update
+- A web console for direct chat, planning, and configuration
+
+### Team Knowledge Assistant
+
+- Ingest notes, documents, PDFs, and DOCX files
+- Turn source materials into structured Wiki pages
+- Let agents search, summarize, and read knowledge on demand
+
+### Tool-Using AI Workers
+
+- Agents that search the web, read files, use MCP tools, and execute workflows
+- Role-specific skill packages with `SKILL.md`
+- Approval and security controls for sensitive actions
+
+### Multimodal Content Workflows
+
+- Text-to-speech
+- Speech-to-text
+- Music generation
+- Image generation
+- Video generation
+
+### Multi-Channel AI Presence
+
+- Web console
+- DingTalk
+- Feishu
+- WeChat Work
+- Telegram
+- Discord
+- QQ
+
+---
+
+## Core Capabilities
+
+### Agent Runtime
+
+- **ReAct agents** for thought → action → observation loops
+- **Plan-and-Execute agents** for decomposing complex work into ordered steps
+- **Dynamic agent configuration** loaded at runtime
+- **Multi-agent setup** with separate prompts, personalities, and tool scopes
+- **Runtime resilience** including context pruning, smart truncation, stale stream cleanup, and recovery for longer tasks
+
+### Knowledge and Memory
+
+- **LLM Wiki knowledge base** for structured, linked, AI-digested knowledge
+- **Workspace memory files** such as `AGENTS.md`, `SOUL.md`, `PROFILE.md`, `MEMORY.md`, and daily notes
+- **Post-conversation extraction** to preserve useful information automatically
+- **Scheduled consolidation** so memory quality improves instead of just growing
+- **Dreaming and emergence workflows** for longer-horizon memory refinement
+
+### Tools, Skills, and Search
+
+- **Built-in tools** for web search, file operations, memory access, date/time, and more
+- **Advanced web search** with provider chaining, fallback strategies, and live information support
+- **MCP integration** across stdio, SSE, and Streamable HTTP transports
+- **Skill system** with installable `SKILL.md` packages
+- **ClawHub marketplace** for discovering and installing skills
+- **Tool guard and approval** for sensitive operations
+
+### Multimodal Creation
+
+- **Text-to-speech** for read-aloud and voice output
+- **Speech-to-text** for audio transcription
+- **Music generation**
+- **Image generation** with multiple providers
+- **Video generation** with async task handling
+
+### Model Flexibility
+
+Configure models in the web UI. MateClaw supports cloud and local model providers including:
+
+- DashScope
+- OpenAI
+- Anthropic
+- Google Gemini
+- DeepSeek
+- Kimi
+- MiniMax
+- Zhipu AI
+- Volcano Engine
+- OpenRouter
+- Ollama
+- LM Studio
+- llama.cpp
+- MLX
+
+### Surfaces
+
+- **Web app** for chat, agent management, MCP, models, tools, channels, and security
+- **Desktop app** with bundled JRE 21 and backend
+- **External channels** for production-facing assistant workflows
+
+---
+
+## Why The Wiki Matters
+
+Most AI systems treat knowledge like a warehouse of raw fragments.
+
+MateClaw adds another layer: a structured Wiki that AI can build and maintain. Instead of retrieving arbitrary chunks from source files every time, the system can pre-digest information into clean pages with summaries and links.
+
+That changes the product in three ways:
+
+- Agents waste less context on raw material
+- Knowledge becomes easier to inspect and edit by humans
+- Understanding improves over time instead of resetting on every query
+
+This is the difference between storing information and shaping it.
 
 ---
 
@@ -62,208 +196,103 @@ A personal AI assistant system built with **Java + Vue 3**, powered by [Spring A
 ### Prerequisites
 
 - Java 17+
-- Node.js 18+ & pnpm
+- Node.js 18+ and pnpm
 - Maven 3.9+ (or use `mvnw`)
-- At least one LLM API Key (e.g., [DashScope](https://dashscope.aliyun.com/))
+- At least one LLM API key such as [DashScope](https://dashscope.aliyun.com/)
 
 ### Option 1: Local Development
 
-**1. Start the backend**
+**Backend**
 
 ```bash
 cd mateclaw-server
 export DASHSCOPE_API_KEY=your-key-here
 mvn spring-boot:run
-# Backend runs at http://localhost:18088
-# H2 Console: http://localhost:18088/h2-console
-# API Docs (SpringDoc OpenAPI): http://localhost:18088/swagger-ui.html
 ```
 
-**2. Start the frontend**
+Backend:
+
+- App: `http://localhost:18088`
+- H2 Console: `http://localhost:18088/h2-console`
+- Swagger UI: `http://localhost:18088/swagger-ui.html`
+
+**Frontend**
 
 ```bash
 cd mateclaw-ui
 pnpm install
 pnpm dev
-# Frontend runs at http://localhost:5173 (proxies /api to :18088)
 ```
 
-**3. Log in**
+Frontend:
 
-Open http://localhost:5173 and log in with `admin` / `admin123`.
+- App: `http://localhost:5173`
+
+**Login**
+
+- Username: `admin`
+- Password: `admin123`
 
 ### Option 2: Docker
 
 ```bash
 cp .env.example .env
-# Edit .env — fill in DASHSCOPE_API_KEY and other variables
-
 docker compose up -d
-# Service runs at http://localhost:18080 (MySQL + backend)
 ```
 
-### Option 3: Desktop Application
+Default service:
 
-Download the installer from [GitHub Releases](https://github.com/matevip/mateclaw/releases):
+- `http://localhost:18080`
 
-| Platform | File | Notes |
-|----------|------|-------|
-| **macOS (Apple Silicon)** | `MateClaw_<version>_arm64.dmg` | Recommended for M1/M2/M3/M4/M5 Mac |
-| **macOS (Apple Silicon)** | `MateClaw_<version>_arm64.zip` | zip format (Apple Silicon) |
-| **macOS (Intel)** | `MateClaw_<version>_x64.dmg` | For Intel-based Mac |
-| **macOS (Intel)** | `MateClaw_<version>_x64.zip` | zip format (Intel) |
-| **Windows (x64)** | `MateClaw_<version>_Setup.exe` | For most Windows PCs (64-bit) |
-| **Windows (x64)** | `MateClaw_<version>_x64_Setup.exe` | Explicit x64 build |
-| **Windows (ARM64)** | `MateClaw_<version>_arm64_Setup.exe` | For ARM-based Windows (e.g. Surface Pro X) |
+### Option 3: Desktop App
 
-Double-click to run. The app bundles JRE 21 + the Spring Boot backend, no Java installation needed. Supports auto-update via GitHub Releases.
+Download installers from [GitHub Releases](https://github.com/matevip/mateclaw/releases).
 
-> **macOS users**: If macOS blocks the app, right-click → Open → Open again, or go to System Settings → Privacy & Security → Open Anyway.
+The desktop app bundles **JRE 21 + the Spring Boot backend**, so users do not need to install Java separately.
 
----
-
-## Screenshots
-
-<p align="center">
-  <img src="assets/images/chat-echarts-demo.png" alt="MateClaw Chat with ECharts Visualization" width="800">
-</p>
-
-<p align="center"><em>Chat console — AI self-introduction with auto-generated ECharts donut chart</em></p>
+> macOS: if the app is blocked on first launch, use right-click → Open, or allow it in Privacy & Security.
 
 ---
 
 ## Architecture
 
-```
+```text
 mateclaw/
-├── mateclaw-server/          # Spring Boot backend
-│   ├── src/main/java/vip/mate/
-│   │   ├── agent/            # Agent engine (ReAct, Plan-and-Execute, StateGraph)
-│   │   ├── planning/         # Task planning (Plan / SubPlan models)
-│   │   ├── tool/             # Tool system (built-in + MCP adapters)
-│   │   ├── skill/            # Skill management (workspace + ClawHub)
-│   │   ├── channel/          # Channel adapters (Web, DingTalk, Feishu, etc.)
-│   │   ├── workspace/        # Conversations, messages, workspace files
-│   │   ├── memory/           # Memory extraction & consolidation
-│   │   ├── llm/              # Multi-provider model configs
-│   │   ├── cron/             # Scheduled tasks (CronJob)
-│   │   ├── auth/             # Spring Security + JWT
-│   │   └── config/           # Spring bean configurations
-│   └── src/main/resources/
-│       ├── application.yml   # Main config (H2 for dev)
-│       ├── prompts/          # Prompt templates
-│       └── db/               # Schema & seed data (schema.sql, data.sql)
-├── mateclaw-ui/              # Vue 3 SPA frontend
-│   └── src/
-│       ├── views/            # Pages (ChatConsole, AgentWorkspace, SkillMarket, etc.)
-│       ├── components/       # Reusable components
-│       ├── stores/           # Pinia stores (domain-driven)
-│       ├── api/              # Axios HTTP client
-│       ├── router/           # Vue Router
-│       ├── types/            # TypeScript types
-│       └── i18n/             # Internationalization (zh-CN, en-US)
-├── mateclaw-desktop/         # Electron desktop app
-├── docs/                     # VitePress documentation (zh + en)
+├── mateclaw-server/     Spring Boot backend
+├── mateclaw-ui/         Vue 3 SPA frontend
+├── mateclaw-desktop/    Electron desktop app
+├── docs/                VitePress documentation
 ├── docker-compose.yml
 └── .env.example
 ```
+
+Backend domains include:
+
+- `agent/` for runtime and orchestration
+- `tool/` for built-in tools and MCP integration
+- `skill/` for skill installation and execution
+- `memory/` for extraction, consolidation, and dreaming
+- `wiki/` for knowledge base and structured Wiki processing
+- `channel/` for external platform adapters
+- `workspace/` for files, messages, and conversations
 
 ---
 
 ## Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
-| Backend Framework | Spring Boot 3.5 + Spring AI Alibaba 1.1 |
-| LLM Integration | DashScope, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, MiniMax, Zhipu, Volcano Engine, OpenRouter, Ollama, LM Studio, llama.cpp, MLX |
-| Agent Engine | StateGraph (ReAct + Plan-and-Execute) |
+|-------|------------|
+| Backend | Spring Boot 3.5 + Spring AI Alibaba 1.1 |
+| Agent Runtime | StateGraph |
 | Database | H2 (dev) / MySQL 8.0+ (prod) |
 | ORM | MyBatis Plus 3.5 |
-| Authentication | Spring Security + JWT |
-| API Docs | SpringDoc OpenAPI 3 |
+| Auth | Spring Security + JWT |
 | Frontend | Vue 3 + TypeScript + Vite |
-| State Management | Pinia |
-| UI Components | Element Plus |
+| State | Pinia |
+| UI | Element Plus |
 | Styling | TailwindCSS 4 |
 | Desktop | Electron + electron-updater |
-| Docs Site | VitePress |
-
----
-
-## Features
-
-### Agent System
-
-- **ReAct Agent** — Thought → Action → Observation reasoning loop with tool calling
-- **Plan-and-Execute** — Auto-decompose complex tasks into ordered sub-steps with progress tracking
-- **Dynamic Agent** — Load agent configs from database at runtime
-- **Multi-Agent** — Create multiple independent agents, each with their own system prompt, tools, and personality
-
-### Tool & Skill System
-
-- **Built-in Tools** — Web search (Serper/Tavily), date/time, workspace memory read/write
-- **MCP Protocol** — Connect external tools via Model Context Protocol (stdio, SSE, and Streamable HTTP transports). Full lifecycle management in the web UI — add, edit, enable/disable, and test connections
-- **Pre-configured MCP Servers** — GitHub (`@modelcontextprotocol/server-github`) and Filesystem ship out-of-the-box. Enable from the MCP management page and fill in your token — no code changes needed
-- **Skill Packages** — Install/uninstall skill packages with `SKILL.md` manifests
-- **ClawHub Marketplace** — Browse and install skills from the ClawHub registry
-- **Workspace Skills** — Convention-based skill directory at `~/.mateclaw/skills/{name}/`
-
-### Memory System
-
-- **Short-Term** — Conversation context window with auto-compression when token budget exceeded
-- **Post-Conversation Extraction** — Event-driven async LLM analysis, writes to PROFILE.md / MEMORY.md / daily notes
-- **Memory Consolidation** — Scheduled daily emergence (CronJob at 2:00 AM) merges daily notes into long-term memory
-- **Workspace Files** — Per-agent AGENTS.md, SOUL.md, PROFILE.md, MEMORY.md, memory/*.md
-- **Agent Memory Tool** — Agents can read/write their own workspace files during conversations
-
-### Multi-Channel
-
-- **Web Console** — SSE streaming with rich message rendering (Markdown, code, plans)
-- **DingTalk** — Webhook + event subscription
-- **Feishu (Lark)** — Webhook + event subscription
-- **WeChat Work** — Callback API
-- **Telegram** — Bot API with webhook
-- **Discord** — Bot with slash commands
-- **QQ** — QQ Bot API
-
-### Model Providers
-
-Configure in the web UI (Settings → Models). Supported providers:
-
-| Provider | Models |
-|----------|--------|
-| **Cloud Providers** | |
-| DashScope (Alibaba) | Qwen3.5-Max, Qwen3.5-Plus, Qwen3-Max, Qwen3-Plus, Qwen-Max, Qwen-Plus, Qwen-Turbo, Qwen-Long, DeepSeek-V3.2 |
-| ModelScope | Qwen3.5-122B-A10B, GLM-5 |
-| Aliyun Coding Plan | Qwen3.5-Plus, Qwen3-Coder-Next, GLM-5, GLM-4.7, MiniMax-M2.5, Kimi-K2.5 |
-| OpenAI | GPT-5.2, GPT-5, GPT-5-Mini, GPT-5-Nano, GPT-4.1, GPT-4.1-Mini, GPT-4.1-Nano, o3, o4-mini, GPT-4o |
-| Azure OpenAI | GPT-5, GPT-4.1, GPT-4o and more |
-| Anthropic | Claude Opus 4.6, Claude Sonnet 4.6 (via model discovery) |
-| Google Gemini | Gemini 3.1 Pro, Gemini 3 Flash, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.0 Flash |
-| DeepSeek | DeepSeek-Chat, DeepSeek-Reasoner |
-| Kimi (Moonshot) | Kimi-K2.5, Kimi-K2-Thinking, Kimi for Coding (CN / International / Code) |
-| MiniMax | MiniMax-M2.7, MiniMax-M2.5 (International / China) |
-| Zhipu AI | GLM-5.1, GLM-5, GLM-5-Turbo, GLM-5V-Turbo (CN / International) |
-| Volcano Engine | Doubao-1.5-Pro-256K, Doubao-1.5-Lite, Doubao-1.5-Thinking-Pro, Doubao-1.5-Vision-Pro |
-| OpenRouter | GPT-5, Claude Opus 4.6, Gemini 2.5 Pro, Llama 4 Maverick, DeepSeek R1, and 200+ more |
-| **Local Providers** | |
-| Ollama | Qwen3, Gemma 4, Gemma 3, Llama 3.1, DeepSeek R1, Mistral (auto-detected on startup) |
-| LM Studio | Any locally-served model |
-| llama.cpp | Any locally-served model |
-| MLX (Apple Silicon) | Any locally-served model |
-
-### Security
-
-- **Spring Security + JWT** — Token-based authentication
-- **Tool Guard** — Approval rules for sensitive tool operations
-- **File Validation** — Path traversal prevention for workspace files
-- **Skill Security** — Validation during skill installation
-
-### Scheduled Tasks
-
-- **CronJob System** — Create scheduled tasks with 5-field cron expressions
-- **Memory Consolidation** — Auto-triggered daily for each agent
-- **Custom Tasks** — Schedule any prompt to run periodically
+| Docs | VitePress |
 
 ---
 
@@ -271,80 +300,60 @@ Configure in the web UI (Settings → Models). Supported providers:
 
 | Topic | Description |
 |-------|-------------|
-| [Introduction](https://mateclaw.mate.vip/en/intro) | What MateClaw is and core concepts |
-| [Quick Start](https://mateclaw.mate.vip/en/quickstart) | Install and run (local, Docker, desktop) |
-| [Console](https://mateclaw.mate.vip/en/console) | Web UI: chat and agent configuration |
-| [Agents](https://mateclaw.mate.vip/en/agents) | Agent engine: ReAct, Plan-and-Execute, StateGraph |
-| [Models](https://mateclaw.mate.vip/en/models) | Configure cloud, local, and custom providers |
-| [Tools](https://mateclaw.mate.vip/en/tools) | Built-in tools and custom tool development |
-| [Skills](https://mateclaw.mate.vip/en/skills) | Skill packages and ClawHub marketplace |
+| [Introduction](https://mateclaw.mate.vip/en/intro) | Product overview and core concepts |
+| [Quick Start](https://mateclaw.mate.vip/en/quickstart) | Local, Docker, and desktop setup |
+| [Console](https://mateclaw.mate.vip/en/console) | Web console and day-to-day usage |
+| [Agents](https://mateclaw.mate.vip/en/agents) | ReAct, Plan-and-Execute, and runtime design |
+| [Models](https://mateclaw.mate.vip/en/models) | Model provider setup |
+| [Tools](https://mateclaw.mate.vip/en/tools) | Built-in tools and extension model |
+| [Skills](https://mateclaw.mate.vip/en/skills) | Skill packages and marketplace |
 | [MCP](https://mateclaw.mate.vip/en/mcp) | Model Context Protocol integration |
-| [Memory](https://mateclaw.mate.vip/en/memory) | Multi-layer memory system |
-| [Channels](https://mateclaw.mate.vip/en/channels) | DingTalk, Feishu, Telegram, Discord, and more |
-| [Security](https://mateclaw.mate.vip/en/security) | Authentication and tool guard |
+| [Memory](https://mateclaw.mate.vip/en/memory) | Memory architecture |
+| [Channels](https://mateclaw.mate.vip/en/channels) | External channel integration |
+| [Security](https://mateclaw.mate.vip/en/security) | Guardrails and approval |
 | [Desktop](https://mateclaw.mate.vip/en/desktop) | Desktop application guide |
-| [API Reference](https://mateclaw.mate.vip/en/api) | REST API documentation |
-| [Configuration](https://mateclaw.mate.vip/en/config) | Configuration reference |
-| [FAQ](https://mateclaw.mate.vip/en/faq) | Common questions and troubleshooting |
+| [API Reference](https://mateclaw.mate.vip/en/api) | REST API |
+| [FAQ](https://mateclaw.mate.vip/en/faq) | Troubleshooting |
 
 ---
 
 ## Roadmap
 
-| Area | Item | Status |
-|------|------|--------|
-| **Agent** | Multi-agent collaboration and delegation | Planned |
-| **Agent** | Multimodal input (image, audio, video) | Planned |
-| **Models** | Small + large model routing | Planned |
-| **Memory** | Vector DB long-term memory (RAG) | Planned |
-| **Memory** | Multimodal memory fusion | Planned |
-| **Skills** | Richer ClawHub ecosystem | In Progress |
-| **Channels** | WeChat personal (iLink Bot) | Planned |
-| **Channels** | Email channel | Planned |
-| **Desktop** | Linux support | Planned |
-| **Security** | Multi-tenant support | Planned |
-| **Console** | Plugin marketplace in web UI | Planned |
+Current focus areas include:
 
-_Status:_ **In Progress** — actively being worked on; **Planned** — queued or under design.
+- richer multi-agent collaboration
+- deeper multimodal understanding
+- smarter model routing
+- stronger long-term memory
+- richer ClawHub ecosystem
+- more channels and desktop coverage
 
 ---
 
 ## Contributing
 
-MateClaw is open to contributions! Whether it's bug fixes, new features, documentation improvements, or new channel/tool integrations — all contributions are welcome.
+MateClaw is open to product, code, docs, and integration contributions.
 
 ```bash
-# Clone the repository
 git clone https://github.com/matevip/mateclaw.git
 cd mateclaw
 
-# Backend
 cd mateclaw-server
 mvn clean compile
 
-# Frontend
 cd ../mateclaw-ui
 pnpm install
 pnpm dev
 ```
 
-Please read [CONTRIBUTING.md](https://github.com/matevip/mateclaw/blob/main/CONTRIBUTING.md) (if available) before submitting a PR.
-
 ---
 
-## Contact Us
+## Why The Name
 
-<!-- TODO: Fill in social accounts -->
+**Mate** means companion.  
+**Claw** means capability.
 
-| Discord | X (Twitter) | DingTalk |
-|---------|-------------|----------|
-| Coming soon | Coming soon | Coming soon |
-
----
-
-## Why MateClaw?
-
-**Mate** — a companion, always by your side. **Claw** — sharp, capable, ready to grab any task. MateClaw is your personal AI mate that lends a claw whenever you need it. Built as a monolith with modular design, it's easy to deploy, extend, and customize.
+The product is meant to feel like both: a system that stays with you, and a system that can actually grab work and move it.
 
 ---
 
