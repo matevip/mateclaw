@@ -79,11 +79,18 @@ public class WikiController {
     @RequireWorkspaceRole("member")
     @Operation(summary = "创建知识库")
     @PostMapping("/knowledge-bases")
-    public R<WikiKnowledgeBaseEntity> createKB(@RequestBody Map<String, Object> body) {
+    public R<WikiKnowledgeBaseEntity> createKB(@RequestBody Map<String, Object> body,
+                                                @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         String name = (String) body.get("name");
         String description = (String) body.get("description");
         Long agentId = body.get("agentId") != null ? Long.valueOf(body.get("agentId").toString()) : null;
-        return R.ok(kbService.create(name, description, agentId));
+        WikiKnowledgeBaseEntity kb = kbService.create(name, description, agentId);
+        // 注入 workspace_id（create 方法内部不感知 workspace，需要在 controller 层补充）
+        if (kb.getWorkspaceId() == null || kb.getWorkspaceId() == 0) {
+            kb.setWorkspaceId(workspaceId != null ? workspaceId : 1L);
+            kbService.updateWorkspaceId(kb.getId(), kb.getWorkspaceId());
+        }
+        return R.ok(kb);
     }
 
     @RequireWorkspaceRole("member")

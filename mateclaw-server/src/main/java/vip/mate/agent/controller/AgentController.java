@@ -11,6 +11,7 @@ import vip.mate.agent.AgentState;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.audit.service.AuditEventService;
 import vip.mate.common.result.R;
+import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
 import java.io.IOException;
@@ -39,17 +40,19 @@ public class AgentController {
     @RequireWorkspaceRole("viewer")
     public R<List<AgentEntity>> list(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
-        if (workspaceId != null) {
-            return R.ok(agentService.listAgentsByWorkspace(workspaceId));
-        }
-        return R.ok(agentService.listAgents());
+        // 无 header 时强制使用默认 workspace，不返回全局数据
+        long wsId = workspaceId != null ? workspaceId : 1L;
+        return R.ok(agentService.listAgentsByWorkspace(wsId));
     }
 
     @Operation(summary = "获取Agent详情")
     @GetMapping("/{id}")
     @RequireWorkspaceRole("viewer")
-    public R<AgentEntity> get(@PathVariable Long id) {
-        return R.ok(agentService.getAgent(id));
+    public R<AgentEntity> get(@PathVariable Long id,
+                              @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        AgentEntity agent = agentService.getAgent(id);
+        verifyResourceWorkspace(agent.getWorkspaceId(), workspaceId);
+        return R.ok(agent);
     }
 
     @Operation(summary = "创建Agent")
@@ -58,9 +61,8 @@ public class AgentController {
     public R<AgentEntity> create(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             @RequestBody AgentEntity agent) {
-        if (workspaceId != null) {
-            agent.setWorkspaceId(workspaceId);
-        }
+        // 始终注入 workspace_id，无 header 时使用默认
+        agent.setWorkspaceId(workspaceId != null ? workspaceId : 1L);
         AgentEntity created = agentService.createAgent(agent);
         auditEventService.record("CREATE", "AGENT", String.valueOf(created.getId()), created.getName(), null);
         return R.ok(created);
@@ -69,8 +71,12 @@ public class AgentController {
     @Operation(summary = "更新Agent")
     @PutMapping("/{id}")
     @RequireWorkspaceRole("member")
-    public R<AgentEntity> update(@PathVariable Long id, @RequestBody AgentEntity agent) {
+    public R<AgentEntity> update(@PathVariable Long id, @RequestBody AgentEntity agent,
+                                 @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        AgentEntity existing = agentService.getAgent(id);
+        verifyResourceWorkspace(existing.getWorkspaceId(), workspaceId);
         agent.setId(id);
+        agent.setWorkspaceId(existing.getWorkspaceId()); // 不允许跨 workspace 迁移
         AgentEntity updated = agentService.updateAgent(agent);
         auditEventService.record("UPDATE", "AGENT", String.valueOf(id), updated.getName(), null);
         return R.ok(updated);
@@ -79,10 +85,12 @@ public class AgentController {
     @Operation(summary = "删除Agent")
     @DeleteMapping("/{id}")
     @RequireWorkspaceRole("admin")
-    public R<Void> delete(@PathVariable Long id) {
+    public R<Void> delete(@PathVariable Long id,
+                          @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         AgentEntity agent = agentService.getAgent(id);
+        verifyResourceWorkspace(agent.getWorkspaceId(), workspaceId);
         agentService.deleteAgent(id);
-        auditEventService.record("DELETE", "AGENT", String.valueOf(id), agent != null ? agent.getName() : null, null);
+        auditEventService.record("DELETE", "AGENT", String.valueOf(id), agent.getName(), null);
         return R.ok();
     }
 
@@ -147,5 +155,16 @@ public class AgentController {
     public static class ChatRequest {
         private String message;
         private String conversationId = "default";
+    }
+
+    /**
+     * 校验目标资源实际归属的 workspace 与请求 header 一致。
+     * 防止 "在 workspace A 鉴权，操作 workspace B 资源" 的跨域攻击。
+     */
+    private void verifyResourceWorkspace(Long resourceWorkspaceId, Long headerWorkspaceId) {
+        long requestedWs = headerWorkspaceId != null ? headerWorkspaceId : 1L;
+        if (resourceWorkspaceId != null && !resourceWorkspaceId.equals(requestedWs)) {
+            throw new MateClawException("资源不属于当前工作区");
+        }
     }
 }

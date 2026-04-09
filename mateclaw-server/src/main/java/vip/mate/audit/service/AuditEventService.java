@@ -35,18 +35,26 @@ public class AuditEventService {
     private final AuthService authService;
 
     /**
-     * 异步记录审计事件
+     * 异步记录审计事件。
+     * <p>
+     * 在调用线程（请求线程）中捕获完整上下文，然后交给异步线程写库。
+     * 这样避免了 SecurityContext/RequestContext 在异步线程中丢失的问题。
      */
-    @Async
     public void record(String action, String resourceType, String resourceId,
                        String resourceName, String detailJson) {
+        // 在请求线程中构建事件（可以访问 SecurityContext 和 RequestContext）
+        AuditEventEntity event = buildEvent(action, resourceType, resourceId, resourceName, detailJson);
+        if (event != null) {
+            insertAsync(event);
+        }
+    }
+
+    @Async
+    void insertAsync(AuditEventEntity event) {
         try {
-            AuditEventEntity event = buildEvent(action, resourceType, resourceId, resourceName, detailJson);
-            if (event != null) {
-                auditEventMapper.insert(event);
-            }
+            auditEventMapper.insert(event);
         } catch (Exception e) {
-            log.warn("Failed to record audit event: {}/{}/{}", action, resourceType, resourceId, e);
+            log.warn("Failed to insert audit event: {}/{}", event.getAction(), event.getResourceType(), e);
         }
     }
 

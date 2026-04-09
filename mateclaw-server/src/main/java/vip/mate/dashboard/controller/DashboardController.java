@@ -50,13 +50,17 @@ public class DashboardController {
     public R<List<CronJobRunEntity>> cronJobRuns(
             @PathVariable Long cronJobId,
             @RequestParam(defaultValue = "20") int limit) {
+        // TODO: 校验 cronJobId 对应的 agent 属于当前 workspace
         return R.ok(cronJobRunService.listByJobId(cronJobId, Math.min(limit, 100)));
     }
 
-    @Operation(summary = "获取最近执行记录")
+    @Operation(summary = "获取最近执行记录（当前 workspace 关联的 CronJob）")
     @GetMapping("/cron-runs")
     @RequireWorkspaceRole("viewer")
-    public R<List<CronJobRunEntity>> recentRuns(@RequestParam(defaultValue = "20") int limit) {
-        return R.ok(cronJobRunService.listRecent(Math.min(limit, 100)));
+    public R<List<CronJobRunEntity>> recentRuns(
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+            @RequestParam(defaultValue = "20") int limit) {
+        long wsId = workspaceId != null ? workspaceId : 1L;
+        return R.ok(cronJobRunService.listRecentByWorkspace(wsId, Math.min(limit, 100)));
     }
 }

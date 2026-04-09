@@ -9,6 +9,7 @@ import vip.mate.channel.model.ChannelEntity;
 import vip.mate.channel.service.ChannelService;
 import vip.mate.audit.service.AuditEventService;
 import vip.mate.common.result.R;
+import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
 import java.util.List;
@@ -37,10 +38,8 @@ public class ChannelController {
     @GetMapping
     public R<List<ChannelEntity>> list(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
-        if (workspaceId != null) {
-            return R.ok(channelService.listChannelsByWorkspace(workspaceId));
-        }
-        return R.ok(channelService.listChannels());
+        long wsId = workspaceId != null ? workspaceId : 1L;
+        return R.ok(channelService.listChannelsByWorkspace(wsId));
     }
 
     @RequireWorkspaceRole("viewer")
@@ -53,8 +52,11 @@ public class ChannelController {
     @RequireWorkspaceRole("viewer")
     @Operation(summary = "获取渠道详情")
     @GetMapping("/{id}")
-    public R<ChannelEntity> get(@PathVariable Long id) {
-        return R.ok(channelService.getChannel(id));
+    public R<ChannelEntity> get(@PathVariable Long id,
+                                @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        ChannelEntity channel = channelService.getChannel(id);
+        verifyResourceWorkspace(channel.getWorkspaceId(), workspaceId);
+        return R.ok(channel);
     }
 
     @RequireWorkspaceRole("admin")
@@ -63,9 +65,7 @@ public class ChannelController {
     public R<ChannelEntity> create(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             @RequestBody ChannelEntity channel) {
-        if (workspaceId != null) {
-            channel.setWorkspaceId(workspaceId);
-        }
+        channel.setWorkspaceId(workspaceId != null ? workspaceId : 1L);
         ChannelEntity created = channelService.createChannel(channel);
         auditEventService.record("CREATE", "CHANNEL", String.valueOf(created.getId()), created.getName(), null);
         return R.ok(created);
@@ -74,10 +74,13 @@ public class ChannelController {
     @RequireWorkspaceRole("admin")
     @Operation(summary = "更新渠道")
     @PutMapping("/{id}")
-    public R<ChannelEntity> update(@PathVariable Long id, @RequestBody ChannelEntity channel) {
+    public R<ChannelEntity> update(@PathVariable Long id, @RequestBody ChannelEntity channel,
+                                   @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        ChannelEntity existing = channelService.getChannel(id);
+        verifyResourceWorkspace(existing.getWorkspaceId(), workspaceId);
         channel.setId(id);
+        channel.setWorkspaceId(existing.getWorkspaceId());
         ChannelEntity updated = channelService.updateChannel(channel);
-        // 配置变更后热替换渠道（新 Adapter 就绪后才替换旧的，失败则保留旧的）
         channelManager.restartChannel(id);
         auditEventService.record("UPDATE", "CHANNEL", String.valueOf(id), updated.getName(), null);
         return R.ok(updated);
@@ -86,19 +89,23 @@ public class ChannelController {
     @RequireWorkspaceRole("admin")
     @Operation(summary = "删除渠道")
     @DeleteMapping("/{id}")
-    public R<Void> delete(@PathVariable Long id) {
-        // 先停止渠道再删除
+    public R<Void> delete(@PathVariable Long id,
+                          @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         ChannelEntity channel = channelService.getChannel(id);
+        verifyResourceWorkspace(channel.getWorkspaceId(), workspaceId);
         channelManager.stopChannel(id);
         channelService.deleteChannel(id);
-        auditEventService.record("DELETE", "CHANNEL", String.valueOf(id), channel != null ? channel.getName() : null, null);
+        auditEventService.record("DELETE", "CHANNEL", String.valueOf(id), channel.getName(), null);
         return R.ok();
     }
 
     @RequireWorkspaceRole("admin")
     @Operation(summary = "启用/禁用渠道")
     @PutMapping("/{id}/toggle")
-    public R<ChannelEntity> toggle(@PathVariable Long id, @RequestParam boolean enabled) {
+    public R<ChannelEntity> toggle(@PathVariable Long id, @RequestParam boolean enabled,
+                                   @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        ChannelEntity existing = channelService.getChannel(id);
+        verifyResourceWorkspace(existing.getWorkspaceId(), workspaceId);
         ChannelEntity channel = channelService.toggleChannel(id, enabled);
         // 联动 ChannelManager：启用时启动，禁用时停止
         if (enabled) {
@@ -115,5 +122,12 @@ public class ChannelController {
     @GetMapping("/status")
     public R<Map<String, Object>> status() {
         return R.ok(channelManager.getStatus());
+    }
+
+    private void verifyResourceWorkspace(Long resourceWorkspaceId, Long headerWorkspaceId) {
+        long requestedWs = headerWorkspaceId != null ? headerWorkspaceId : 1L;
+        if (resourceWorkspaceId != null && !resourceWorkspaceId.equals(requestedWs)) {
+            throw new MateClawException("资源不属于当前工作区");
+        }
     }
 }

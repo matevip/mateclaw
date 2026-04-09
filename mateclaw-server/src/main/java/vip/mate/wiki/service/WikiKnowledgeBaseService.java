@@ -165,6 +165,17 @@ public class WikiKnowledgeBaseService {
         kbMapper.updateById(entity);
     }
 
+    /**
+     * 更新知识库的 workspace 归属
+     */
+    public void updateWorkspaceId(Long kbId, Long workspaceId) {
+        WikiKnowledgeBaseEntity entity = kbMapper.selectById(kbId);
+        if (entity != null) {
+            entity.setWorkspaceId(workspaceId);
+            kbMapper.updateById(entity);
+        }
+    }
+
     @Transactional
     public void delete(Long id) {
         kbMapper.deleteById(id);
