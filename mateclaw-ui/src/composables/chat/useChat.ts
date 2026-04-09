@@ -385,6 +385,31 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     }
   })
 
+  // ===== Browser 执行事件 =====
+
+  stream.on('browser_action', (data) => {
+    if (currentAssistantId.value) {
+      const msg = getMessage(currentAssistantId.value)
+      if (msg) {
+        const metadata = parseMetadata((msg as any).metadata)
+        const browserActions = [...(metadata?.browserActions || [])]
+        browserActions.push({
+          action: data.action,
+          success: data.success,
+          url: data.url,
+          title: data.title,
+          screenshot: data.screenshot,
+          durationMs: data.durationMs,
+          timestamp: data.timestamp || Date.now()
+        })
+        updateMessage(currentAssistantId.value, {
+          ...msg,
+          metadata: { ...metadata, browserActions }
+        } as any)
+      }
+    }
+  })
+
   stream.on('phase', (data) => {
     const phase = data.phase as StreamPhase
     if (phase) {

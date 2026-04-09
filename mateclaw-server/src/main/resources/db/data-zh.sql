@@ -1243,6 +1243,23 @@ VALUES (1000000008, '微信', 'weixin', 1000000001, '', '{
 }', FALSE,
         '微信个人号渠道（iLink Bot HTTP 长轮询）。通过扫描二维码登录获取 bot_token，或直接填入已有 token。基于 iLink Bot API，支持文本、图片、语音（ASR）、文件、视频消息', NOW(), NOW(), 0);
 
+-- 9. Slack（默认禁用，需配置 bot_token / app_token）
+MERGE INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
+KEY (id)
+VALUES (1000000009, 'Slack Bot', 'slack', 1000000001, '', '{
+  "bot_token": "",
+  "app_token": "",
+  "signing_secret": "",
+  "dm_policy": "open",
+  "group_policy": "mention",
+  "allow_from": [],
+  "deny_message": "抱歉，您没有使用权限",
+  "filter_thinking": true,
+  "filter_tool_messages": true,
+  "message_format": "auto"
+}', FALSE,
+        'Slack 渠道（Socket Mode）。在 Slack App 后台获取 Bot Token（xoxb-）和 App-Level Token（xapp-），启用 Socket Mode 后即可使用。', NOW(), NOW(), 0);
+
 -- ==================== 示例定时任务 ====================
 MERGE INTO mate_cron_job (id, name, cron_expression, timezone, agent_id, task_type, trigger_message, request_body, enabled, create_time, update_time, deleted)
 KEY (id)

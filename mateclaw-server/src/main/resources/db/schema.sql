@@ -526,3 +526,42 @@ CREATE TABLE IF NOT EXISTS mate_wiki_page (
     CONSTRAINT uk_wiki_page_kb_slug UNIQUE (kb_id, slug)
 );
 CREATE INDEX IF NOT EXISTS idx_wiki_page_kb ON mate_wiki_page(kb_id);
+
+-- =============================================
+-- 工作区表（Phase 2）
+-- =============================================
+
+-- 工作区
+CREATE TABLE IF NOT EXISTS mate_workspace (
+    id            BIGINT       NOT NULL PRIMARY KEY,
+    name          VARCHAR(128) NOT NULL,
+    slug          VARCHAR(64)  NOT NULL,
+    description   VARCHAR(256),
+    owner_id      BIGINT,
+    settings_json TEXT,
+    create_time   DATETIME     NOT NULL,
+    update_time   DATETIME     NOT NULL,
+    deleted       INT          NOT NULL DEFAULT 0,
+    CONSTRAINT uk_workspace_slug UNIQUE (slug)
+);
+
+-- 工作区成员
+CREATE TABLE IF NOT EXISTS mate_workspace_member (
+    id           BIGINT      NOT NULL PRIMARY KEY,
+    workspace_id BIGINT      NOT NULL,
+    user_id      BIGINT      NOT NULL,
+    role         VARCHAR(32) NOT NULL DEFAULT 'member',
+    create_time  DATETIME    NOT NULL,
+    update_time  DATETIME    NOT NULL,
+    deleted      INT         NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ws_member_workspace ON mate_workspace_member(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_ws_member_user ON mate_workspace_member(user_id);
+
+-- 现有表增加 workspace_id 列
+ALTER TABLE mate_agent ADD COLUMN IF NOT EXISTS workspace_id BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE mate_channel ADD COLUMN IF NOT EXISTS workspace_id BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE mate_conversation ADD COLUMN IF NOT EXISTS workspace_id BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE mate_wiki_knowledge_base ADD COLUMN IF NOT EXISTS workspace_id BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE mate_tool ADD COLUMN IF NOT EXISTS workspace_id BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE mate_skill ADD COLUMN IF NOT EXISTS workspace_id BIGINT NOT NULL DEFAULT 1;

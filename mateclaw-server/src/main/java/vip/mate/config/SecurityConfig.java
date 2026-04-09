@@ -56,7 +56,9 @@ public class SecurityConfig {
                     "/api/v1/chat/stream",
                     "/api/v1/chat/*/stop",
                     "/api/v1/setup/**",
-                    "/api/v1/channels/webhook/**"
+                    "/api/v1/channels/webhook/**",
+                    "/api/v1/channels/webchat/**",
+                    "/api/v1/talk/ws"
                 ).permitAll()
                 // 所有其他 API 接口需要认证
                 .requestMatchers("/api/**").authenticated()

@@ -101,6 +101,7 @@
                 <option value="wecom">{{ t('channels.types.wecom') }}</option>
                 <option value="weixin">{{ t('channels.types.weixin') }}</option>
                 <option value="qq">{{ t('channels.types.qq') }}</option>
+                <option value="slack">{{ t('channels.types.slack') }}</option>
                 <option value="webhook">{{ t('channels.types.webhook') }}</option>
               </select>
             </div>
@@ -1148,7 +1149,7 @@ async function toggleChannel(channel: Channel) {
 
 // ==================== 渠道图标 ====================
 
-const CHANNEL_ICON_TYPES = ['web', 'dingtalk', 'feishu', 'wecom', 'weixin', 'telegram', 'discord', 'qq', 'webhook']
+const CHANNEL_ICON_TYPES = ['web', 'dingtalk', 'feishu', 'wecom', 'weixin', 'telegram', 'discord', 'qq', 'slack', 'webhook']
 function getChannelIconPath(type: string) {
   const name = CHANNEL_ICON_TYPES.includes(type) ? type : 'default'
   return `/icons/channels/${name}.svg`

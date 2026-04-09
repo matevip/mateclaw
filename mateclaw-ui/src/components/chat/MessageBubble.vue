@@ -117,6 +117,9 @@
           </Transition>
         </div>
 
+        <!-- 浏览器执行时间线 -->
+        <BrowserTimeline v-if="browserActionsMeta.length" :actions="browserActionsMeta" />
+
         <!-- 工具审批面板 -->
         <div v-if="pendingApproval" class="approval-section" :class="approvalSeverityClass">
           <div class="approval-header">
@@ -325,6 +328,8 @@ import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { useAuthenticatedAttachment } from '@/composables/useAuthenticatedAttachment'
 import { http } from '@/api'
 import TypingCursor from './TypingCursor.vue'
+import BrowserTimeline from './BrowserTimeline.vue'
+import type { BrowserAction } from './BrowserTimeline.vue'
 import type { Message, ChatAttachment, ToolCallMeta, PlanMeta } from '@/types'
 import type { ChatErrorInfo } from '@/types/chatError'
 
@@ -588,6 +593,10 @@ const executionExpanded = ref(false)
 
 const toolCallsMeta = computed<ToolCallMeta[]>(() => {
   return props.message.metadata?.toolCalls || []
+})
+
+const browserActionsMeta = computed<BrowserAction[]>(() => {
+  return props.message.metadata?.browserActions || []
 })
 
 const planMeta = computed<PlanMeta | undefined>(() => {

@@ -503,3 +503,64 @@ CREATE TABLE IF NOT EXISTS mate_wiki_page (
     UNIQUE KEY uk_wiki_page_kb_slug (kb_id, slug),
     INDEX idx_wiki_page_kb (kb_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =============================================
+-- 工作区表（Phase 2）
+-- =============================================
+
+-- 工作区
+CREATE TABLE IF NOT EXISTS mate_workspace (
+    id            BIGINT       NOT NULL PRIMARY KEY,
+    name          VARCHAR(128) NOT NULL,
+    slug          VARCHAR(64)  NOT NULL,
+    description   VARCHAR(256),
+    owner_id      BIGINT,
+    settings_json TEXT,
+    create_time   DATETIME     NOT NULL,
+    update_time   DATETIME     NOT NULL,
+    deleted       INT          NOT NULL DEFAULT 0,
+    UNIQUE KEY uk_workspace_slug (slug)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 工作区成员
+CREATE TABLE IF NOT EXISTS mate_workspace_member (
+    id           BIGINT      NOT NULL PRIMARY KEY,
+    workspace_id BIGINT      NOT NULL,
+    user_id      BIGINT      NOT NULL,
+    role         VARCHAR(32) NOT NULL DEFAULT 'member',
+    create_time  DATETIME    NOT NULL,
+    update_time  DATETIME    NOT NULL,
+    deleted      INT         NOT NULL DEFAULT 0,
+    INDEX idx_ws_member_workspace (workspace_id),
+    INDEX idx_ws_member_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 现有表增加 workspace_id 列（幂等）
+-- MySQL 不支持 ADD COLUMN IF NOT EXISTS，使用存储过程处理
+DROP PROCEDURE IF EXISTS mate_add_workspace_id;
+DELIMITER $$
+CREATE PROCEDURE mate_add_workspace_id()
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='mate_agent' AND COLUMN_NAME='workspace_id') THEN
+        ALTER TABLE mate_agent ADD COLUMN workspace_id BIGINT NOT NULL DEFAULT 1;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='mate_channel' AND COLUMN_NAME='workspace_id') THEN
+        ALTER TABLE mate_channel ADD COLUMN workspace_id BIGINT NOT NULL DEFAULT 1;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='mate_conversation' AND COLUMN_NAME='workspace_id') THEN
+        ALTER TABLE mate_conversation ADD COLUMN workspace_id BIGINT NOT NULL DEFAULT 1;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='mate_wiki_knowledge_base' AND COLUMN_NAME='workspace_id') THEN
+        ALTER TABLE mate_wiki_knowledge_base ADD COLUMN workspace_id BIGINT NOT NULL DEFAULT 1;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='mate_tool' AND COLUMN_NAME='workspace_id') THEN
+        ALTER TABLE mate_tool ADD COLUMN workspace_id BIGINT NOT NULL DEFAULT 1;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='mate_skill' AND COLUMN_NAME='workspace_id') THEN
+        ALTER TABLE mate_skill ADD COLUMN workspace_id BIGINT NOT NULL DEFAULT 1;
+    END IF;
+END$$
+DELIMITER ;
+
+CALL mate_add_workspace_id();
+DROP PROCEDURE IF EXISTS mate_add_workspace_id;

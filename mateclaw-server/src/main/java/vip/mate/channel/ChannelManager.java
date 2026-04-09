@@ -63,7 +63,7 @@ public class ChannelManager {
 
     /** 支持的渠道类型 */
     private static final Set<String> SUPPORTED_TYPES = Set.of(
-            "web", "dingtalk", "feishu", "telegram", "discord", "wecom", "qq", "weixin"
+            "web", "dingtalk", "feishu", "telegram", "discord", "wecom", "qq", "weixin", "slack", "webchat"
     );
 
     /**
@@ -406,6 +406,8 @@ public class ChannelManager {
             case "wecom" -> new WeComChannelAdapter(channel, messageRouter, objectMapper);
             case "qq" -> new QQChannelAdapter(channel, messageRouter, objectMapper);
             case "weixin" -> new WeixinChannelAdapter(channel, messageRouter, objectMapper);
+            case "slack" -> new vip.mate.channel.slack.SlackChannelAdapter(channel, messageRouter, objectMapper);
+            case "webchat" -> new vip.mate.channel.webchat.WebChatChannelAdapter(channel, messageRouter, objectMapper);
             default -> throw new IllegalArgumentException("Unsupported channel type: " + type);
         };
     }

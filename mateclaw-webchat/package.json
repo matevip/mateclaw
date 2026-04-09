@@ -1,0 +1,19 @@
+{
+  "name": "@mateclaw/webchat",
+  "version": "1.0.0",
+  "description": "MateClaw WebChat embeddable widget",
+  "type": "module",
+  "main": "dist/mateclaw-webchat.umd.js",
+  "module": "dist/mateclaw-webchat.es.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && cp -r dist/ ../mateclaw-server/src/main/resources/static/webchat/",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5",
+    "typescript": "^5.8.3"
+  }
+}

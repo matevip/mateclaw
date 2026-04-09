@@ -162,6 +162,13 @@ public class AuthService {
                 .eq(UserEntity::getUsername, username));
     }
 
+    /**
+     * 根据 ID 查询用户
+     */
+    public UserEntity findById(Long userId) {
+        return userMapper.selectById(userId);
+    }
+
     private String generateToken(UserEntity user) {
         return Jwts.builder()
                 .subject(user.getUsername())

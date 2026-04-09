@@ -34,9 +34,11 @@ public class ConversationController {
      */
     @Operation(summary = "获取会话列表")
     @GetMapping
-    public R<List<ConversationVO>> list(Authentication auth) {
+    public R<List<ConversationVO>> list(
+            Authentication auth,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         String username = auth != null ? auth.getName() : "anonymous";
-        return R.ok(conversationService.listConversations(username));
+        return R.ok(conversationService.listConversations(username, workspaceId));
     }
 
     /**

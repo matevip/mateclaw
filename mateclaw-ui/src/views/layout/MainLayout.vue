@@ -33,6 +33,9 @@
         </button>
       </div>
 
+      <!-- 工作区切换 -->
+      <WorkspaceSwitcher :collapsed="sidebarCollapsed" />
+
       <!-- 导航菜单 -->
       <nav class="sidebar-nav">
         <template v-for="group in navGroups" :key="group.key">
@@ -125,6 +128,7 @@ import type { ThemeMode } from '@/stores/useThemeStore'
 import { http, setupApi } from '@/api/index'
 import OnboardingWizard from '@/views/Onboarding/OnboardingWizard.vue'
 import DoctorDrawer from '@/views/Doctor/DoctorDrawer.vue'
+import WorkspaceSwitcher from '@/components/workspace/WorkspaceSwitcher.vue'
 
 const router = useRouter()
 const route = useRoute()

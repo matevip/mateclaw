@@ -119,6 +119,23 @@ public class ChannelWebhookController {
         return ResponseEntity.ok("success");
     }
 
+    @Operation(summary = "Slack Events API 回调")
+    @PostMapping("/slack")
+    public ResponseEntity<Map<String, Object>> slackWebhook(@RequestBody Map<String, Object> payload) {
+        log.debug("[webhook] Slack callback received");
+        // URL Verification challenge
+        if ("url_verification".equals(payload.get("type"))) {
+            return ResponseEntity.ok(Map.of("challenge", payload.getOrDefault("challenge", "")));
+        }
+        Optional<ChannelAdapter> adapter = channelManager.getAdapterByType("slack");
+        if (adapter.isPresent() && adapter.get() instanceof vip.mate.channel.slack.SlackChannelAdapter slack) {
+            Map<String, Object> result = slack.handleWebhook(payload);
+            return ResponseEntity.ok(result);
+        }
+        log.warn("[webhook] Slack channel not active, ignoring callback");
+        return ResponseEntity.ok(Map.of("status", "channel_not_active"));
+    }
+
     // ==================== 微信 iLink Bot ====================
 
     /** 微信扫码深链接模板 */

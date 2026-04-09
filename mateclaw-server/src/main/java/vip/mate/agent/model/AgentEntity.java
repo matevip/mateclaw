@@ -49,6 +49,9 @@ public class AgentEntity {
     /** 标签（逗号分隔） */
     private String tags;
 
+    /** 所属工作区 ID（默认 1 = default） */
+    private Long workspaceId;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

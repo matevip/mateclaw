@@ -186,8 +186,18 @@
         @attachment-remove="removeAttachment"
         @approve="handleApprove"
         @deny="handleDeny"
+        :enable-talk-mode="!!selectedAgentId"
+        @talk="showTalkMode = true"
       />
     </div>
+
+    <!-- Talk Mode 覆盖层 -->
+    <TalkMode
+      :visible="showTalkMode"
+      :agent-id="selectedAgentId"
+      :conversation-id="currentConversationId"
+      @close="showTalkMode = false"
+    />
   </div>
 </template>
 
@@ -206,7 +216,11 @@ import type { Conversation, Agent, ModelConfig, ProviderInfo, ActiveModelsInfo, 
 import MessageList from '@/components/chat/MessageList.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import StreamLoadingBar from '@/components/chat/StreamLoadingBar.vue'
+import TalkMode from '@/components/chat/TalkMode.vue'
 import { useEChartsRenderer } from '@/composables/useEChartsRenderer'
+
+// ============ Talk Mode ============
+const showTalkMode = ref(false)
 
 // ============ 移动端状态 ============
 const isMobile = ref(false)
@@ -1549,4 +1563,6 @@ function handleCodeCopy(e: MouseEvent) {
     font-size: 14px;
   }
 }
+
+
 </style>

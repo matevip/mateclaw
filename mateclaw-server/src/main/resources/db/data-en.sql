@@ -1237,6 +1237,23 @@ VALUES (1000000008, 'WeChat', 'weixin', 1000000001, '', '{
 }', FALSE,
         'WeChat personal account channel (iLink Bot HTTP long polling). Get bot_token by scanning QR code to login, or enter existing token. Based on iLink Bot API, supports text, image, voice (ASR), file, and video messages', NOW(), NOW(), 0);
 
+-- 9. Slack (disabled by default, requires bot_token / app_token)
+MERGE INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
+KEY (id)
+VALUES (1000000009, 'Slack Bot', 'slack', 1000000001, '', '{
+  "bot_token": "",
+  "app_token": "",
+  "signing_secret": "",
+  "dm_policy": "open",
+  "group_policy": "mention",
+  "allow_from": [],
+  "deny_message": "Sorry, you do not have permission",
+  "filter_thinking": true,
+  "filter_tool_messages": true,
+  "message_format": "auto"
+}', FALSE,
+        'Slack channel (Socket Mode). Get Bot Token (xoxb-) and App-Level Token (xapp-) from Slack App settings, enable Socket Mode to start using.', NOW(), NOW(), 0);
+
 -- ==================== Example Cron Jobs ====================
 MERGE INTO mate_cron_job (id, name, cron_expression, timezone, agent_id, task_type, trigger_message, request_body, enabled, create_time, update_time, deleted)
 KEY (id)

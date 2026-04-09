@@ -244,6 +244,29 @@
             </exclusions>
         </dependency>
 
+        <!-- ===== Spring WebSocket（Talk Mode） ===== -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-websocket</artifactId>
+        </dependency>
+
+        <!-- ===== Slack SDK（Socket Mode + Web API） ===== -->
+        <dependency>
+            <groupId>com.slack.api</groupId>
+            <artifactId>slack-api-client</artifactId>
+            <version>1.44.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.slack.api</groupId>
+            <artifactId>bolt-socket-mode</artifactId>
+            <version>1.44.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.glassfish.tyrus.bundles</groupId>
+            <artifactId>tyrus-standalone-client</artifactId>
+            <version>2.2.0</version>
+        </dependency>
+
         <!-- ===== Spring Boot Test ===== -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

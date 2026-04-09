@@ -146,6 +146,22 @@
           </svg>
         </button>
 
+        <!-- Talk Mode 按钮 -->
+        <button
+          v-if="enableTalkMode"
+          type="button"
+          class="action-btn talk-btn"
+          :disabled="disabled || loading"
+          @click="emit('talk')"
+          :title="t('talk.title')"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </button>
+
         <!-- 发送/停止/中断按钮 -->
         <button
           type="button"
@@ -227,6 +243,8 @@ interface Props {
   queuedMessage?: QueuedMessage | null
   /** 排队消息总数 */
   queueSize?: number
+  /** 是否启用 Talk Mode 按钮 */
+  enableTalkMode?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -243,6 +261,7 @@ const props = withDefaults(defineProps<Props>(), {
   streamPhase: 'idle',
   queuedMessage: null,
   queueSize: 0,
+  enableTalkMode: false,
 })
 
 const emit = defineEmits<{
@@ -254,6 +273,7 @@ const emit = defineEmits<{
   'attachment-remove': [storedName: string]
   approve: [pendingId: string]
   deny: [pendingId: string]
+  talk: []
 }>()
 
 const { t } = useI18n()
@@ -561,6 +581,11 @@ defineExpose({
 .action-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.talk-btn:hover:not(:disabled) {
+  color: var(--mc-primary, #D97757);
+  background: var(--mc-primary-light, rgba(217, 119, 87, 0.08));
 }
 
 .send-btn {

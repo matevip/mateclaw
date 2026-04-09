@@ -7,10 +7,11 @@ const SOURCE_LABELS: Record<string, string> = {
   wecom: '企业微信',
   weixin: '微信',
   qq: 'QQ',
+  slack: 'Slack',
   cron: '定时任务',
 }
 
-const ICON_CHANNELS = ['web', 'feishu', 'dingtalk', 'telegram', 'discord', 'wecom', 'weixin', 'qq', 'cron']
+const ICON_CHANNELS = ['web', 'feishu', 'dingtalk', 'telegram', 'discord', 'wecom', 'weixin', 'qq', 'slack', 'cron']
 
 export function channelIconUrl(source?: string): string {
   const key = source || 'web'

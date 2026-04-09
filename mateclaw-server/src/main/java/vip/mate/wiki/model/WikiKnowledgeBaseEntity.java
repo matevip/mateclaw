@@ -42,6 +42,9 @@ public class WikiKnowledgeBaseEntity {
     /** 原始材料数量 */
     private Integer rawCount;
 
+    /** 所属工作区 ID（默认 1 = default） */
+    private Long workspaceId;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

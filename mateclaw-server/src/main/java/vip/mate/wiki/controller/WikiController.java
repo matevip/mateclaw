@@ -50,7 +50,11 @@ public class WikiController {
 
     @Operation(summary = "获取所有知识库")
     @GetMapping("/knowledge-bases")
-    public R<List<WikiKnowledgeBaseEntity>> listKBs() {
+    public R<List<WikiKnowledgeBaseEntity>> listKBs(
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        if (workspaceId != null) {
+            return R.ok(kbService.listByWorkspace(workspaceId));
+        }
         return R.ok(kbService.listAll());
     }
 

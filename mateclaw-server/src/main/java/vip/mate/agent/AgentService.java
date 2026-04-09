@@ -44,6 +44,15 @@ public class AgentService {
                 .orderByDesc(AgentEntity::getCreateTime));
     }
 
+    /**
+     * 按工作区列出 Agent
+     */
+    public List<AgentEntity> listAgentsByWorkspace(Long workspaceId) {
+        return agentMapper.selectList(new LambdaQueryWrapper<AgentEntity>()
+                .eq(AgentEntity::getWorkspaceId, workspaceId)
+                .orderByDesc(AgentEntity::getCreateTime));
+    }
+
     public AgentEntity getAgent(Long id) {
         AgentEntity entity = agentMapper.selectById(id);
         if (entity == null) {

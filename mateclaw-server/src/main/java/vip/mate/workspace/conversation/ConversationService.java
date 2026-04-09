@@ -50,11 +50,21 @@ public class ConversationService {
      * 获取用户的会话列表（返回 VO，包含 agentName/agentIcon/status）
      */
     public List<ConversationVO> listConversations(String username) {
+        return listConversations(username, null);
+    }
+
+    /**
+     * 获取用户的会话列表（按工作区过滤）
+     */
+    public List<ConversationVO> listConversations(String username, Long workspaceId) {
         // 同时返回当前用户的会话 和 定时任务（system）产生的会话
-        List<ConversationEntity> entities = conversationMapper.selectList(
-                new LambdaQueryWrapper<ConversationEntity>()
-                        .in(ConversationEntity::getUsername, username, SYSTEM_USER)
-                        .orderByDesc(ConversationEntity::getLastActiveTime));
+        LambdaQueryWrapper<ConversationEntity> wrapper = new LambdaQueryWrapper<ConversationEntity>()
+                .in(ConversationEntity::getUsername, username, SYSTEM_USER)
+                .orderByDesc(ConversationEntity::getLastActiveTime);
+        if (workspaceId != null) {
+            wrapper.eq(ConversationEntity::getWorkspaceId, workspaceId);
+        }
+        List<ConversationEntity> entities = conversationMapper.selectList(wrapper);
 
         if (entities.isEmpty()) {
             return List.of();

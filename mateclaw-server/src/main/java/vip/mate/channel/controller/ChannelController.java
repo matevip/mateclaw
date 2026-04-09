@@ -31,7 +31,11 @@ public class ChannelController {
 
     @Operation(summary = "获取渠道列表")
     @GetMapping
-    public R<List<ChannelEntity>> list() {
+    public R<List<ChannelEntity>> list(
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        if (workspaceId != null) {
+            return R.ok(channelService.listChannelsByWorkspace(workspaceId));
+        }
         return R.ok(channelService.listChannels());
     }
 
@@ -49,7 +53,12 @@ public class ChannelController {
 
     @Operation(summary = "创建渠道")
     @PostMapping
-    public R<ChannelEntity> create(@RequestBody ChannelEntity channel) {
+    public R<ChannelEntity> create(
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+            @RequestBody ChannelEntity channel) {
+        if (workspaceId != null) {
+            channel.setWorkspaceId(workspaceId);
+        }
         return R.ok(channelService.createChannel(channel));
     }
 

@@ -33,7 +33,11 @@ public class AgentController {
 
     @Operation(summary = "获取Agent列表")
     @GetMapping
-    public R<List<AgentEntity>> list() {
+    public R<List<AgentEntity>> list(
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        if (workspaceId != null) {
+            return R.ok(agentService.listAgentsByWorkspace(workspaceId));
+        }
         return R.ok(agentService.listAgents());
     }
 
@@ -45,7 +49,12 @@ public class AgentController {
 
     @Operation(summary = "创建Agent")
     @PostMapping
-    public R<AgentEntity> create(@RequestBody AgentEntity agent) {
+    public R<AgentEntity> create(
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+            @RequestBody AgentEntity agent) {
+        if (workspaceId != null) {
+            agent.setWorkspaceId(workspaceId);
+        }
         return R.ok(agentService.createAgent(agent));
     }
 

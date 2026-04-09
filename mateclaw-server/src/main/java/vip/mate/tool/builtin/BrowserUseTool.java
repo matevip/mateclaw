@@ -37,6 +37,13 @@ public class BrowserUseTool {
     private static final boolean IS_WINDOWS = System.getProperty("os.name", "")
             .toLowerCase(Locale.ROOT).contains("win");
 
+    /** SSE 推送器（用于将浏览器操作实时推送到前端） */
+    private final vip.mate.channel.web.ChatStreamTracker streamTracker;
+
+    public BrowserUseTool(vip.mate.channel.web.ChatStreamTracker streamTracker) {
+        this.streamTracker = streamTracker;
+    }
+
     /**
      * 共享 Playwright 实例（Node.js 进程）。
      * Playwright.create() 启动一个 Node.js 子进程，耗时 1-2 秒。
@@ -136,6 +143,32 @@ public class BrowserUseTool {
         }
     }
 
+    // ==================== Browser Event Broadcasting ====================
+
+    /**
+     * 向前端广播浏览器操作事件（通过 SSE）
+     */
+    private void broadcastBrowserEvent(String action, boolean success, String url, String title,
+                                        String screenshot, long durationMs) {
+        String conversationId = ToolExecutionContext.conversationId();
+        if (conversationId == null || streamTracker == null) {
+            return;
+        }
+        try {
+            java.util.Map<String, Object> eventData = new java.util.LinkedHashMap<>();
+            eventData.put("action", action);
+            eventData.put("success", success);
+            if (url != null) eventData.put("url", url);
+            if (title != null) eventData.put("title", title);
+            if (screenshot != null) eventData.put("screenshot", screenshot);
+            eventData.put("durationMs", durationMs);
+            eventData.put("timestamp", System.currentTimeMillis());
+            streamTracker.broadcastObject(conversationId, "browser_action", eventData);
+        } catch (Exception e) {
+            log.debug("[BrowserUse] Failed to broadcast event: {}", e.getMessage());
+        }
+    }
+
     // ==================== Action Handlers ====================
 
     private String doStart(String sessionKey, boolean headed) {
@@ -174,6 +207,7 @@ public class BrowserUseTool {
 
         long elapsed = System.currentTimeMillis() - startTime;
         log.info("[BrowserUse] Browser started successfully (headed={}) in {}ms", headed, elapsed);
+        broadcastBrowserEvent("start", true, null, null, null, elapsed);
         return ok("Browser started (headed=" + headed + ") in " + elapsed + "ms. Use action=open with url to navigate.");
     }
 
@@ -294,9 +328,11 @@ public class BrowserUseTool {
 
         if (wasCdp) {
             log.info("[BrowserUse] Disconnected from CDP (Chrome keeps running at {})", cdpUrl);
+            broadcastBrowserEvent("stop", true, null, null, null, 0);
             return ok("Disconnected from CDP. Chrome process at " + cdpUrl + " keeps running.");
         } else {
             log.info("[BrowserUse] Browser stopped");
+            broadcastBrowserEvent("stop", true, null, null, null, 0);
             return ok("Browser stopped and resources released");
         }
     }
@@ -327,6 +363,7 @@ public class BrowserUseTool {
         String currentUrl = page.url();
 
         log.info("[BrowserUse] Opened: {} (title={})", currentUrl, title);
+        broadcastBrowserEvent("open", true, currentUrl, title, null, 0);
 
         JSONObject result = new JSONObject();
         result.set("ok", true);
@@ -443,6 +480,7 @@ public class BrowserUseTool {
             byte[] bytes = page.screenshot(opts);
             String base64 = Base64.getEncoder().encodeToString(bytes);
             log.info("[BrowserUse] Screenshot captured ({} bytes)", bytes.length);
+            broadcastBrowserEvent("screenshot", true, null, null, base64, 0);
 
             JSONObject result = new JSONObject();
             result.set("ok", true);
@@ -474,6 +512,7 @@ public class BrowserUseTool {
         String url = page.url();
 
         log.info("[BrowserUse] Clicked: {} (page now: {})", selector, url);
+        broadcastBrowserEvent("click", true, url, title, null, 0);
 
         JSONObject result = new JSONObject();
         result.set("ok", true);
@@ -503,6 +542,7 @@ public class BrowserUseTool {
         page.fill(selector, text);
 
         log.info("[BrowserUse] Typed into: {} ({} chars)", selector, text.length());
+        broadcastBrowserEvent("type", true, null, null, null, 0);
 
         JSONObject result = new JSONObject();
         result.set("ok", true);

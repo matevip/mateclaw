@@ -37,6 +37,8 @@ export type SSEEventType =
   | 'async_task_completed'
   // TTS 事件
   | 'tts_ready'
+  // 浏览器执行事件
+  | 'browser_action'
 
 export interface SSEEvent {
   type: SSEEventType

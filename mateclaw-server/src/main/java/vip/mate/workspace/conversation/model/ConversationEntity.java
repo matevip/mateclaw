@@ -42,6 +42,9 @@ public class ConversationEntity {
     /** 流状态：idle（空闲）/ running（生成中） */
     private String streamStatus;
 
+    /** 所属工作区 ID（默认 1 = default） */
+    private Long workspaceId;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

@@ -157,6 +157,12 @@ const router = createRouter({
               component: () => import('@/views/Security/AuditLogs/index.vue'),
               meta: { title: 'Security - Audit Logs' },
             },
+            {
+              path: 'members',
+              name: 'SecurityMembers',
+              component: () => import('@/views/Security/Members/index.vue'),
+              meta: { title: 'Security - Members' },
+            },
           ],
         },
         // ==================== Redirects (backward compatibility) ====================

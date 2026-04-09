@@ -174,6 +174,58 @@ public class WikiTool {
                 .toString();
     }
 
+    @Tool(description = """
+            在 Wiki 知识库中创建新页面。
+            用于保存任务执行结果、分析报告、会议纪要等有价值的信息。
+            内容使用 Markdown 格式。页面标识符 (slug) 会从标题自动生成。
+            """)
+    public String wiki_create_page(
+            @ToolParam(description = "当前 Agent 的 ID") Long agentId,
+            @ToolParam(description = "页面标题") String title,
+            @ToolParam(description = "页面内容 (Markdown 格式)") String content) {
+
+        if (title == null || title.isBlank()) {
+            return error("title is required");
+        }
+        if (content == null || content.isBlank()) {
+            return error("content is required");
+        }
+
+        Long kbId = resolveKbId(agentId);
+        if (kbId == null) {
+            return error("No wiki knowledge base found for this agent. Create one first.");
+        }
+
+        // 从标题生成 slug
+        String slug = title.toLowerCase()
+                .replaceAll("[^a-z0-9\\u4e00-\\u9fff]+", "-")
+                .replaceAll("^-|-$", "");
+        if (slug.isBlank()) {
+            slug = "page-" + System.currentTimeMillis();
+        }
+
+        // 检查 slug 是否已存在
+        WikiPageEntity existing = pageService.getBySlug(kbId, slug);
+        if (existing != null) {
+            slug = slug + "-" + System.currentTimeMillis() % 10000;
+        }
+
+        // 生成摘要（取前 200 字符）
+        String summary = content.length() > 200 ? content.substring(0, 200) + "..." : content;
+
+        WikiPageEntity page = pageService.createPage(kbId, slug, title, content, summary, null);
+
+        log.info("[WikiTool] Created page: {} (slug={}, kbId={})", title, slug, kbId);
+
+        return JSONUtil.createObj()
+                .set("ok", true)
+                .set("message", "Page created successfully")
+                .set("title", page.getTitle())
+                .set("slug", page.getSlug())
+                .set("kbId", kbId)
+                .toString();
+    }
+
     /**
      * 通过 agentId 自动解析关联的知识库 ID
      * <p>

@@ -35,6 +35,16 @@ public class ChannelService {
     }
 
     /**
+     * 按工作区列出渠道
+     */
+    public List<ChannelEntity> listChannelsByWorkspace(Long workspaceId) {
+        return channelMapper.selectList(new LambdaQueryWrapper<ChannelEntity>()
+                .eq(ChannelEntity::getWorkspaceId, workspaceId)
+                .orderByDesc(ChannelEntity::getEnabled)
+                .orderByDesc(ChannelEntity::getCreateTime));
+    }
+
+    /**
      * 获取已启用的渠道列表（ChannelManager 启动时使用）
      */
     public List<ChannelEntity> listEnabledChannels() {

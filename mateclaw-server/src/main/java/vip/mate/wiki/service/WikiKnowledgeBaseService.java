@@ -53,6 +53,16 @@ public class WikiKnowledgeBaseService {
     }
 
     /**
+     * 按工作区列出知识库
+     */
+    public List<WikiKnowledgeBaseEntity> listByWorkspace(Long workspaceId) {
+        return kbMapper.selectList(
+                new LambdaQueryWrapper<WikiKnowledgeBaseEntity>()
+                        .eq(WikiKnowledgeBaseEntity::getWorkspaceId, workspaceId)
+                        .orderByDesc(WikiKnowledgeBaseEntity::getUpdateTime));
+    }
+
+    /**
      * 获取 Agent 可访问的知识库：Agent 专属 KB + 公共 KB（agent_id IS NULL）
      */
     public List<WikiKnowledgeBaseEntity> listByAgentId(Long agentId) {

@@ -7,11 +7,15 @@ export const http = axios.create({
   timeout: 30000,
 })
 
-// 请求拦截器：注入 Token
+// 请求拦截器：注入 Token + Workspace ID
 http.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  const workspaceId = localStorage.getItem('mc-workspace-id')
+  if (workspaceId) {
+    config.headers['X-Workspace-Id'] = workspaceId
   }
   return config
 })
@@ -374,4 +378,20 @@ export const wikiApi = {
   // Processing
   processKB: (kbId: number) => http.post(`/wiki/knowledge-bases/${kbId}/process`),
   getProcessingStatus: (kbId: number) => http.get(`/wiki/knowledge-bases/${kbId}/processing-status`),
+}
+
+// ==================== Workspace (Team) ====================
+export const workspaceTeamApi = {
+  list: () => http.get('/workspaces'),
+  get: (id: string | number) => http.get(`/workspaces/${id}`),
+  create: (data: any) => http.post('/workspaces', data),
+  update: (id: string | number, data: any) => http.put(`/workspaces/${id}`, data),
+  delete: (id: string | number) => http.delete(`/workspaces/${id}`),
+  listMembers: (id: string | number) => http.get(`/workspaces/${id}/members`),
+  addMember: (id: string | number, data: { userId: number; role?: string }) =>
+    http.post(`/workspaces/${id}/members`, data),
+  updateMemberRole: (id: string | number, memberId: string | number, role: string) =>
+    http.put(`/workspaces/${id}/members/${memberId}`, { role }),
+  removeMember: (id: string | number, memberId: string | number) =>
+    http.delete(`/workspaces/${id}/members/${memberId}`),
 }
