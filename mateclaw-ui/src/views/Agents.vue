@@ -33,50 +33,39 @@
           </div>
         </div>
 
-        <!-- Agent table -->
-        <div class="table-wrap mc-surface-card" v-if="filteredAgents.length > 0">
-          <table class="agent-table">
-        <thead>
-          <tr>
-            <th class="col-name">{{ t('agents.columns.name') }}</th>
-            <th class="col-type">{{ t('agents.columns.agentType') }}</th>
-            <th class="col-tags">{{ t('agents.columns.tags') }}</th>
-            <th class="col-status">{{ t('agents.columns.enabled') }}</th>
-            <th class="col-time">{{ t('agents.columns.updateTime') }}</th>
-            <th class="col-actions">{{ t('agents.columns.actions') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="agent in filteredAgents" :key="agent.id" :class="{ 'row-disabled': !agent.enabled }">
-            <td class="col-name">
-              <div class="agent-name-cell">
-                <span class="agent-icon">{{ agent.icon || '🤖' }}</span>
-                <div class="agent-name-info">
-                  <span class="agent-name">{{ agent.name }}</span>
-                  <span class="agent-desc">{{ agent.description || t('agents.messages.noDescription') }}</span>
-                </div>
-              </div>
-            </td>
-            <td class="col-type">
-              <span class="tag type-tag">{{ agent.agentType === 'react' ? 'ReAct' : 'Plan-Execute' }}</span>
-            </td>
-            <td class="col-tags">
-              <div class="tags-cell" v-if="agent.tags">
-                <span v-for="tag in parseTags(agent.tags)" :key="tag" class="tag tag-item">{{ tag }}</span>
-              </div>
-              <span v-else class="text-muted">-</span>
-            </td>
-            <td class="col-status">
-              <label class="toggle-switch">
+        <!-- Agent card grid -->
+        <div class="agent-grid" v-if="filteredAgents.length > 0">
+          <div
+            v-for="agent in filteredAgents"
+            :key="agent.id"
+            class="agent-card mc-surface-card"
+            :class="{ 'agent-card--disabled': !agent.enabled }"
+          >
+            <div class="agent-card__header">
+              <span class="agent-card__icon">{{ agent.icon || '🤖' }}</span>
+              <label class="toggle-switch toggle-switch--sm">
                 <input type="checkbox" :checked="agent.enabled" @change="toggleAgent(agent)" />
                 <span class="toggle-slider"></span>
               </label>
-            </td>
-            <td class="col-time">
+            </div>
+            <div class="agent-card__body">
+              <h3 class="agent-card__name">{{ agent.name }}</h3>
+              <p class="agent-card__desc">{{ agent.description || t('agents.messages.noDescription') }}</p>
+            </div>
+            <div class="agent-card__meta">
+              <span class="tag type-tag">{{ agent.agentType === 'react' ? 'ReAct' : 'Plan-Execute' }}</span>
+              <div class="tags-cell" v-if="agent.tags">
+                <span v-for="tag in parseTags(agent.tags)" :key="tag" class="tag tag-item">{{ tag }}</span>
+              </div>
+            </div>
+            <div class="agent-card__footer">
               <span class="time-label">{{ formatTime(agent.updateTime) }}</span>
-            </td>
-            <td class="col-actions">
-              <div class="action-btns">
+              <div class="agent-card__actions">
+                <button class="action-btn" :title="t('agents.tabs.context')" @click="goToAgentContextFor(agent)">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+                  </svg>
+                </button>
                 <button class="action-btn" :title="t('agents.actions.edit')" @click="openEditModal(agent)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -90,10 +79,8 @@
                   </svg>
                 </button>
               </div>
-            </td>
-          </tr>
-        </tbody>
-          </table>
+            </div>
+          </div>
         </div>
 
         <!-- Empty state -->
@@ -221,8 +208,8 @@
 
           <!-- Skills Tab -->
           <div v-if="modalTab === 'skills'" class="binding-tab">
-            <p class="binding-hint">{{ t('agents.binding.skillsHint', 'Select skills this agent can use. Leave empty to use all enabled skills.') }}</p>
-            <div v-if="availableSkills.length === 0" class="binding-empty">{{ t('agents.binding.noSkills', 'No skills available') }}</div>
+            <p class="binding-hint">{{ t('agents.binding.skillsHint') }}</p>
+            <div v-if="availableSkills.length === 0" class="binding-empty">{{ t('agents.binding.noSkills') }}</div>
             <div v-else class="binding-list">
               <label
                 v-for="skill in availableSkills"
@@ -243,8 +230,8 @@
 
           <!-- Tools Tab -->
           <div v-if="modalTab === 'tools'" class="binding-tab">
-            <p class="binding-hint">{{ t('agents.binding.toolsHint', 'Select tools this agent can use. Leave empty to use all enabled tools.') }}</p>
-            <div v-if="availableTools.length === 0" class="binding-empty">{{ t('agents.binding.noTools', 'No tools available') }}</div>
+            <p class="binding-hint">{{ t('agents.binding.toolsHint') }}</p>
+            <div v-if="availableTools.length === 0" class="binding-empty">{{ t('agents.binding.noTools') }}</div>
             <div v-else class="binding-list">
               <label
                 v-for="tool in availableTools"
@@ -276,11 +263,13 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, agentBindingApi, skillApi, toolApi, templateApi } from '@/api/index'
 import type { Agent } from '@/types/index'
 
+const router = useRouter()
 const { t } = useI18n()
 const agents = ref<Agent[]>([])
 const searchText = ref('')
@@ -485,6 +474,16 @@ async function deleteAgent(agent: Agent) {
   }
 }
 
+function goToAgentContext() {
+  const agentId = editingAgent.value?.id
+  closeModal()
+  router.push({ path: '/settings/agent-context', query: agentId ? { agentId: String(agentId) } : {} })
+}
+
+function goToAgentContextFor(agent: Agent) {
+  router.push({ path: '/settings/agent-context', query: { agentId: String(agent.id) } })
+}
+
 async function toggleAgent(agent: Agent) {
   try {
     await agentApi.update(agent.id, { ...agent, enabled: !agent.enabled })
@@ -515,27 +514,122 @@ async function toggleAgent(agent: Agent) {
 .filter-tab:hover { background: var(--mc-bg-sunken); }
 .filter-tab.active { background: var(--mc-primary-bg); border-color: var(--mc-primary); color: var(--mc-primary); font-weight: 500; }
 
-/* Table */
-.table-wrap { overflow-x: auto; }
-.agent-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.agent-table th { padding: 14px 16px; text-align: left; font-weight: 700; font-size: 12px; color: var(--mc-text-secondary); background: var(--mc-bg-muted); border-bottom: 1px solid var(--mc-border); white-space: nowrap; text-transform: uppercase; letter-spacing: 0.08em; }
-.agent-table td { padding: 12px 16px; border-bottom: 1px solid var(--mc-border-light); vertical-align: middle; }
-.agent-table tbody tr:last-child td { border-bottom: none; }
-.agent-table tbody tr:hover { background: var(--mc-bg-muted); }
-.agent-table tbody tr.row-disabled { opacity: 0.55; }
+/* Agent Card Grid */
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
 
-.col-name { min-width: 200px; }
-.col-type { min-width: 110px; }
-.col-tags { min-width: 120px; }
-.col-status { min-width: 80px; }
-.col-time { min-width: 140px; }
-.col-actions { min-width: 90px; }
+.agent-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  transition: all 0.15s;
+  cursor: default;
+}
 
-.agent-name-cell { display: flex; align-items: center; gap: 10px; }
-.agent-icon { font-size: 20px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: var(--mc-primary-bg); border-radius: 8px; flex-shrink: 0; }
-.agent-name-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.agent-name { font-weight: 600; color: var(--mc-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agent-desc { font-size: 12px; color: var(--mc-text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+.agent-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+.agent-card--disabled {
+  opacity: 0.55;
+}
+
+.agent-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agent-card__icon {
+  font-size: 36px;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--mc-primary-bg);
+  border-radius: 14px;
+}
+
+.agent-card__body {
+  flex: 1;
+  min-height: 0;
+}
+
+.agent-card__name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--mc-text-primary);
+  margin: 0 0 4px;
+  letter-spacing: -0.02em;
+}
+
+.agent-card__desc {
+  font-size: 13px;
+  color: var(--mc-text-tertiary);
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.5;
+}
+
+.agent-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.agent-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 10px;
+  border-top: 1px solid var(--mc-border-light);
+}
+
+.agent-card__actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.agent-card:hover .agent-card__actions {
+  opacity: 1;
+}
+
+.toggle-switch--sm { width: 32px; height: 18px; }
+.toggle-switch--sm .toggle-slider::before { width: 12px; height: 12px; }
+.toggle-switch--sm input:checked + .toggle-slider::before { transform: translateX(14px); }
+
+/* Context link card */
+.context-link-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  cursor: pointer;
+  border: 1px solid var(--mc-border);
+  border-radius: 12px;
+  transition: all 0.15s;
+}
+.context-link-card:hover {
+  border-color: var(--mc-primary);
+  background: var(--mc-primary-bg);
+}
+.context-link-card__icon { font-size: 28px; }
+.context-link-card__info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.context-link-card__title { font-size: 14px; font-weight: 600; color: var(--mc-text-primary); }
+.context-link-card__desc { font-size: 12px; color: var(--mc-text-tertiary); }
+.context-link-card__arrow { color: var(--mc-text-tertiary); flex-shrink: 0; }
 
 .tag { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
 .type-tag { background: var(--mc-primary-bg); color: var(--mc-primary); }

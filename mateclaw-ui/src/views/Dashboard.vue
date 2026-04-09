@@ -10,14 +10,14 @@
           </div>
           <div class="hero-note mc-surface-card">
             <div class="hero-note__label">{{ t('dashboard.periods.today') }}</div>
-            <div class="hero-note__value">{{ formatTokens(todayStats.totalTokens) }}</div>
-            <div class="hero-note__meta">{{ t('dashboard.tokens') }} · {{ todayStats.toolCalls }} {{ t('dashboard.toolCalls') }}</div>
+            <div class="hero-note__value">{{ todayStats.conversations }}</div>
+            <div class="hero-note__meta">{{ t('dashboard.conversations') }} · {{ todayStats.messages }} {{ t('dashboard.messages') }}</div>
           </div>
         </div>
 
         <div class="dashboard-body">
           <div class="stats-grid">
-            <div class="stat-card mc-surface-card">
+            <div class="stat-card mc-surface-card stat-card--primary">
               <div class="stat-icon">
                 <el-icon><ChatDotRound /></el-icon>
               </div>
@@ -26,7 +26,7 @@
                 <div class="stat-label">{{ t('dashboard.conversations') }}</div>
               </div>
             </div>
-            <div class="stat-card mc-surface-card">
+            <div class="stat-card mc-surface-card stat-card--primary">
               <div class="stat-icon">
                 <el-icon><Document /></el-icon>
               </div>
@@ -35,22 +35,22 @@
                 <div class="stat-label">{{ t('dashboard.messages') }}</div>
               </div>
             </div>
-            <div class="stat-card mc-surface-card">
-              <div class="stat-icon">
-                <el-icon><DataLine /></el-icon>
-              </div>
-              <div class="stat-body">
-                <div class="stat-value">{{ formatTokens(todayStats.totalTokens) }}</div>
-                <div class="stat-label">{{ t('dashboard.tokens') }}</div>
-              </div>
-            </div>
-            <div class="stat-card mc-surface-card">
+            <div class="stat-card mc-surface-card stat-card--secondary">
               <div class="stat-icon">
                 <el-icon><Tools /></el-icon>
               </div>
               <div class="stat-body">
                 <div class="stat-value">{{ todayStats.toolCalls }}</div>
                 <div class="stat-label">{{ t('dashboard.toolCalls') }}</div>
+              </div>
+            </div>
+            <div class="stat-card mc-surface-card stat-card--secondary">
+              <div class="stat-icon">
+                <el-icon><DataLine /></el-icon>
+              </div>
+              <div class="stat-body">
+                <div class="stat-value">{{ formatTokens(todayStats.totalTokens) }}</div>
+                <div class="stat-label">{{ t('dashboard.tokens') }}</div>
               </div>
             </div>
           </div>
@@ -371,6 +371,10 @@ function calcDuration(run: any): string {
 .stat-body { display: flex; flex-direction: column; }
 .stat-value { font-size: 30px; font-weight: 800; color: var(--mc-text-primary); line-height: 1; letter-spacing: -0.05em; }
 .stat-label { font-size: 12px; color: var(--mc-text-tertiary); margin-top: 6px; text-transform: uppercase; letter-spacing: 0.08em; }
+
+.stat-card--secondary { opacity: 0.75; }
+.stat-card--secondary .stat-icon { background: linear-gradient(135deg, rgba(148, 163, 184, 0.12), rgba(148, 163, 184, 0.06)); color: var(--mc-text-secondary); }
+.stat-card--secondary .stat-value { font-size: 24px; }
 
 .trend-section { margin-bottom: 22px; }
 .trend-chart { padding: 18px; }

@@ -22,6 +22,7 @@ export default {
     search: 'Search',
     expandSidebar: 'Expand sidebar',
     collapseSidebar: 'Collapse sidebar',
+    manageWorkspaces: 'Manage Workspaces',
     show: 'Show',
     hide: 'Hide',
     on: 'On',
@@ -115,6 +116,7 @@ export default {
     loadConversationsFailed: 'Failed to load conversations',
     loadMessagesFailed: 'Failed to load messages',
     deleteConversationFailed: 'Failed to delete conversation',
+    deleteConfirm: 'Delete this conversation? This cannot be undone.',
     switchModelFailed: 'Failed to switch model',
     uploadFailed: 'File upload failed',
     dropToUpload: 'Drop files or folders here',
@@ -597,6 +599,10 @@ export default {
       planExecute: 'Plan-Execute',
       enabled: 'Enabled',
       disabled: 'Disabled',
+      basic: 'Basic',
+      skills: 'Skills',
+      tools: 'Tools',
+      context: 'Context',
     },
     columns: {
       name: 'Name',
@@ -655,6 +661,14 @@ export default {
       deleteSuccess: 'Agent deleted',
       toggleFailed: 'Failed to toggle agent status',
       toggleSuccess: 'Status updated',
+    },
+    binding: {
+      skillsHint: 'Select skills this agent can use. Leave empty to use all enabled skills.',
+      toolsHint: 'Select tools this agent can use. Leave empty to use all enabled tools.',
+      noSkills: 'No skills available',
+      noTools: 'No tools available',
+      contextHint: 'Manage context files (e.g. AGENT.md) that define this agent\'s behavior, knowledge, and instructions.',
+      goToContext: 'Edit Context Files',
     },
   },
   security: {
@@ -727,6 +741,7 @@ export default {
     workspaces: {
       title: 'Workspaces',
       desc: 'Manage workspaces for your organization.',
+      manage: 'Manage Workspaces',
       newWorkspace: 'New Workspace',
       loading: 'Loading workspaces...',
       noWorkspaces: 'No workspaces found.',
@@ -1527,8 +1542,8 @@ export default {
     periodDesc: 'A sharper view of how your system behaves across short, medium, and monthly horizons.',
     runsDesc: 'Execution history with timing, cost, and outcome at a glance.',
     trend: {
-      title: '7-Day Trend',
-      subtitle: 'Messages and token consumption over the past week.',
+      title: 'Your Week',
+      subtitle: 'How often you and your AI have been working together.',
     },
     periodComparison: 'Period Comparison',
     periods: {

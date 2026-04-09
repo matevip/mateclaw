@@ -262,6 +262,19 @@ public class ConversationService {
     }
 
     /**
+     * 重命名会话
+     */
+    @Transactional
+    public void renameConversation(String conversationId, String title) {
+        ConversationEntity conv = conversationMapper.selectOne(new LambdaQueryWrapper<ConversationEntity>()
+                .eq(ConversationEntity::getConversationId, conversationId));
+        if (conv != null) {
+            conv.setTitle(title);
+            conversationMapper.updateById(conv);
+        }
+    }
+
+    /**
      * 更新会话的流状态（running / idle）
      */
     @Transactional

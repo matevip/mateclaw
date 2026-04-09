@@ -22,6 +22,7 @@ export default {
     search: '搜索',
     expandSidebar: '展开侧边栏',
     collapseSidebar: '折叠侧边栏',
+    manageWorkspaces: '管理工作区',
     show: '显示',
     hide: '隐藏',
     on: '开启',
@@ -115,6 +116,7 @@ export default {
     loadConversationsFailed: '加载会话列表失败',
     loadMessagesFailed: '加载消息记录失败',
     deleteConversationFailed: '删除会话失败',
+    deleteConfirm: '确定删除这个会话？此操作不可恢复。',
     switchModelFailed: '切换模型失败',
     uploadFailed: '文件上传失败',
     dropToUpload: '拖放文件或文件夹到此处',
@@ -597,6 +599,10 @@ export default {
       planExecute: 'Plan-Execute',
       enabled: '已启用',
       disabled: '已停用',
+      basic: '基本信息',
+      skills: '技能',
+      tools: '工具',
+      context: '上下文',
     },
     columns: {
       name: '名称',
@@ -655,6 +661,14 @@ export default {
       deleteSuccess: '智能体已删除',
       toggleFailed: '切换状态失败',
       toggleSuccess: '状态已更新',
+    },
+    binding: {
+      skillsHint: '选择此智能体可使用的技能。留空则使用所有已启用的技能。',
+      toolsHint: '选择此智能体可使用的工具。留空则使用所有已启用的工具。',
+      noSkills: '暂无可用技能',
+      noTools: '暂无可用工具',
+      contextHint: '管理此智能体的上下文文件（如 AGENT.md），定义智能体的行为、知识和指令。',
+      goToContext: '前往编辑上下文',
     },
   },
   security: {
@@ -727,6 +741,7 @@ export default {
     workspaces: {
       title: '工作区管理',
       desc: '管理组织的工作区。',
+      manage: '管理工作区',
       newWorkspace: '新建工作区',
       loading: '加载中...',
       noWorkspaces: '暂无工作区。',
@@ -1537,8 +1552,8 @@ export default {
     periodDesc: '从日、周、月三个维度观察系统运行状况。',
     runsDesc: '定时任务执行记录，包含耗时、消耗和结果。',
     trend: {
-      title: '7 天趋势',
-      subtitle: '过去一周的消息量和 Token 消耗趋势。',
+      title: '本周活跃度',
+      subtitle: '你和 AI 的互动频率。',
     },
     periodComparison: '周期对比',
     periods: {

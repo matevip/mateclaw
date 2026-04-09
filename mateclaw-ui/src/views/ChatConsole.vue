@@ -14,18 +14,41 @@
           <div class="panel-kicker">{{ $t('nav.chat') }}</div>
           <h2 class="panel-title">{{ $t('chat.conversations') }}</h2>
         </div>
-        <button class="new-chat-btn" @click="newConversation" :title="$t('chat.newChat')">
+        <button class="new-chat-btn" @click="newConversation" :title="`${$t('chat.newChat')} (⌘N)`">
           <el-icon><Plus /></el-icon>
         </button>
       </div>
 
       <div class="agent-selector">
-        <select v-model="selectedAgentId" class="agent-select" @change="onAgentChange">
-          <option v-if="agents.length === 0" value="">{{ $t('chat.loadingAgents') }}</option>
-          <option v-for="agent in agents" :key="agent.id" :value="agent.id">
-            {{ agent.icon || '🤖' }} {{ agent.name }}
-          </option>
-        </select>
+        <button class="agent-select-trigger" @click="agentDropdownOpen = !agentDropdownOpen" :title="`${$t('chat.selectAgent')} (⌘K)`">
+          <span class="agent-select-trigger__icon">{{ currentAgent?.icon || '🤖' }}</span>
+          <span class="agent-select-trigger__name">{{ currentAgent?.name || $t('chat.selectAgent') }}</span>
+          <svg class="agent-select-trigger__arrow" :class="{ open: agentDropdownOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <Transition name="fade">
+          <div v-if="agentDropdownOpen" class="agent-dropdown-backdrop" @click="agentDropdownOpen = false"></div>
+        </Transition>
+        <Transition name="agent-dropdown">
+          <div v-if="agentDropdownOpen" class="agent-dropdown">
+            <div
+              v-for="agent in agents"
+              :key="agent.id"
+              class="agent-dropdown-item"
+              :class="{ active: String(agent.id) === String(selectedAgentId) }"
+              @click="selectAgent(agent)"
+            >
+              <span class="agent-dropdown-item__icon">{{ agent.icon || '🤖' }}</span>
+              <div class="agent-dropdown-item__info">
+                <span class="agent-dropdown-item__name">{{ agent.name }}</span>
+                <span class="agent-dropdown-item__desc">{{ agent.description || agent.agentType }}</span>
+              </div>
+              <span v-if="String(agent.id) === String(selectedAgentId)" class="agent-dropdown-item__check">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+            </div>
+            <div v-if="agents.length === 0" class="agent-dropdown-empty">{{ $t('chat.loadingAgents') }}</div>
+          </div>
+        </Transition>
       </div>
 
       <div class="conversation-list">
@@ -42,14 +65,24 @@
               <img :src="channelIconUrl(conv.source)" width="14" height="14" alt="" />
             </div>
             <div class="conv-info">
-              <div class="conv-title">{{ conv.title }}</div>
+              <input
+                v-if="renamingConvId === conv.conversationId"
+                v-model="renameText"
+                class="conv-title-input"
+                @keydown.enter="confirmRename(conv)"
+                @keydown.escape="cancelRename"
+                @blur="confirmRename(conv)"
+                @click.stop
+                ref="renameInputRef"
+              />
+              <div v-else class="conv-title" @dblclick.stop="startRename(conv)">{{ conv.title }}</div>
               <div class="conv-meta">
                 <span>{{ $t('chat.messages', { count: conv.messageCount }) }}</span>
                 <span class="conv-dot">·</span>
                 <span>{{ formatConversationTime(conv.lastActiveTime) }}</span>
               </div>
             </div>
-            <button class="conv-delete" @click.stop="deleteConversation(conv.conversationId)" :title="$t('common.delete')">
+            <button class="conv-delete" @click.stop="confirmDeleteConversation(conv.conversationId)" :title="$t('common.delete')">
               <el-icon><Delete /></el-icon>
             </button>
           </div>
@@ -97,23 +130,57 @@
           <div v-else class="no-agent-hint">{{ $t('chat.selectAgent') }}</div>
         </div>
         <div class="chat-header-right">
-          <select
-            v-if="eligibleModels.length > 0"
-            :value="activeModelValue"
-            class="model-select"
-            :disabled="modelSaving"
-            @change="onModelChange"
-          >
-            <option v-for="item in eligibleModels" :key="item.value" :value="item.value">
-              {{ item.label }}
-            </option>
-          </select>
+          <!-- Model selector -->
+          <div v-if="eligibleModels.length > 0" class="model-selector-wrap">
+            <button class="model-select-trigger" :disabled="modelSaving" @click="modelDropdownOpen = !modelDropdownOpen">
+              <span class="model-select-trigger__name">{{ activeModelLabel || $t('chat.configModel') }}</span>
+              <svg class="model-select-trigger__arrow" :class="{ open: modelDropdownOpen }" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <Transition name="fade">
+              <div v-if="modelDropdownOpen" class="model-dropdown-backdrop" @click="modelDropdownOpen = false"></div>
+            </Transition>
+            <Transition name="agent-dropdown">
+              <div v-if="modelDropdownOpen" class="model-dropdown">
+                <div
+                  v-for="item in eligibleModels"
+                  :key="item.value"
+                  class="model-dropdown-item"
+                  :class="{ active: item.value === activeModelValue }"
+                  @click="selectModel(item.value)"
+                >
+                  <span class="model-dropdown-item__name">{{ item.label }}</span>
+                  <span v-if="item.value === activeModelValue" class="model-dropdown-item__check">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </span>
+                </div>
+              </div>
+            </Transition>
+          </div>
           <button v-else class="header-btn" @click="goToModelSettings" :title="$t('chat.configModel')">
             <el-icon><Setting /></el-icon>
           </button>
-          <button class="header-btn" @click="clearMessages" :title="$t('chat.clearMessages')">
-            <el-icon><Delete /></el-icon>
-          </button>
+          <!-- Overflow menu -->
+          <div class="header-overflow-wrap">
+            <button class="header-btn" @click="headerMenuOpen = !headerMenuOpen" :title="$t('common.more') || 'More'">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+            </button>
+            <Transition name="fade">
+              <div v-if="headerMenuOpen" class="header-menu-backdrop" @click="headerMenuOpen = false"></div>
+            </Transition>
+            <Transition name="agent-dropdown">
+              <div v-if="headerMenuOpen" class="header-menu">
+                <button class="header-menu-item" @click="headerMenuOpen = false; goToModelSettings()">
+                  <el-icon><Setting /></el-icon>
+                  <span>{{ $t('chat.configModel') }}</span>
+                </button>
+                <div class="header-menu-divider"></div>
+                <button class="header-menu-item header-menu-item--danger" @click="handleClearMessages">
+                  <el-icon><Delete /></el-icon>
+                  <span>{{ $t('chat.clearMessages') }}</span>
+                </button>
+              </div>
+            </Transition>
+          </div>
         </div>
       </div>
 
@@ -162,7 +229,7 @@
         :loading="isGenerating && !hasPendingApproval"
         :disabled="showModelPrompt || !currentAgent"
         :placeholder="$t('chat.messagePlaceholder')"
-        :hint="`MateClaw · ${currentRuntimeModel}` + (currentConversationId ? ` · Session · ${currentConversationId.slice(0, 8)}...` : '')"
+        :hint="currentRuntimeModel"
         :attachments="pendingAttachments"
         :uploading="uploadingAttachment"
         :max-length="10240"
@@ -195,10 +262,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Delete, Plus, Setting, UploadFilled } from '@element-plus/icons-vue'
 import { conversationApi, agentApi, modelApi, chatApi } from '@/api/index'
 import { channelIconUrl } from '@/utils/channelSource'
@@ -227,12 +294,30 @@ function handleMobileChange(e: MediaQueryListEvent | MediaQueryList) {
 }
 
 // ============ 配置和常量 ============
-const suggestions = computed(() => [
-  t('chat.suggestionIntro'),
-  t('chat.suggestionPoem'),
-  t('chat.suggestionCode'),
-  t('chat.suggestionWeather'),
-])
+const suggestions = computed(() => {
+  const agent = currentAgent.value
+  // If agent has custom suggestions (stored as newline-separated string in description etc.)
+  const agentSuggestions = (agent as any)?.suggestions as string | undefined
+  if (agentSuggestions) {
+    const parsed = agentSuggestions.split('\n').filter(Boolean).slice(0, 4)
+    if (parsed.length) return parsed
+  }
+  // Agent-type-aware defaults
+  if (agent?.agentType === 'plan_execute') {
+    return [
+      t('chat.suggestionPlan1', '帮我制定一个完整的项目计划'),
+      t('chat.suggestionPlan2', '分步骤帮我完成一个复杂任务'),
+      t('chat.suggestionIntro'),
+      t('chat.suggestionWeather'),
+    ]
+  }
+  return [
+    t('chat.suggestionIntro'),
+    t('chat.suggestionPoem'),
+    t('chat.suggestionCode'),
+    t('chat.suggestionWeather'),
+  ]
+})
 
 // ============ 状态 ============
 const router = useRouter()
@@ -251,6 +336,80 @@ const providers = ref<ProviderInfo[]>([])
 const activeModels = ref<ActiveModelsInfo | null>(null)
 const pendingAttachments = ref<ChatAttachment[]>([])
 const uploadingAttachment = ref(false)
+
+// Dropdowns & menus
+const agentDropdownOpen = ref(false)
+const modelDropdownOpen = ref(false)
+const headerMenuOpen = ref(false)
+
+function selectAgent(agent: Agent) {
+  agentDropdownOpen.value = false
+  if (String(agent.id) !== String(selectedAgentId.value)) {
+    selectedAgentId.value = agent.id
+    newConversation()
+  }
+}
+
+async function selectModel(value: string) {
+  modelDropdownOpen.value = false
+  const [providerId, model] = value.split('::')
+  if (!providerId || !model) return
+  modelSaving.value = true
+  try {
+    const res: any = await modelApi.setActive({ providerId, model })
+    activeModels.value = res.data || { activeLlm: { providerId, model } }
+    await loadModelState()
+  } catch (e) {
+    ElMessage.error(t('chat.switchModelFailed'))
+  } finally {
+    modelSaving.value = false
+  }
+}
+
+function handleClearMessages() {
+  headerMenuOpen.value = false
+  clearMessages()
+}
+
+// Conversation rename
+const renamingConvId = ref('')
+const renameText = ref('')
+const renameInputRef = ref<HTMLInputElement | null>(null)
+
+function startRename(conv: Conversation) {
+  renamingConvId.value = conv.conversationId
+  renameText.value = conv.title || ''
+  nextTick(() => {
+    renameInputRef.value?.focus()
+    renameInputRef.value?.select()
+  })
+}
+
+async function confirmRename(conv: Conversation) {
+  const newTitle = renameText.value.trim()
+  renamingConvId.value = ''
+  if (!newTitle || newTitle === conv.title) return
+  conv.title = newTitle
+  try {
+    await conversationApi.rename(conv.conversationId, newTitle)
+  } catch {
+    // revert on fail — reload
+    await loadConversations()
+  }
+}
+
+function cancelRename() {
+  renamingConvId.value = ''
+}
+
+// Delete with confirmation
+function confirmDeleteConversation(conversationId: string) {
+  ElMessageBox.confirm(
+    t('chat.deleteConfirm') || 'Delete this conversation?',
+    t('common.confirm'),
+    { type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel') }
+  ).then(() => deleteConversation(conversationId)).catch(() => {})
+}
 
 // 拖拽上传
 const isDragging = ref(false)
@@ -450,6 +609,12 @@ const activeModelValue = computed(() => {
   return providerId && model ? `${providerId}::${model}` : ''
 })
 
+const activeModelLabel = computed(() => {
+  if (!activeModelValue.value) return ''
+  const match = eligibleModels.value.find(m => m.value === activeModelValue.value)
+  return match?.label || ''
+})
+
 const activeProvider = computed(() => {
   const providerId = activeModels.value?.activeLlm?.providerId
   return providerId ? providers.value.find((provider) => provider.id === providerId) || null : null
@@ -488,7 +653,21 @@ const eligibleModels = computed(() => {
 })
 
 // ============ 生命周期 ============
+function handleKeyboardShortcuts(e: KeyboardEvent) {
+  const mod = e.metaKey || e.ctrlKey
+  if (mod && e.key === 'n') {
+    e.preventDefault()
+    newConversation()
+    chatInputRef.value?.focus?.()
+  }
+  if (mod && e.key === 'k') {
+    e.preventDefault()
+    agentDropdownOpen.value = !agentDropdownOpen.value
+  }
+}
+
 onMounted(async () => {
+  document.addEventListener('keydown', handleKeyboardShortcuts)
   document.addEventListener('click', handleCodeCopy)
   startECharts()
   mobileQuery = window.matchMedia('(max-width: 768px)')
@@ -499,6 +678,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleKeyboardShortcuts)
   document.removeEventListener('click', handleCodeCopy)
   disposeECharts()
   mobileQuery?.removeEventListener('change', handleMobileChange)
@@ -701,26 +881,9 @@ async function clearMessages() {
   }
 }
 
-function onAgentChange() {
-  newConversation()
-}
+// onAgentChange removed — replaced by selectAgent()
 
-async function onModelChange(event: Event) {
-  const value = (event.target as HTMLSelectElement).value
-  const [providerId, model] = value.split('::')
-  if (!providerId || !model) return
-
-  modelSaving.value = true
-  try {
-    const res: any = await modelApi.setActive({ providerId, model })
-    activeModels.value = res.data || { activeLlm: { providerId, model } }
-    await loadModelState()
-  } catch (e) {
-    ElMessage.error(t('chat.switchModelFailed'))
-  } finally {
-    modelSaving.value = false
-  }
-}
+// onModelChange removed — replaced by selectModel()
 
 function goToModelSettings() {
   router.push('/settings/models')
@@ -1219,11 +1382,15 @@ function handleCodeCopy(e: MouseEvent) {
 .agent-selector {
   padding: 10px 12px 12px;
   border-bottom: 1px solid var(--mc-border-light);
+  position: relative;
 }
 
-.agent-select {
+.agent-select-trigger {
   width: 100%;
-  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
   border: 1px solid var(--mc-border);
   border-radius: 12px;
   font-size: 13px;
@@ -1231,11 +1398,132 @@ function handleCodeCopy(e: MouseEvent) {
   background: var(--mc-bg-sunken);
   cursor: pointer;
   outline: none;
+  transition: all 0.15s;
 }
 
-.agent-select:focus {
+.agent-select-trigger:hover {
   border-color: var(--mc-primary);
-  box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.1);
+  background: var(--mc-bg-elevated);
+}
+
+.agent-select-trigger__icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.agent-select-trigger__name {
+  flex: 1;
+  text-align: left;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-select-trigger__arrow {
+  flex-shrink: 0;
+  color: var(--mc-text-tertiary);
+  transition: transform 0.2s;
+}
+
+.agent-select-trigger__arrow.open {
+  transform: rotate(180deg);
+}
+
+.agent-dropdown-backdrop,
+.model-dropdown-backdrop,
+.header-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+}
+
+.agent-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 12px;
+  right: 12px;
+  z-index: 100;
+  background: var(--mc-bg-elevated);
+  border: 1px solid var(--mc-border);
+  border-radius: 14px;
+  padding: 6px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.agent-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.agent-dropdown-item:hover {
+  background: var(--mc-bg-sunken);
+}
+
+.agent-dropdown-item.active {
+  background: var(--mc-primary-bg);
+}
+
+.agent-dropdown-item__icon {
+  font-size: 24px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.agent-dropdown-item__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-dropdown-item__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mc-text-primary);
+}
+
+.agent-dropdown-item__desc {
+  font-size: 11px;
+  color: var(--mc-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-dropdown-item__check {
+  flex-shrink: 0;
+  color: var(--mc-primary);
+}
+
+.agent-dropdown-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--mc-text-tertiary);
+}
+
+.agent-dropdown-enter-active {
+  transition: all 0.15s ease-out;
+}
+.agent-dropdown-leave-active {
+  transition: all 0.1s ease-in;
+}
+.agent-dropdown-enter-from {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.97);
+}
+.agent-dropdown-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
 }
 
 .conversation-list {
@@ -1314,6 +1602,19 @@ function handleCodeCopy(e: MouseEvent) {
 
 .conv-dot {
   color: var(--mc-text-tertiary);
+}
+
+.conv-title-input {
+  width: 100%;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--mc-text-primary);
+  background: var(--mc-bg-elevated);
+  border: 1px solid var(--mc-primary);
+  border-radius: 6px;
+  padding: 2px 6px;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.15);
 }
 
 .conv-delete {
@@ -1478,15 +1779,142 @@ function handleCodeCopy(e: MouseEvent) {
   color: var(--mc-text-tertiary);
 }
 
-.model-select {
-  min-width: 260px;
+/* Model selector */
+.model-selector-wrap {
+  position: relative;
+}
+
+.model-select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   height: 34px;
+  padding: 0 12px;
   border: 1px solid var(--mc-border);
   border-radius: 12px;
   background: var(--mc-panel-raised);
   color: var(--mc-text-primary);
   font-size: 13px;
-  padding: 0 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  max-width: 280px;
+}
+
+.model-select-trigger:hover {
+  border-color: var(--mc-primary);
+}
+
+.model-select-trigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.model-select-trigger__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-select-trigger__arrow {
+  flex-shrink: 0;
+  color: var(--mc-text-tertiary);
+  transition: transform 0.2s;
+}
+
+.model-select-trigger__arrow.open {
+  transform: rotate(180deg);
+}
+
+.model-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 100;
+  min-width: 260px;
+  background: var(--mc-bg-elevated);
+  border: 1px solid var(--mc-border);
+  border-radius: 14px;
+  padding: 6px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.model-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.model-dropdown-item:hover {
+  background: var(--mc-bg-sunken);
+}
+
+.model-dropdown-item.active {
+  background: var(--mc-primary-bg);
+}
+
+.model-dropdown-item__name {
+  font-size: 13px;
+  color: var(--mc-text-primary);
+}
+
+.model-dropdown-item__check {
+  flex-shrink: 0;
+  color: var(--mc-primary);
+}
+
+/* Header overflow menu */
+.header-overflow-wrap {
+  position: relative;
+}
+
+.header-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 100;
+  min-width: 180px;
+  background: var(--mc-bg-elevated);
+  border: 1px solid var(--mc-border);
+  border-radius: 12px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.header-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--mc-text-primary);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.header-menu-item:hover {
+  background: var(--mc-bg-sunken);
+}
+
+.header-menu-item--danger:hover {
+  background: var(--mc-danger-bg);
+  color: var(--mc-danger);
+}
+
+.header-menu-divider {
+  height: 1px;
+  background: var(--mc-border-light);
+  margin: 2px 8px;
 }
 
 .header-btn {
@@ -1628,10 +2056,12 @@ function handleCodeCopy(e: MouseEvent) {
     display: none;
   }
 
-  .model-select {
-    min-width: 0;
+  .model-select-trigger {
     max-width: 160px;
-    flex: 1;
+  }
+
+  .model-dropdown {
+    min-width: 200px;
   }
 
   .drop-overlay__content {

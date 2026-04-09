@@ -632,16 +632,7 @@ watch(() => workspaceStore.currentWorkspaceId, () => {
   box-shadow: inset 0 0 0 1px rgba(217, 109, 70, 0.08);
 }
 
-.nav-item.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  background: var(--mc-primary);
-  border-radius: 0 3px 3px 0;
-}
+/* Active indicator bar removed — active state uses bg color + font weight only */
 
 .nav-icon { display: flex; align-items: center; flex-shrink: 0; }
 .nav-label { overflow: hidden; text-overflow: ellipsis; }

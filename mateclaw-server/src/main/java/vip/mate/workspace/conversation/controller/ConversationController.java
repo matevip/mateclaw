@@ -69,6 +69,24 @@ public class ConversationController {
     }
 
     /**
+     * 重命名会话
+     */
+    @Operation(summary = "重命名会话")
+    @PutMapping("/{conversationId}/title")
+    public R<Void> rename(@PathVariable String conversationId, @RequestBody Map<String, String> body, Authentication auth) {
+        String username = auth != null ? auth.getName() : "anonymous";
+        if (!conversationService.isConversationOwner(conversationId, username)) {
+            return R.fail("无权操作该会话");
+        }
+        String title = body.getOrDefault("title", "").trim();
+        if (title.isEmpty() || title.length() > 100) {
+            return R.fail("标题不合法");
+        }
+        conversationService.renameConversation(conversationId, title);
+        return R.ok();
+    }
+
+    /**
      * 清空会话消息（保留会话记录）
      */
     @Operation(summary = "清空会话消息")

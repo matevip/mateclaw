@@ -136,6 +136,8 @@ export const conversationApi = {
     http.delete(`/conversations/${conversationId}`),
   clearMessages: (conversationId: string) =>
     http.delete(`/conversations/${conversationId}/messages`),
+  rename: (conversationId: string, title: string) =>
+    http.put(`/conversations/${conversationId}/title`, { title }),
 }
 
 // ==================== Skill ====================

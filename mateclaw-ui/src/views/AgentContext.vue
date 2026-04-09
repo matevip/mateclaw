@@ -207,6 +207,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, agentContextApi } from '@/api/index'
@@ -262,8 +263,15 @@ const sortedFiles = computed(() => {
 
 const renderedMarkdown = computed(() => renderMarkdown(fileContent.value || ''))
 
+const route = useRoute()
+
 onMounted(async () => {
   await loadAgents()
+  // Hydrate from query param (e.g. from Agents page "Context" tab link)
+  const qAgentId = route.query.agentId
+  if (qAgentId && agents.value.some(a => String(a.id) === String(qAgentId))) {
+    selectedAgentId.value = qAgentId as string
+  }
 })
 
 watch(selectedAgentId, () => {
