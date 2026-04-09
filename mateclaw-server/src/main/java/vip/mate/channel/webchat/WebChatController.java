@@ -1,5 +1,7 @@
 package vip.mate.channel.webchat;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +46,7 @@ public class WebChatController {
     private final AgentService agentService;
     private final ConversationService conversationService;
     private final ChatStreamTracker streamTracker;
+    private final ObjectMapper objectMapper;
 
     private final ExecutorService sseExecutor = Executors.newCachedThreadPool();
 
@@ -156,9 +159,14 @@ public class WebChatController {
         if (channel == null) {
             return R.fail(401, "Invalid API Key");
         }
+        JsonNode config = parseConfig(channel.getConfigJson());
         return R.ok(Map.of(
                 "channelName", channel.getName(),
-                "agentId", channel.getAgentId() != null ? channel.getAgentId() : 0
+                "agentId", channel.getAgentId() != null ? channel.getAgentId() : 0,
+                "title", textOrDefault(config, "title", channel.getName()),
+                "placeholder", textOrDefault(config, "placeholder", "Type a message..."),
+                "primaryColor", textOrDefault(config, "primary_color", "#409eff"),
+                "welcomeMessage", textOrDefault(config, "welcome_message", "")
         ));
     }
 
@@ -174,12 +182,38 @@ public class WebChatController {
         List<ChannelEntity> channels = channelService.listChannelsByType("webchat");
         for (ChannelEntity channel : channels) {
             if (!Boolean.TRUE.equals(channel.getEnabled())) continue;
-            String configJson = channel.getConfigJson();
-            if (configJson != null && configJson.contains(apiKey)) {
+            JsonNode config = parseConfig(channel.getConfigJson());
+            String configuredApiKey = textOrDefault(config, "api_key", null);
+            if (configuredApiKey != null && apiKey.equals(configuredApiKey)) {
                 return channel;
             }
         }
         return null;
+    }
+
+    private JsonNode parseConfig(String configJson) {
+        if (configJson == null || configJson.isBlank()) {
+            return objectMapper.createObjectNode();
+        }
+        try {
+            return objectMapper.readTree(configJson);
+        } catch (Exception e) {
+            log.warn("[WebChat] Failed to parse configJson: {}", e.getMessage());
+            return objectMapper.createObjectNode();
+        }
+    }
+
+    private String textOrDefault(JsonNode node, String fieldName, String defaultValue) {
+        if (node != null) {
+            JsonNode value = node.get(fieldName);
+            if (value != null && !value.isNull()) {
+                String text = value.asText();
+                if (!text.isBlank()) {
+                    return text;
+                }
+            }
+        }
+        return defaultValue;
     }
 
     private void sendErrorAndComplete(SseEmitter emitter, String message) {

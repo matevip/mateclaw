@@ -107,6 +107,7 @@
                 <option value="weixin">{{ t('channels.types.weixin') }}</option>
                 <option value="qq">{{ t('channels.types.qq') }}</option>
                 <option value="slack">{{ t('channels.types.slack') }}</option>
+                <option value="webchat">{{ t('channels.types.webchat') }}</option>
                 <option value="webhook">{{ t('channels.types.webhook') }}</option>
               </select>
             </div>
@@ -228,9 +229,11 @@
                         :type="visibleFields[field.key] ? 'text' : 'password'"
                         class="form-input"
                         :placeholder="field.placeholder"
+                        :readonly="field.readOnly"
                         autocomplete="off"
                       />
                       <button
+                        v-if="!field.readOnly"
                         type="button" class="eye-btn"
                         @click="visibleFields[field.key] = !visibleFields[field.key]"
                         :title="visibleFields[field.key] ? t('common.hide') : t('common.show')"
@@ -242,6 +245,17 @@
                         <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
                           <line x1="1" y1="1" x2="23" y2="23"/>
+                        </svg>
+                      </button>
+                      <button
+                        v-else-if="channelConfig[field.key]"
+                        type="button" class="copy-inline-btn"
+                        @click="copyText(String(channelConfig[field.key]))"
+                        :title="t('common.copy')"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
                         </svg>
                       </button>
                     </div>
@@ -273,6 +287,7 @@
                       type="number"
                       class="form-input"
                       :placeholder="field.placeholder"
+                      :readonly="field.readOnly"
                     />
 
                     <!-- 普通文本 -->
@@ -282,7 +297,12 @@
                       type="text"
                       class="form-input"
                       :placeholder="field.placeholder"
+                      :readonly="field.readOnly"
                     />
+
+                    <span v-if="field.readOnly && field.key === 'api_key'" class="form-hint">
+                      {{ editingChannel ? t('channels.webchatApiKeyReadOnly') : t('channels.webchatApiKeyGenerated') }}
+                    </span>
                   </div>
                 </div>
               </template>
@@ -312,6 +332,11 @@
               <!-- Web 类型：无额外配置 -->
               <div v-else-if="form.channelType === 'web'" class="empty-config">
                 <p class="empty-text">{{ t('channels.webHint') }}</p>
+              </div>
+
+              <!-- WebChat 类型 -->
+              <div v-else-if="form.channelType === 'webchat'" class="empty-config">
+                <p class="empty-text">{{ t('channels.webchatHint') }}</p>
               </div>
 
               <!-- Webhook 类型 -->
@@ -847,6 +872,15 @@ async function copyWebhookUrl() {
   }
 }
 
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success(t('common.copied'))
+  } catch {
+    ElMessage.warning(t('channels.webhook.copyFailed'))
+  }
+}
+
 // ==================== 生命周期 ====================
 
 onMounted(async () => {
@@ -1154,7 +1188,7 @@ async function toggleChannel(channel: Channel) {
 
 // ==================== 渠道图标 ====================
 
-const CHANNEL_ICON_TYPES = ['web', 'dingtalk', 'feishu', 'wecom', 'weixin', 'telegram', 'discord', 'qq', 'slack', 'webhook']
+const CHANNEL_ICON_TYPES = ['web', 'dingtalk', 'feishu', 'wecom', 'weixin', 'telegram', 'discord', 'qq', 'slack', 'webchat', 'webhook']
 function getChannelIconPath(type: string) {
   const name = CHANNEL_ICON_TYPES.includes(type) ? type : 'default'
   return `/icons/channels/${name}.svg`
@@ -1295,6 +1329,9 @@ function getChannelIconPath(type: string) {
 .password-wrap .form-input { padding-right: 36px; }
 .eye-btn { position: absolute; right: 8px; background: none; border: none; cursor: pointer; color: var(--mc-text-tertiary); padding: 2px; display: flex; align-items: center; }
 .eye-btn:hover { color: var(--mc-text-primary); }
+.copy-inline-btn { position: absolute; right: 8px; background: none; border: none; cursor: pointer; color: var(--mc-text-tertiary); padding: 2px; display: flex; align-items: center; }
+.copy-inline-btn:hover { color: var(--mc-text-primary); }
+.form-hint { font-size: 12px; color: var(--mc-text-tertiary); line-height: 1.5; }
 
 /* 开关 */
 .switch-wrap { display: flex; align-items: center; gap: 8px; height: 36px; }

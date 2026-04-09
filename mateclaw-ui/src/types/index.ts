@@ -304,6 +304,7 @@ export interface ChannelFieldDef {
   placeholder: string
   required?: boolean
   sensitive?: boolean
+  readOnly?: boolean
   tooltip?: string
   type: 'text' | 'password' | 'select' | 'switch' | 'number'
   options?: { label: string; value: string }[]
@@ -370,6 +371,14 @@ export const CHANNEL_FIELD_DEFS: Record<string, ChannelFieldDef[]> = {
     { key: 'bot_token', label: 'Bot Token', placeholder: 'xoxb-xxxxxxxxxxxx-xxxxxxxxxxxx', required: true, sensitive: true, type: 'password', tooltip: 'Slack Bot User OAuth Token（在 Slack App → OAuth & Permissions 获取）' },
     { key: 'app_token', label: 'App Token', placeholder: 'xapp-xxxxxxxxxxxx', required: true, sensitive: true, type: 'password', tooltip: 'Slack App-Level Token（需要 connections:write scope，在 Slack App → Basic Information → App-Level Tokens 生成）' },
     { key: 'signing_secret', label: 'Signing Secret', placeholder: 'xxxxxxxxxxxxxxxx', sensitive: true, type: 'password', tooltip: 'Slack App Signing Secret（用于 Webhook 模式验证请求签名，Socket Mode 可选）' },
+  ],
+  webchat: [
+    { key: 'api_key', label: 'API Key', placeholder: '保存后由平台自动生成', required: true, sensitive: true, readOnly: true, type: 'password', tooltip: '由平台自动生成的嵌入式 WebChat 渠道密钥，创建后可复制使用' },
+    { key: 'title', label: '标题', placeholder: 'MateClaw', type: 'text', defaultValue: 'MateClaw', tooltip: '聊天面板顶部显示的标题' },
+    { key: 'placeholder', label: '输入框占位文案', placeholder: 'Type a message...', type: 'text', defaultValue: 'Type a message...', tooltip: '输入框默认提示文案' },
+    { key: 'primary_color', label: '主题色', placeholder: '#409eff', type: 'text', defaultValue: '#409eff', tooltip: '聊天气泡与头部使用的主色，建议使用十六进制颜色值' },
+    { key: 'welcome_message', label: '欢迎语', placeholder: '你好，我可以帮你处理什么？', type: 'text', tooltip: '前端 SDK 初始化后可读取并展示的欢迎语（当前主要供配置接口返回）' },
+    { key: 'allowed_origins', label: '允许嵌入域名', placeholder: 'https://example.com, https://app.example.com', type: 'text', tooltip: '预留给嵌入来源白名单校验的域名列表，多个域名用逗号分隔' },
   ],
 }
 

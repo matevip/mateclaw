@@ -1299,6 +1299,7 @@ export default {
       weixin: 'WeChat (微信)',
       qq: 'QQ',
       slack: 'Slack',
+      webchat: 'WebChat 嵌入',
       webhook: 'Webhook',
     },
     tabs: {
@@ -1336,6 +1337,9 @@ export default {
       authFailed: '授权失败',
     },
     webHint: 'Web 渠道使用内置 SSE 通信，无需额外配置。',
+    webchatHint: 'WebChat 用于把 MateClaw 聊天挂件嵌入外部网站。请配置 API Key、标题和主题色，然后在网站中引入 WebChat SDK。',
+    webchatApiKeyGenerated: '保存后平台会自动生成 API Key。创建完成后返回此页面即可复制。',
+    webchatApiKeyReadOnly: '该 API Key 由平台自动生成并托管，你只能复制，不能手动修改。',
     webhookHint: 'Webhook 渠道配置请在下方「原始 JSON」标签页中编辑。',
     jsonHint: '直接编辑渠道的完整 JSON 配置。切换到「表单配置」标签页时会自动同步。',
     advanced: '高级配置',

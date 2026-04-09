@@ -1,6 +1,8 @@
 package vip.mate.channel.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -8,7 +10,10 @@ import vip.mate.channel.model.ChannelEntity;
 import vip.mate.channel.repository.ChannelMapper;
 import vip.mate.exception.MateClawException;
 
+import java.security.SecureRandom;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 渠道业务服务
@@ -24,6 +29,8 @@ import java.util.List;
 public class ChannelService {
 
     private final ChannelMapper channelMapper;
+    private final ObjectMapper objectMapper;
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     /**
      * 获取所有渠道列表
@@ -97,6 +104,9 @@ public class ChannelService {
         if (channel.getEnabled() == null) {
             channel.setEnabled(false);
         }
+        if ("webchat".equals(channel.getChannelType())) {
+            channel.setConfigJson(enrichWebChatConfig(channel.getConfigJson(), null));
+        }
         channelMapper.insert(channel);
         log.info("Created channel: {} (type={})", channel.getName(), channel.getChannelType());
         return channel;
@@ -107,6 +117,9 @@ public class ChannelService {
      */
     public ChannelEntity updateChannel(ChannelEntity channel) {
         ChannelEntity existing = getChannel(channel.getId());
+        if ("webchat".equals(channel.getChannelType())) {
+            channel.setConfigJson(enrichWebChatConfig(channel.getConfigJson(), existing.getConfigJson()));
+        }
         channelMapper.updateById(channel);
         log.info("Updated channel: {}", existing.getName());
         return channel;
@@ -130,5 +143,64 @@ public class ChannelService {
         channelMapper.updateById(channel);
         log.info("Channel {} {}", channel.getName(), enabled ? "enabled" : "disabled");
         return channel;
+    }
+
+    private String enrichWebChatConfig(String incomingConfigJson, String existingConfigJson) {
+        Map<String, Object> incoming = parseConfig(incomingConfigJson);
+        Map<String, Object> existing = parseConfig(existingConfigJson);
+
+        String existingApiKey = asNonBlankString(existing.get("api_key"));
+        incoming.put("api_key", existingApiKey != null ? existingApiKey : generateWebChatApiKey());
+
+        if (!incoming.containsKey("title") && existing.containsKey("title")) {
+            incoming.put("title", existing.get("title"));
+        }
+        if (!incoming.containsKey("placeholder") && existing.containsKey("placeholder")) {
+            incoming.put("placeholder", existing.get("placeholder"));
+        }
+        if (!incoming.containsKey("primary_color") && existing.containsKey("primary_color")) {
+            incoming.put("primary_color", existing.get("primary_color"));
+        }
+        if (!incoming.containsKey("welcome_message") && existing.containsKey("welcome_message")) {
+            incoming.put("welcome_message", existing.get("welcome_message"));
+        }
+        if (!incoming.containsKey("allowed_origins") && existing.containsKey("allowed_origins")) {
+            incoming.put("allowed_origins", existing.get("allowed_origins"));
+        }
+
+        try {
+            return objectMapper.writeValueAsString(incoming);
+        } catch (Exception e) {
+            throw new MateClawException("WebChat 渠道配置序列化失败: " + e.getMessage());
+        }
+    }
+
+    private Map<String, Object> parseConfig(String configJson) {
+        if (configJson == null || configJson.isBlank()) {
+            return new LinkedHashMap<>();
+        }
+        try {
+            return objectMapper.readValue(configJson, new TypeReference<>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse channel configJson: {}", e.getMessage());
+            return new LinkedHashMap<>();
+        }
+    }
+
+    private String asNonBlankString(Object value) {
+        if (value == null) return null;
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private String generateWebChatApiKey() {
+        byte[] random = new byte[18];
+        SECURE_RANDOM.nextBytes(random);
+        StringBuilder sb = new StringBuilder("mc_webchat_");
+        for (byte b : random) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+            sb.append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
     }
 }

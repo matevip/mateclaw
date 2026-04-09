@@ -3,12 +3,14 @@
     <div class="provider-header">
       <div>
         <div class="provider-title-row">
-          <img
-            :src="getProviderIcon(provider.id)"
-            :alt="provider.name"
-            class="provider-icon"
-            @error="onIconError"
-          />
+          <span class="provider-icon-shell">
+            <img
+              :src="getProviderIcon(provider.id)"
+              :alt="provider.name"
+              class="provider-icon"
+              @error="onIconError"
+            />
+          </span>
           <h3 class="provider-name">{{ provider.name }}</h3>
           <span class="provider-badge" :class="provider.isCustom ? 'custom' : 'builtin'">
             {{ provider.isCustom ? t('settings.model.custom') : t('settings.model.builtin') }}
@@ -113,7 +115,41 @@ const { t } = useI18n()
 <style scoped>
 .provider-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .provider-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.provider-icon { width: 28px; height: 28px; border-radius: 6px; object-fit: contain; flex-shrink: 0; }
+.provider-icon-shell {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(123, 88, 67, 0.18);
+  background: linear-gradient(180deg, #ffffff, #f5ede6);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 6px 16px rgba(25, 14, 8, 0.14);
+}
+
+.provider-icon {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 1px rgba(44, 24, 10, 0.12));
+}
+
+:global(html.dark) .provider-icon-shell {
+  border-color: rgba(255, 248, 241, 0.28);
+  background: linear-gradient(180deg, #fffdfb, #f3e8dc);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 8px 22px rgba(0, 0, 0, 0.26);
+}
+
+:global(html.dark) .provider-icon {
+  filter: drop-shadow(0 1px 1px rgba(44, 24, 10, 0.18));
+}
 .provider-name { margin: 0; font-size: 18px; color: var(--mc-text-primary); }
 .provider-id { margin: 6px 0 0; font-size: 13px; color: var(--mc-primary); }
 .provider-badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px; font-size: 12px; font-weight: 600; }

@@ -3,12 +3,14 @@
     <div class="modal modal-wide">
       <div class="modal-header">
         <h2>
-          <img
-            :src="getProviderIcon(provider.id)"
-            :alt="provider.name"
-            class="modal-provider-icon"
-            @error="onIconError"
-          />
+          <span class="modal-provider-icon-shell">
+            <img
+              :src="getProviderIcon(provider.id)"
+              :alt="provider.name"
+              class="modal-provider-icon"
+              @error="onIconError"
+            />
+          </span>
           {{ t('settings.model.manageTitle') }} · {{ provider.name }}
         </h2>
         <div class="modal-header-actions">
@@ -176,7 +178,42 @@ defineEmits<{
 .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--mc-border-light); }
 .modal-header h2 { color: var(--mc-text-primary); margin: 0; font-size: 18px; display: flex; align-items: center; }
 .modal-header-actions { display: flex; align-items: center; gap: 10px; }
-.modal-provider-icon { width: 22px; height: 22px; border-radius: 4px; object-fit: contain; vertical-align: middle; margin-right: 6px; }
+.modal-provider-icon-shell {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+  padding: 7px;
+  border-radius: 12px;
+  border: 1px solid rgba(123, 88, 67, 0.18);
+  background: linear-gradient(180deg, #ffffff, #f5ede6);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 6px 16px rgba(25, 14, 8, 0.14);
+  flex-shrink: 0;
+}
+
+.modal-provider-icon {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  vertical-align: middle;
+  filter: drop-shadow(0 1px 1px rgba(44, 24, 10, 0.12));
+}
+
+:global(html.dark) .modal-provider-icon-shell {
+  border-color: rgba(255, 248, 241, 0.28);
+  background: linear-gradient(180deg, #fffdfb, #f3e8dc);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 8px 22px rgba(0, 0, 0, 0.26);
+}
+
+:global(html.dark) .modal-provider-icon {
+  filter: drop-shadow(0 1px 1px rgba(44, 24, 10, 0.18));
+}
 .modal-close { background: none; border: none; font-size: 24px; line-height: 1; cursor: pointer; color: var(--mc-text-secondary); }
 .modal-close:hover { color: var(--mc-text-primary); }
 .modal-body { padding: 20px; overflow-y: auto; flex: 1; min-height: 0; }

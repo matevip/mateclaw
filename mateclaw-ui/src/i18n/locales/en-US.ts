@@ -1289,6 +1289,7 @@ export default {
       weixin: 'WeChat',
       qq: 'QQ',
       slack: 'Slack',
+      webchat: 'WebChat Embed',
       webhook: 'Webhook',
     },
     tabs: {
@@ -1326,6 +1327,9 @@ export default {
       authFailed: 'Authorization failed',
     },
     webHint: 'Web channel uses built-in SSE communication, no additional configuration needed.',
+    webchatHint: 'WebChat embeds the MateClaw chat widget into external websites. Configure an API key, title, and primary color, then load the WebChat SDK on your site.',
+    webchatApiKeyGenerated: 'The platform will generate the API key after save. Reopen this channel to copy it.',
+    webchatApiKeyReadOnly: 'This API key is generated and managed by the platform. It can be copied, but not edited manually.',
     webhookHint: 'Webhook channel configuration should be edited in the "Raw JSON" tab below.',
     jsonHint: 'Edit the complete JSON configuration directly. Switching to "Form" tab will sync automatically.',
     advanced: 'Advanced',
