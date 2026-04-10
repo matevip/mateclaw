@@ -271,6 +271,7 @@ import { conversationApi, agentApi, modelApi, chatApi } from '@/api/index'
 import { channelIconUrl } from '@/utils/channelSource'
 import { useChat } from '@/composables/chat/useChat'
 import { reconstructErrorInfo } from '@/types/chatError'
+import { reconcileMessages, extractMessages } from '@/utils/messageReconcile'
 import type { Conversation, Agent, ModelConfig, ProviderInfo, ActiveModelsInfo, ChatAttachment, MessageContentPart, Message, ToolCallMeta, StreamPhase } from '@/types'
 
 // 导入组件化组件
@@ -749,7 +750,9 @@ async function refreshCurrentConversationMessages(conversationId: string) {
   if (streamPhase.value === 'awaiting_approval') return
   try {
     const res: any = await conversationApi.listMessages(conversationId)
-    messages.value = (res.data || []).map((msg: Message) => normalizeMessage(msg))
+    const fetched = extractMessages(res).messages.map((msg: Message) => normalizeMessage(msg))
+    // 逐条 reconcile：只接受更丰富的版本，防止 poorer DB 快照覆盖 local rich message
+    messages.value = reconcileMessages(messages.value, fetched)
   } catch (e) {
     console.warn('[ChatConsole] Failed to refresh current conversation messages:', e)
   }
@@ -773,7 +776,7 @@ async function hydrateStateFromRoute() {
       messages.value = []
       try {
         const res: any = await conversationApi.listMessages(conversationId)
-        messages.value = (res.data || []).map((msg: Message) => normalizeMessage(msg))
+        messages.value = extractMessages(res).messages.map((msg: Message) => normalizeMessage(msg))
       } catch {
         // 消息加载失败，保持空
       }
@@ -808,7 +811,7 @@ async function selectConversation(conv: Conversation) {
   selectedAgentId.value = conv.agentId || selectedAgentId.value
   try {
     const res: any = await conversationApi.listMessages(conv.conversationId)
-    messages.value = (res.data || []).map((msg: Message) => normalizeMessage(msg))
+    messages.value = extractMessages(res).messages.map((msg: Message) => normalizeMessage(msg))
 
     // Hydrate pending approvals：恢复刷新后丢失的审批卡片
     try {
@@ -1173,9 +1176,17 @@ function buildOutgoingParts(text: string, attachments: ChatAttachment[]): Messag
 function normalizeMessage(raw: Message): Message {
   const msg: Message = { ...raw, contentParts: raw.contentParts ? [...raw.contentParts] : [] }
 
-  // 统一解析 metadata：确保是对象而非 JSON 字符串（后端 API 返回字符串）
+  // 统一解析 metadata：确保是对象而非 JSON 字符串
+  // 注意：后端 metadata 在 DB 中是 JSON 字符串，Jackson 序列化时可能双重编码
   if (typeof msg.metadata === 'string') {
-    try { msg.metadata = JSON.parse(msg.metadata) } catch { msg.metadata = {} as any }
+    try {
+      let parsed = JSON.parse(msg.metadata)
+      // 处理双重编码：parse 后仍然是字符串的情况
+      if (typeof parsed === 'string') {
+        try { parsed = JSON.parse(parsed) } catch { /* ignore */ }
+      }
+      msg.metadata = parsed
+    } catch { msg.metadata = {} as any }
   }
 
   // 保留后端返回的 token 字段（MessageVO 新增）

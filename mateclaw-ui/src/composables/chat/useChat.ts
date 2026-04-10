@@ -139,7 +139,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     if (!metadata) return {}
     if (typeof metadata === 'string') {
       try {
-        return JSON.parse(metadata)
+        let parsed = JSON.parse(metadata)
+        // 处理双重 JSON 编码（DB metadata 是字符串，Jackson 可能再次转义）
+        if (typeof parsed === 'string') {
+          try { parsed = JSON.parse(parsed) } catch { /* ignore */ }
+        }
+        return parsed
       } catch (e) {
         console.warn('[useChat] Failed to parse metadata:', e)
         return {}
@@ -329,12 +334,16 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         setMessageStatus(currentAssistantId.value, data.status || 'completed')
       }
 
-      // 更新 token 信息
+      // 更新 token 信息 + 用持久化 id 替换本地临时 id（关键：让 reconcile 能匹配）
       const msgIndex = messages.value.findIndex(m => m.id === currentAssistantId.value)
       if (msgIndex >= 0) {
         const msg = messages.value[msgIndex]
         if (data.promptTokens !== undefined) msg.promptTokens = data.promptTokens
         if (data.completionTokens !== undefined) msg.completionTokens = data.completionTokens
+        // 用后端持久化 id 替换本地临时 id，使 reconcile 时能按 id 匹配
+        if (data.assistantMessageId) {
+          msg.id = data.assistantMessageId
+        }
         messages.value[msgIndex] = { ...msg }
       }
       currentAssistantId.value = null

@@ -604,6 +604,14 @@ public class AgentGraphBuilder {
                 If a tool requires approval due to security policies, the system will prompt the user for confirmation.
                 Only state you cannot access something if no relevant tool is available.
 
+                ## Multi-Part Question Guidelines
+                When the user asks multiple questions or requests multiple tasks in a single message:
+                1. Structure your final answer with numbered sections, one per sub-task
+                2. Each section must contain the complete, detailed result for that sub-task
+                3. Never compress earlier sub-tasks into summary sentences while expanding the last one
+                4. If observations were summarized during processing, reconstruct each section from the summary
+                5. Treat each sub-task's result as equally important regardless of processing order
+
                 ## File Reading Guidelines
 
                 **Text Files** (use read_file):

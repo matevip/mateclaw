@@ -24,7 +24,7 @@
             <template v-for="(seg, index) in segments" :key="seg.id">
               <ThinkingSegment v-if="seg.type === 'thinking'" :segment="seg" />
               <ToolCallSegment v-if="seg.type === 'tool_call'" :segment="seg" />
-              <ContentSegment v-if="seg.type === 'content'" :segment="seg" :is-last="index === segments.length - 1" :show-cursor="showCursor && seg.status === 'running'" />
+              <ContentSegment v-if="seg.type === 'content'" :segment="seg" :show-cursor="showCursor && seg.status === 'running'" />
             </template>
           </div>
         </template>
@@ -578,31 +578,49 @@ const parsedMetadata = computed(() => {
   const raw = props.message.metadata
   if (!raw) return {} as any
   if (typeof raw === 'string') {
-    try { return JSON.parse(raw) } catch { return {} }
+    try {
+      let parsed = JSON.parse(raw)
+      // 处理双重 JSON 编码（DB 中 metadata 是字符串，Jackson 序列化时可能再次转义）
+      if (typeof parsed === 'string') {
+        try { parsed = JSON.parse(parsed) } catch { /* ignore */ }
+      }
+      return parsed
+    } catch { return {} }
   }
   return raw
 })
 
 const segments = computed<MessageSegment[]>(() => {
-  const meta = parsedMetadata.value
   if (props.message.role !== 'assistant') return []
+  const meta = parsedMetadata.value
 
-  // 从 contentParts 中提取 thinking（适用于所有来源：流式/历史/DB）
-  const thinkingPart = props.message.contentParts?.find(p => p.type === 'thinking')
+  // DEBUG: 临时日志，验证后删除
+  if (meta?.segments) {
+    console.debug('[MessageBubble] segments found:', meta.segments.length, 'first:', meta.segments[0]?.type)
+  } else {
+    console.debug('[MessageBubble] NO segments in metadata, keys:', Object.keys(meta || {}))
+  }
 
-  // 优先使用后端持久化的 segments
-  if (meta?.segments && meta.segments.length > 0) {
-    const segs = [...meta.segments] as MessageSegment[]
+  // 优先：使用 metadata.segments（流式时由前端写入，历史时由后端持久化）
+  // 这是按事件顺序记录的完整时间线，保留了 thinking→tools→content 的真实交错
+  if (meta?.segments && Array.isArray(meta.segments) && meta.segments.length > 0
+      && typeof meta.segments[0] === 'object' && meta.segments[0]?.type) {
     // 补充：如果后端 segments 没有 thinking 但 contentParts 有（非原生 thinking 模型）
+    const segs = [...meta.segments] as MessageSegment[]
     const hasThinking = segs.some(s => s.type === 'thinking')
-    if (!hasThinking && thinkingPart?.text) {
-      segs.unshift({ id: 'th-0', type: 'thinking', status: 'completed', thinkingText: thinkingPart.text })
+    if (!hasThinking) {
+      const thinkingPart = props.message.contentParts?.find(p => p.type === 'thinking')
+      if (thinkingPart?.text) {
+        segs.unshift({ id: 'th-fb', type: 'thinking', status: 'completed', thinkingText: thinkingPart.text })
+      }
     }
     return segs
   }
 
-  // 降级：从 toolCalls + contentParts 重建 segments
+  // Fallback：从 toolCalls + contentParts 做 best-effort 重建（旧消息兼容）
+  // 注意：这会丢失事件交错顺序（所有 thinking 在前，所有 tool calls 在中，content 在后）
   const segs: MessageSegment[] = []
+  const thinkingPart = props.message.contentParts?.find(p => p.type === 'thinking')
   if (thinkingPart?.text) {
     segs.push({ id: 'th-0', type: 'thinking', status: 'completed', thinkingText: thinkingPart.text })
   }

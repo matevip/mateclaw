@@ -1215,27 +1215,34 @@ public class ChatController {
                 || lower.contains("client abort") || lower.contains("closed");
     }
 
+    /**
+     * 流式累积器 — 收集 StreamDelta 事件，持久化到 DB。
+     * <p>
+     * 维护两份数据：
+     * <ul>
+     *   <li>{@code toolCalls} — 兼容旧逻辑（执行面板等 UI 使用）</li>
+     *   <li>{@code segments} — 按事件到达顺序记录的有序时间线（前端分段渲染用）</li>
+     * </ul>
+     * 两份数据从同一事件流构建，保证一致。segments 保留了 thinking → tools → content
+     * 的真实交错顺序，toolCalls 是 segments 中 tool_call 类型的平铺视图。
+     */
     private final class StreamAccumulator {
         private final StringBuilder content = new StringBuilder();
         private final StringBuilder thinking = new StringBuilder();
         private final List<Map<String, Object>> toolCalls = new ArrayList<>();
-        /** 实时分段列表（与前端 currentSegments 对齐） */
+        /** 有序事件时间线 — 前端分段渲染的权威数据源 */
         private final List<Map<String, Object>> segments = new ArrayList<>();
         private int segCounter = 0;
         private int promptTokens = 0;
         private int completionTokens = 0;
         private String runtimeModelName = "";
         private String runtimeProviderId = "";
-        /** 标记本次流是否因工具审批挂起而终止 */
         private boolean awaitingApproval = false;
 
         synchronized void accept(AgentService.StreamDelta delta, String conversationId) {
-            if (delta == null) {
-                return;
-            }
-            // 事件类型：直接广播为独立 SSE 事件名，不进入内容累积
+            if (delta == null) return;
+
             if (delta.isEvent()) {
-                // 拦截内部 usage 事件，不广播给前端
                 if ("_usage_final".equals(delta.eventType())) {
                     Map<String, Object> data = delta.eventData();
                     promptTokens = ((Number) data.getOrDefault("promptTokens", 0)).intValue();
@@ -1248,12 +1255,10 @@ public class ChatController {
                     String phase = String.valueOf(delta.eventData().getOrDefault("phase", ""));
                     if (!phase.isBlank()) {
                         streamTracker.updatePhase(conversationId, phase);
-                        // 关键：phase 变化时关闭 running 的 content/thinking segments
-                        // 让每个阶段（reasoning → tool → summarize → final answer）的文字成为独立 segment
-                        closeRunningSegments("content", "thinking");
+                        // phase 切换时关闭 running 的 content/thinking segment，保留边界
+                        finalizeRunningSegments("content", "thinking");
                     }
                 }
-                // 累积工具调用事件，用于持久化到消息历史
                 accumulateToolEvent(delta.eventType(), delta.eventData(), conversationId);
                 try {
                     broadcastEvent(conversationId, delta.eventType(), delta.eventData());
@@ -1262,22 +1267,40 @@ public class ChatController {
                 }
                 return;
             }
+
+            // content_delta
             if (delta.content() != null && !delta.content().isBlank()) {
                 content.append(delta.content());
                 streamTracker.updatePhase(conversationId, "drafting_answer");
                 if (!delta.persistenceOnly()) {
                     broadcastEvent(conversationId, "content_delta", Map.of("delta", delta.content()));
                 }
-                // 分段：追加到当前 content segment 或创建新的
-                appendToContentSegment(delta.content());
+                // segments: 追加到当前 running content segment，或创建新的
+                var seg = findLastRunning("content");
+                if (seg != null) {
+                    seg.put("text", seg.getOrDefault("text", "") + delta.content());
+                } else {
+                    finalizeRunningSegments("thinking");
+                    var s = newSegment("content");
+                    s.put("text", delta.content());
+                    segments.add(s);
+                }
             }
+
+            // thinking_delta
             if (delta.thinking() != null && !delta.thinking().isBlank()) {
                 thinking.append(delta.thinking());
                 if (!delta.persistenceOnly()) {
                     broadcastEvent(conversationId, "thinking_delta", Map.of("delta", delta.thinking()));
                 }
-                // 分段：追加到当前 thinking segment 或创建新的
-                appendToThinkingSegment(delta.thinking());
+                var seg = findLastRunning("thinking");
+                if (seg != null) {
+                    seg.put("thinkingText", seg.getOrDefault("thinkingText", "") + delta.thinking());
+                } else {
+                    var s = newSegment("thinking");
+                    s.put("thinkingText", delta.thinking());
+                    segments.add(s);
+                }
             }
         }
 
@@ -1288,22 +1311,21 @@ public class ChatController {
                 awaitingApproval = true;
                 streamTracker.updatePhase(conversationId, "awaiting_approval");
             } else if ("tool_call_started".equals(eventType)) {
+                // toolCalls（兼容）
                 Map<String, Object> tc = new LinkedHashMap<>();
                 tc.put("name", data.getOrDefault("toolName", ""));
                 tc.put("arguments", data.getOrDefault("arguments", ""));
                 tc.put("status", "running");
                 toolCalls.add(tc);
-                // 分段：关闭 running 的 thinking/content，创建新 tool_call segment
-                closeRunningSegments("thinking", "content");
-                Map<String, Object> seg = new LinkedHashMap<>();
-                seg.put("id", "tc-" + segCounter++);
-                seg.put("type", "tool_call");
-                seg.put("status", "running");
+                // segments: 关闭 running thinking/content，插入 tool_call
+                finalizeRunningSegments("thinking", "content");
+                var seg = newSegment("tool_call");
                 seg.put("toolName", data.getOrDefault("toolName", ""));
                 seg.put("toolArgs", data.getOrDefault("arguments", ""));
                 segments.add(seg);
             } else if ("tool_call_completed".equals(eventType)) {
                 String toolName = String.valueOf(data.getOrDefault("toolName", ""));
+                // toolCalls（兼容）
                 for (int i = toolCalls.size() - 1; i >= 0; i--) {
                     Map<String, Object> tc = toolCalls.get(i);
                     if ("running".equals(tc.get("status")) && toolName.equals(tc.get("name"))) {
@@ -1313,9 +1335,9 @@ public class ChatController {
                         break;
                     }
                 }
-                // 分段：标记对应 tool_call segment 完成
+                // segments: 标记对应 tool_call 完成
                 for (int i = segments.size() - 1; i >= 0; i--) {
-                    Map<String, Object> seg = segments.get(i);
+                    var seg = segments.get(i);
                     if ("tool_call".equals(seg.get("type")) && "running".equals(seg.get("status"))
                             && toolName.equals(seg.get("toolName"))) {
                         seg.put("status", "completed");
@@ -1327,62 +1349,37 @@ public class ChatController {
             }
         }
 
-        // ==================== 分段构建辅助方法 ====================
+        // ==================== Segment helpers ====================
 
-        private void appendToThinkingSegment(String text) {
-            // 查找最后一个 running thinking segment
-            for (int i = segments.size() - 1; i >= 0; i--) {
-                Map<String, Object> seg = segments.get(i);
-                if ("thinking".equals(seg.get("type")) && "running".equals(seg.get("status"))) {
-                    seg.put("thinkingText", seg.getOrDefault("thinkingText", "") + text);
-                    return;
-                }
-            }
-            // 没找到，创建新的
+        private Map<String, Object> newSegment(String type) {
             Map<String, Object> seg = new LinkedHashMap<>();
-            seg.put("id", "th-" + segCounter++);
-            seg.put("type", "thinking");
+            seg.put("id", type.substring(0, 2) + "-" + segCounter++);
+            seg.put("type", type);
             seg.put("status", "running");
-            seg.put("thinkingText", text);
-            segments.add(seg);
+            return seg;
         }
 
-        private void appendToContentSegment(String text) {
-            // 查找最后一个 running content segment
+        private Map<String, Object> findLastRunning(String type) {
             for (int i = segments.size() - 1; i >= 0; i--) {
-                Map<String, Object> seg = segments.get(i);
-                if ("content".equals(seg.get("type")) && "running".equals(seg.get("status"))) {
-                    seg.put("text", seg.getOrDefault("text", "") + text);
-                    return;
-                }
+                var seg = segments.get(i);
+                if (type.equals(seg.get("type")) && "running".equals(seg.get("status"))) return seg;
             }
-            // 没找到，关闭 thinking，创建新 content segment
-            closeRunningSegments("thinking");
-            Map<String, Object> seg = new LinkedHashMap<>();
-            seg.put("id", "ct-" + segCounter++);
-            seg.put("type", "content");
-            seg.put("status", "running");
-            seg.put("text", text);
-            segments.add(seg);
+            return null;
         }
 
-        private void closeRunningSegments(String... types) {
-            java.util.Set<String> typeSet = java.util.Set.of(types);
-            for (Map<String, Object> seg : segments) {
+        private void finalizeRunningSegments(String... types) {
+            var typeSet = java.util.Set.of(types);
+            for (var seg : segments) {
                 if ("running".equals(seg.get("status")) && typeSet.contains(seg.get("type"))) {
                     seg.put("status", "completed");
                 }
             }
         }
 
-        String getContent() {
-            return content.toString().trim();
-        }
+        // ==================== 原有访问器 ====================
 
-        String getThinking() {
-            return thinking.toString().trim();
-        }
-
+        String getContent() { return content.toString().trim(); }
+        String getThinking() { return thinking.toString().trim(); }
         int getPromptTokens() { return promptTokens; }
         int getCompletionTokens() { return completionTokens; }
         String getRuntimeModelName() { return runtimeModelName; }
@@ -1412,31 +1409,24 @@ public class ChatController {
             return parts;
         }
 
-        /**
-         * 将所有仍为 running 的 tool calls 标记为 completed（流结束时调用）。
-         * 防止历史消息中出现永远转圈的工具调用。
-         */
         void finalizeToolCalls() {
             for (Map<String, Object> tc : toolCalls) {
-                if ("running".equals(tc.get("status"))) {
-                    tc.put("status", "completed");
-                }
+                if ("running".equals(tc.get("status"))) tc.put("status", "completed");
             }
         }
 
         /**
-         * 生成 metadata JSON：包含 toolCalls 及其他元数据
+         * 生成 metadata JSON：包含 toolCalls + segments。
+         * toolCalls 保留兼容旧 UI，segments 是按事件顺序的完整时间线。
          */
         synchronized String toMetadataJson() {
-            // 确保所有 tool calls 和 segments 都不是 running 状态
             finalizeToolCalls();
-            closeRunningSegments("thinking", "content", "tool_call");
+            finalizeRunningSegments("thinking", "content", "tool_call");
             try {
                 Map<String, Object> metadata = new LinkedHashMap<>();
                 if (!toolCalls.isEmpty()) {
                     metadata.put("toolCalls", toolCalls);
                 }
-                // 使用实时构建的 segments（精确保留事件顺序，包含中间步骤）
                 if (!segments.isEmpty()) {
                     metadata.put("segments", segments);
                 }
