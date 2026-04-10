@@ -46,22 +46,32 @@ MateClaw 是基于 **Java + Vue 3** 构建的个人 AI 操作系统，由 [Sprin
 
 大多数 AI 工具只做好一件事。MateClaw 做好整件事。
 
-| 能力 | MateClaw | [OpenClaw](https://github.com/openclaw/openclaw) | [CoPaw](https://github.com/agentscope-ai/CoPaw) | QClaw | [Claude Code](https://github.com/anthropics/claude-code) | [Cursor](https://cursor.com) | [Windsurf](https://windsurf.com) |
+| 能力 | MateClaw | [OpenClaw](https://github.com/openclaw/openclaw) | [CoPaw](https://github.com/agentscope-ai/CoPaw) | [QClaw](https://cntechpost.com/2026/03/20/tencent-opens-qclaw-public-testing-amid-fierce-ai-rivalry/) | [Claude Code](https://github.com/anthropics/claude-code) | [Cursor](https://cursor.com) | [Windsurf](https://windsurf.com) |
 |:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| 多智能体编排 | **ReAct + 计划执行** | 单智能体 | 单智能体 | 单智能体 | 并行 Agent | 后台 Agent | Cascade 引擎 |
-| LLM Wiki 知识库 | **原创** | 无 | 无 | 知识图谱 | 无 | 无 | 无 |
-| 复合记忆 | **提取 + 整理 + 涌现** | 插件依赖 | ReMe 记忆 | 插件依赖 | 自动记忆 | 无 | 仅会话 |
-| 工具防护与审批 | **完整支持** | 无 | 无 | 无 | 无 | 无 | 无 |
-| 多渠道 IM | **7 个渠道** | 25+ 渠道 | 5+ 渠道 | 微信/QQ | 仅终端 | 仅 IDE | 仅 IDE |
-| Web 管理界面 | **完整仪表盘** | 无 | 有限 | 无 | 无 | 无 | 无 |
-| 桌面端 | **Electron + JRE** | CLI | CLI | CLI | CLI | 有 | 有 |
-| 多模态创作 | **TTS/STT/图/音乐/视频** | 无 | 无 | 无 | 无 | 无 | 无 |
-| 技能市场 | **ClawHub** | 插件系统 | Python 技能 | 模板 | MCP 技能 | 无 | MCP |
-| 企业认证 | **RBAC + JWT** | 无 | 无 | 无 | 无 | 团队版 | 团队版 |
-| 开源 | **Apache 2.0** | 是 | 是 | 部分 | 仅 CLI | 否 | 否 |
-| 定价 | **免费** | 免费 | 免费 | 未发布 | 按量付费 | $0–200/月 | $0–60/月 |
+| 智能体编排 | **ReAct + 计划执行** | 多智能体团队 | 多智能体协作 | 专家智能体 | 并行 Agent | 后台 Agent | Cascade 引擎 |
+| 知识系统 | **LLM Wiki（消化式）** | Intelligence Mode + Wiki | 个人知识库 | 知识图谱 | 无 | 无 | 无 |
+| 记忆 | **提取 + 整理 + 涌现** | SQLite + Dreaming + Wiki | ReMe（混合检索） | 三层记忆 | 自动记忆 | 无 | 仅会话 |
+| 工具防护与审批 | **RBAC + 审批流** | HITL + 风险等级 | 无 | 无 | 无 | 无 | 无 |
+| 多渠道 IM | **7 个渠道** | 25+ 渠道 | 7 个渠道 | 5 个渠道 | 仅终端 | 仅 IDE | 仅 IDE |
+| Web 管理界面 | **完整管理仪表盘** | Control UI | Console UI | 控制面板 | 无 | 无 | 无 |
+| 桌面端 | **Electron + 内嵌 JRE** | macOS 菜单栏 | Electron（Beta） | Win/Mac 应用 | CLI | 有 | 有 |
+| 多模态创作 | **TTS/STT/图/音乐/视频** | TTS/视频/音乐/图片 | 视觉输入 | 无 | 无 | 无 | 无 |
+| 技能生态 | **ClawHub 市场** | ClawHub 注册表 | Python 技能 | 模板 | MCP 技能 | 无 | MCP |
+| 企业认证 | **RBAC + JWT** | 基础（密码） | 基础认证 | 无 | 无 | 团队版 | 团队版 |
+| 开源 | **Apache 2.0** | MIT | Apache 2.0 | 部分 | 仅 CLI | 否 | 否 |
+| 定价 | **免费** | 免费 | 免费 | 免费（公测） | 按量付费 | $0–200/月 | $0–60/月 |
+| 技术栈 | **Java + Vue 3** | TypeScript | Python + TS | OpenClaw 衍生 | TypeScript | Electron | Electron |
 
-> **差异在哪？** OpenClaw 给你渠道。Claude Code 给你终端。Cursor 给你编辑器。MateClaw 给你一个 AI 操作系统——智能体能推理、能记忆、能创作，出现在你工作发生的每一个地方。有管理仪表盘。免费。
+**MateClaw 的差异化在哪？**
+
+这张表里的每个产品都有自己的强项。MateClaw 的独特空间在这里：
+
+- **计划-执行编排** — 不只是 ReAct 循环。把复杂工作分解为有序步骤，逐一执行，执行中动态调整计划。大多数竞品止步于单轮 Agent 调用
+- **LLM Wiki 消化式知识库** — 别人索引和搜索。MateClaw 的 Wiki 把原始资料转化为结构化、有链接的页面——搜索引擎和百科全书的区别
+- **Java 生态** — 为已经在生产环境运行 Spring Boot 的团队而生。无需 Python 运行时，无需 Node.js 依赖链。一个 JAR，一次部署
+- **完整的管理体验** — 智能体、模型、工具、技能、渠道、安全、定时任务、Token 用量的完整仪表盘。不是 CLI 优先的附属品
+- **多模态创作套件** — TTS、STT、图片、音乐、视频生成内置。不是插件——是一等公民
+- **永久免费** — Apache 2.0。无按量计费，无按席收费，无功能阉割
 
 ---
 

@@ -46,22 +46,32 @@ Three things make it insanely different:
 
 Most AI tools do one thing well. MateClaw does the whole thing.
 
-| Capability | MateClaw | [OpenClaw](https://github.com/openclaw/openclaw) | [CoPaw](https://github.com/agentscope-ai/CoPaw) | QClaw | [Claude Code](https://github.com/anthropics/claude-code) | [Cursor](https://cursor.com) | [Windsurf](https://windsurf.com) |
+| Capability | MateClaw | [OpenClaw](https://github.com/openclaw/openclaw) | [CoPaw](https://github.com/agentscope-ai/CoPaw) | [QClaw](https://cntechpost.com/2026/03/20/tencent-opens-qclaw-public-testing-amid-fierce-ai-rivalry/) | [Claude Code](https://github.com/anthropics/claude-code) | [Cursor](https://cursor.com) | [Windsurf](https://windsurf.com) |
 |:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| Multi-Agent Orchestration | **ReAct + Plan-Execute** | Single agent | Single agent | Single agent | Parallel agents | Background agents | Cascade engine |
-| LLM Wiki Knowledge Base | **Yes** | No | No | Knowledge graph | No | No | No |
-| Compound Memory | **Extract + Consolidate + Dream** | Plugin-based | ReMe memory | Plugin-based | Auto-memory | No | Session only |
-| Tool Guard & Approval | **Yes** | No | No | No | No | No | No |
-| Multi-Channel IM | **7 channels** | 25+ channels | 5+ channels | WeChat/QQ | Terminal only | IDE only | IDE only |
-| Web Management UI | **Full dashboard** | No | Limited | No | No | No | No |
-| Desktop App | **Electron + JRE** | CLI | CLI | CLI | CLI | Yes | Yes |
-| Multimodal Creation | **TTS/STT/Img/Music/Video** | No | No | No | No | No | No |
-| Skill Marketplace | **ClawHub** | Plugin system | Python skills | Templates | MCP skills | No | MCP |
-| Enterprise Auth | **RBAC + JWT** | No | No | No | No | Teams plan | Teams plan |
-| Open Source | **Apache 2.0** | Yes | Yes | Partial | CLI only | No | No |
-| Pricing | **Free** | Free | Free | Unreleased | Token-based | $0–200/mo | $0–60/mo |
+| Agent Orchestration | **ReAct + Plan-Execute** | Multi-agent teams | Multi-agent collab | Specialist agents | Parallel agents | Background agents | Cascade engine |
+| Knowledge System | **LLM Wiki (digestion)** | Intelligence Mode + Wiki | Personal KB | Knowledge graph | No | No | No |
+| Memory | **Extract + Consolidate + Dream** | SQLite + Dreaming + Wiki | ReMe (hybrid retrieval) | 3-layer memory | Auto-memory | No | Session only |
+| Tool Guard & Approval | **RBAC + approval flow** | HITL + risk levels | No | No | No | No | No |
+| Multi-Channel IM | **7 channels** | 25+ channels | 7 channels | 5 channels | Terminal only | IDE only | IDE only |
+| Web Management UI | **Full admin dashboard** | Control UI | Console UI | Dashboard | No | No | No |
+| Desktop App | **Electron + bundled JRE** | macOS menu bar | Electron (Beta) | Win/Mac app | CLI | Yes | Yes |
+| Multimodal Creation | **TTS/STT/Img/Music/Video** | TTS/Video/Music/Image | Vision input | No | No | No | No |
+| Skill Ecosystem | **ClawHub marketplace** | ClawHub registry | Python skills | Templates | MCP skills | No | MCP |
+| Enterprise Auth | **RBAC + JWT** | Basic (password) | Basic auth | No | No | Teams plan | Teams plan |
+| Open Source | **Apache 2.0** | MIT | Apache 2.0 | Partial | CLI only | No | No |
+| Pricing | **Free** | Free | Free | Free (beta) | Token-based | $0–200/mo | $0–60/mo |
+| Tech Stack | **Java + Vue 3** | TypeScript | Python + TS | OpenClaw fork | TypeScript | Electron | Electron |
 
-> **The difference**: OpenClaw gives you channels. Claude Code gives you a terminal. Cursor gives you an editor. MateClaw gives you an AI operating system — agents that reason, remember, create, and show up everywhere your work happens. With a management dashboard. For free.
+**What makes MateClaw different?**
+
+Every product in this table is strong in its own right. Here's where MateClaw carves its own space:
+
+- **Plan-and-Execute orchestration** — Not just ReAct loops. Break complex work into ordered steps, execute each one, adapt the plan mid-flight. Most competitors stop at single-turn agent calls
+- **LLM Wiki that digests, not just retrieves** — Others index and search. MateClaw's Wiki turns raw material into structured, linked pages with summaries — the difference between a search engine and an encyclopedia
+- **Java ecosystem** — Built for teams already running Spring Boot in production. No Python runtime, no Node.js dependency chain. One JAR, one deploy
+- **Complete admin experience** — Full dashboard for agents, models, tools, skills, channels, security, cron jobs, and token usage. Not a CLI-first afterthought
+- **Multimodal creation suite** — TTS, STT, image, music, and video generation built in. Not plugins — first-class features
+- **Free, forever** — Apache 2.0. No token-based billing, no per-seat pricing, no feature gating
 
 ---
 
