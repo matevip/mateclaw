@@ -193,6 +193,13 @@ public class ShellCommandGuardian implements ToolGuardGuardian {
                 "检测到 rm 删除操作，可能导致文件永久丢失",
                 "请确认要删除的文件列表，考虑使用 trash 替代 rm"));
 
+        list.add(new ShellRule("SHELL_FIND_DELETE",
+                "find\\s.*\\s-delete\\b",
+                GuardSeverity.HIGH, GuardCategory.COMMAND_INJECTION,
+                "find -delete 删除命令",
+                "检测到 find -delete 操作，可能导致文件永久丢失",
+                "请确认要删除的文件列表，考虑使用 trash 替代 -delete"));
+
         list.add(new ShellRule("SHELL_RM_RF",
                 "rm\\s+-(rf|fr)",
                 GuardSeverity.HIGH, GuardCategory.COMMAND_INJECTION,
