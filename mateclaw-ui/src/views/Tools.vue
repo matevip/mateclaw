@@ -85,7 +85,7 @@
     </div>
 
     <!-- Modal -->
-    <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
+    <div v-if="showModal" class="modal-overlay">
       <div class="modal">
         <div class="modal-header">
           <h2>{{ editingTool ? t('tools.modal.editTitle') : t('tools.modal.newTitle') }}</h2>

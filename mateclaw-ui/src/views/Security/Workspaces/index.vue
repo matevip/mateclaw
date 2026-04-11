@@ -69,7 +69,7 @@
 
     <!-- Create / Edit Dialog -->
     <Teleport to="body">
-      <div v-if="showDialog" class="modal-overlay" @click.self="showDialog = false">
+      <div v-if="showDialog" class="modal-overlay">
         <div class="modal">
           <div class="modal-header">
             <h3>{{ editingWs ? t('security.workspaces.editDialog.title') : t('security.workspaces.createDialog.title') }}</h3>
@@ -114,7 +114,7 @@
 
     <!-- Delete Confirmation -->
     <Teleport to="body">
-      <div v-if="showDeleteConfirm" class="modal-overlay" @click.self="showDeleteConfirm = false">
+      <div v-if="showDeleteConfirm" class="modal-overlay">
         <div class="modal">
           <div class="modal-header">
             <h3>{{ t('security.workspaces.deleteDialog.title') }}</h3>

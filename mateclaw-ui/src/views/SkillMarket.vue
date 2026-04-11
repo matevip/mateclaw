@@ -128,7 +128,7 @@
     <ImportHubDialog v-model:visible="showImportDialog" @installed="loadAll" />
 
     <!-- Modal -->
-    <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
+    <div v-if="showModal" class="modal-overlay">
       <div class="modal">
         <div class="modal-header">
           <h2>{{ editingSkill ? t('skills.modal.configureTitle') : t('skills.modal.newTitle') }}</h2>

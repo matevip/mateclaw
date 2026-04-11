@@ -1,5 +1,5 @@
 <template>
-  <div v-if="show && provider" class="modal-overlay" @click.self="$emit('close')">
+  <div v-if="show && provider" class="modal-overlay">
     <div class="modal modal-wide">
       <div class="modal-header">
         <h2>

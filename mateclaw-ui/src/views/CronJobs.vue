@@ -101,7 +101,7 @@
       </div>
     </div>
 
-    <div v-if="detailJob" class="modal-overlay" @click.self="closeDetailModal">
+    <div v-if="detailJob" class="modal-overlay">
       <div class="modal">
         <div class="modal-header">
           <h2>{{ detailJob.name }}</h2>
@@ -150,7 +150,7 @@
     </div>
 
     <!-- 新建/编辑弹窗 -->
-    <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
+    <div v-if="showModal" class="modal-overlay">
       <div class="modal modal-lg">
         <div class="modal-header">
           <h2>{{ editing ? t('cronJobs.editJob') : t('cronJobs.createJob') }}</h2>

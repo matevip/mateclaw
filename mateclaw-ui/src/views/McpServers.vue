@@ -135,7 +135,7 @@
       </div>
     </div>
 
-    <div v-if="detailServer" class="modal-overlay" @click.self="closeDetailModal">
+    <div v-if="detailServer" class="modal-overlay">
       <div class="modal modal-wide">
         <div class="modal-header">
           <h2>{{ detailServer.name }}</h2>
@@ -202,7 +202,7 @@
       </div>
     </transition>
 
-    <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
+    <div v-if="showModal" class="modal-overlay">
       <div class="modal modal-wide">
         <div class="modal-header">
           <h2>{{ editing ? t('mcp.modal.editTitle') : t('mcp.modal.newTitle') }}</h2>

@@ -74,7 +74,7 @@
 
     <!-- Add Member Dialog -->
     <Teleport to="body">
-      <div v-if="showAddDialog" class="modal-overlay" @click.self="showAddDialog = false">
+      <div v-if="showAddDialog" class="modal-overlay">
         <div class="modal">
           <div class="modal-header">
             <h3>{{ t('security.members.addDialog.title') }}</h3>

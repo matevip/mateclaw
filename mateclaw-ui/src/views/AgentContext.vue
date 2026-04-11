@@ -168,7 +168,7 @@
     </div>
 
     <!-- 新建文件弹窗 -->
-    <div v-if="showNewFileDialog" class="modal-overlay" @click.self="showNewFileDialog = false">
+    <div v-if="showNewFileDialog" class="modal-overlay">
       <div class="modal small-modal">
         <div class="modal-header">
           <h2>{{ t('agentContext.newFileTitle') }}</h2>

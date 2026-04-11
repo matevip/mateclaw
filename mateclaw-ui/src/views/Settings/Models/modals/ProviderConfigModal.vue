@@ -1,5 +1,5 @@
 <template>
-  <div v-if="show" class="modal-overlay" @click.self="$emit('close')">
+  <div v-if="show" class="modal-overlay">
     <div class="modal">
       <div class="modal-header">
         <h2>{{ editingProvider ? t('settings.model.editTitle') : t('settings.model.createTitle') }}</h2>

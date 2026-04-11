@@ -112,7 +112,7 @@
     </div>
 
     <!-- Create KB Modal -->
-    <div v-if="showCreateKB" class="modal-overlay" @click.self="showCreateKB = false">
+    <div v-if="showCreateKB" class="modal-overlay">
       <div class="modal-content">
         <h3 class="modal-title">{{ t('wiki.createKB') }}</h3>
         <div class="form-group">

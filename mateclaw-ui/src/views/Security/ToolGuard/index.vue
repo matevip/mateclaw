@@ -137,7 +137,7 @@
 
     <!-- Rule Modal -->
     <Teleport to="body">
-      <div v-if="showRuleModal" class="modal-overlay" @click.self="showRuleModal = false">
+      <div v-if="showRuleModal" class="modal-overlay">
         <div class="modal">
           <div class="modal-header">
             <h3>{{ editingRule ? t('security.toolGuard.editRule') : t('security.toolGuard.addRule') }}</h3>

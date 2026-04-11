@@ -95,7 +95,7 @@
     
 
     <!-- Template Selector Modal -->
-    <div v-if="showTemplateSelector" class="modal-overlay" @click.self="showTemplateSelector = false">
+    <div v-if="showTemplateSelector" class="modal-overlay">
       <div class="modal template-modal">
         <div class="modal-header">
           <h2>{{ t('agents.templates.title') }}</h2>
@@ -138,7 +138,7 @@
     </div>
 
     <!-- Create/Edit Modal -->
-    <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
+    <div v-if="showModal" class="modal-overlay">
       <div class="modal">
         <div class="modal-header">
           <h2>{{ editingAgent ? t('agents.modal.editTitle') : t('agents.modal.newTitle') }}</h2>

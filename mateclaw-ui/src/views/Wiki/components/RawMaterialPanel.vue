@@ -99,7 +99,7 @@
     </button>
 
     <!-- Add Text Modal -->
-    <div v-if="showAddText" class="modal-overlay" @click.self="showAddText = false">
+    <div v-if="showAddText" class="modal-overlay">
       <div class="modal-content">
         <h3 class="modal-title">{{ t('wiki.addText') }}</h3>
         <div class="form-group">

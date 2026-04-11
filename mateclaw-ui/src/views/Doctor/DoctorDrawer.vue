@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="drawer-overlay" @click.self="emit('close')">
+    <div v-if="visible" class="drawer-overlay">
       <div class="drawer-panel">
         <div class="drawer-header">
           <h2 class="drawer-title">{{ t('doctor.title') }}</h2>

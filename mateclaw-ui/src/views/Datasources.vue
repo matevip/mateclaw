@@ -92,7 +92,7 @@
       </div>
     </div>
 
-    <div v-if="detailDs" class="modal-overlay" @click.self="closeDetailModal">
+    <div v-if="detailDs" class="modal-overlay">
       <div class="modal">
         <div class="modal-header">
           <h2>{{ detailDs.name }}</h2>
@@ -134,7 +134,7 @@
       </div>
     </div>
 
-    <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
+    <div v-if="showModal" class="modal-overlay">
       <div class="modal">
         <div class="modal-header">
           <h2>{{ editingDs ? t('datasources.modal.editTitle') : t('datasources.modal.newTitle') }}</h2>
