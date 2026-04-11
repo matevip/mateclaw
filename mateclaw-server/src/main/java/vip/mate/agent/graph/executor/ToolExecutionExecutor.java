@@ -230,9 +230,9 @@ public class ToolExecutionExecutor {
             ToolCallback callback = toolCallbackMap.get(toolName);
             if (callback == null) {
                 log.warn("[ToolExecutor] Tool not found: {}", toolName);
-                events.add(GraphEventPublisher.toolComplete(toolName, "工具不存在: " + toolName, false));
+                events.add(GraphEventPublisher.toolComplete(toolName, "Tool not found: " + toolName, false));
                 allResponses.add(new ToolResponseMessage.ToolResponse(
-                        toolCall.id(), toolName, "工具不存在: " + toolName));
+                        toolCall.id(), toolName, "Tool not found: " + toolName));
                 continue;
             }
 
@@ -270,8 +270,8 @@ public class ToolExecutionExecutor {
         ToolCallback callback = toolCallbackMap.get(toolName);
         if (callback == null) {
             log.warn("[ToolExecutor] Pre-approved tool not found: {}", toolName);
-            events.add(GraphEventPublisher.toolComplete(toolName, "工具不存在: " + toolName, false));
-            return new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, "工具不存在: " + toolName);
+            events.add(GraphEventPublisher.toolComplete(toolName, "Tool not found: " + toolName, false));
+            return new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, "Tool not found: " + toolName);
         }
 
         try {
@@ -288,7 +288,7 @@ public class ToolExecutionExecutor {
             log.error("[ToolExecutor] Pre-approved tool {} failed: {}", toolName, e.getMessage());
             events.add(GraphEventPublisher.toolComplete(toolName, e.getMessage(), false));
             return new ToolResponseMessage.ToolResponse(
-                    toolCall.id(), toolName, "工具执行失败: " + e.getMessage());
+                    toolCall.id(), toolName, "Tool execution failed: " + e.getMessage());
         }
     }
 
@@ -505,7 +505,7 @@ public class ToolExecutionExecutor {
     }
 
     private String normalizeToolExecutionError(Exception e) {
-        String message = e != null && e.getMessage() != null ? e.getMessage() : "未知错误";
+        String message = e != null && e.getMessage() != null ? e.getMessage() : "Unknown error";
         String lower = message.toLowerCase(Locale.ROOT);
 
         if (lower.contains("conversion from json")
@@ -513,16 +513,16 @@ public class ToolExecutionExecutor {
                 || lower.contains("unexpected character escape sequence")
                 || lower.contains("json parse error")
                 || lower.contains("malformed json")) {
-            return "工具执行失败：模型生成的工具参数不是合法 JSON，通常表示单次 tool call 内容过长，"
+            return "Tool execution failed: model generated invalid JSON for tool arguments. "
                     + "或在字符串转义位置被截断。请改为分步骤写入，拆成多个文件，或缩小单次 write_file/edit_file 的内容后重试。";
         }
 
         if (lower.contains("access denied") && lower.contains("path outside allowed directories")) {
             // 提取目标路径和允许路径
-            return "工具执行失败：目标路径不在允许的工作目录范围内。请将文件操作改为用户主目录下的路径（如 ~/Documents/ 或 ~/Desktop/）。";
+            return "Tool execution failed: target path is outside the allowed workspace directory.";
         }
 
-        return "工具执行失败: " + message;
+        return "Tool execution failed: " + message;
     }
 
     /**

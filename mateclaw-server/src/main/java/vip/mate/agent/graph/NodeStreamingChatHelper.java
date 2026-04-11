@@ -431,7 +431,7 @@ public class NodeStreamingChatHelper {
             // Client error (400): 不重试（参数/格式错误重试也不会变）
             if (errorType == ErrorType.CLIENT_ERROR) {
                 log.error("[{}] Client error (400), not retrying: {}", phase, error.getMessage());
-                return buildErrorResultWithType("请求参数错误: " + extractUserFriendlyError(error),
+                return buildErrorResultWithType("Bad request: " + extractUserFriendlyError(error),
                         conversationId, phase, errorType);
             }
 
@@ -625,12 +625,12 @@ public class NodeStreamingChatHelper {
         String msg = error.getMessage();
         if (msg == null) return error.getClass().getSimpleName();
         // 对 Jackson 反序列化错误，提取关键信息
-        if (msg.contains("engine_overloaded")) return "模型服务过载，请稍后重试";
-        if (msg.contains("unsupported image format") || msg.contains("unsupported")) return "不支持的文件格式（如 SVG），请使用 PNG/JPG 等光栅图片";
-        if (msg.contains("invalid_request_error") || msg.contains("400 Bad Request")) return "请求参数错误，请检查输入";
-        if (msg.contains("rate_limit") || msg.contains("429")) return "请求频率过高，请稍后重试";
-        if (msg.contains("timeout") || msg.contains("Timeout")) return "请求超时，请重试";
-        if (msg.contains("502") || msg.contains("503") || msg.contains("504")) return "模型服务暂时不可用";
+        if (msg.contains("engine_overloaded")) return "Model service overloaded, please retry later";
+        if (msg.contains("unsupported image format") || msg.contains("unsupported")) return "Unsupported file format (e.g. SVG), use PNG/JPG instead";
+        if (msg.contains("invalid_request_error") || msg.contains("400 Bad Request")) return "Bad request, please check input";
+        if (msg.contains("rate_limit") || msg.contains("429")) return "Rate limit exceeded, please retry later";
+        if (msg.contains("timeout") || msg.contains("Timeout")) return "Request timeout, please retry";
+        if (msg.contains("502") || msg.contains("503") || msg.contains("504")) return "Model service temporarily unavailable";
         // 截断过长的原始消息
         return msg.length() > 100 ? msg.substring(0, 100) + "..." : msg;
     }

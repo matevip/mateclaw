@@ -95,7 +95,7 @@ public class FinalAnswerNode implements NodeAction {
                     finishReason = FinishReason.SUMMARIZED;
                     log.warn("[FinalAnswerNode] No finalAnswer or draft found, falling back to summarizedContext");
                 } else {
-                    finalAnswer = "未能生成回答，请重试。";
+                    finalAnswer = "Failed to generate a response, please retry.";
                     finalThinking = "";
                     finishReason = FinishReason.ERROR_FALLBACK;
                     log.error("[FinalAnswerNode] No answer source available, returning fallback");

@@ -42,10 +42,10 @@
         <div v-if="hasMore" ref="loadMoreRef" class="load-more-trigger text-center py-3">
           <div v-if="loadingOlder" class="text-gray-400 dark:text-gray-500 text-sm flex items-center justify-center gap-2">
             <span class="animate-spin inline-block w-4 h-4 border-2 border-gray-300 border-t-gray-500 rounded-full"></span>
-            加载更早的消息...
+            {{ t('chat.loadingOlder') }}
           </div>
           <button v-else class="text-gray-400 dark:text-gray-500 text-sm hover:text-gray-600 dark:hover:text-gray-300 transition-colors" @click="$emit('load-more')">
-            点击加载更早的消息
+            {{ t('chat.loadOlderMessages') }}
           </button>
         </div>
 
@@ -85,7 +85,10 @@
 
 <script setup lang="ts">
 import { computed, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ChatDotRound, DataLine, EditPen, Monitor, Right } from '@element-plus/icons-vue'
+
+const { t } = useI18n()
 import MessageBubble from './MessageBubble.vue'
 import CompressionSummary from './CompressionSummary.vue'
 import { useStickToBottom } from '@/composables/chat/useStickToBottom'

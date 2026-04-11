@@ -44,6 +44,10 @@ export default {
     stopped: '已停止生成',
     interrupted: '已中断',
     failed: '生成失败',
+    compressionSummary: '之前的对话已整理为摘要',
+    compressionWithCount: '之前的 {count} 条对话已整理为摘要',
+    loadingOlder: '加载更早的消息...',
+    loadOlderMessages: '点击加载更早的消息',
     retry: '重试',
     errorCode: '错误码',
     error: {

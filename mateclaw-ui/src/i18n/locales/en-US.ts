@@ -44,6 +44,10 @@ export default {
     stopped: 'Generation stopped',
     interrupted: 'Interrupted',
     failed: 'Generation failed',
+    compressionSummary: 'Previous conversations summarized',
+    compressionWithCount: '{count} previous messages summarized',
+    loadingOlder: 'Loading older messages...',
+    loadOlderMessages: 'Click to load older messages',
     retry: 'Retry',
     errorCode: 'Error code',
     error: {

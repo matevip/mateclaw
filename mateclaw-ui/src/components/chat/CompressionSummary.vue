@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ArrowDown } from '@element-plus/icons-vue'
 import type { Message } from '@/types'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   message: Message
@@ -28,9 +31,9 @@ const compressedCount = computed(() => {
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
       </span>
       <span v-if="compressedCount > 0" class="seg-compression__label">
-        {{ `之前的 ${compressedCount} 条对话已整理为摘要` }}
+        {{ t('chat.compressionWithCount', { count: compressedCount }) }}
       </span>
-      <span v-else class="seg-compression__label">之前的对话已整理为摘要</span>
+      <span v-else class="seg-compression__label">{{ t('chat.compressionSummary') }}</span>
       <el-icon class="seg-compression__arrow" :class="{ 'is-open': expanded }" :size="12"><ArrowDown /></el-icon>
     </div>
     <div v-if="expanded" class="seg-compression__body">

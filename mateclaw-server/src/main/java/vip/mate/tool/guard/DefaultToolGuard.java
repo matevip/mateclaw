@@ -85,13 +85,13 @@ public class DefaultToolGuard implements ToolGuard {
         // Shell 工具即使未命中任何模式，也需要审批（任何本地命令执行都是敏感操作）
         if (isShellTool) {
             log.info("[ToolGuard] NEEDS_APPROVAL (shell tool default): tool={}", toolName);
-            return ToolGuardResult.needsApproval("本地命令执行需要用户确认", "shell_tool_default");
+            return ToolGuardResult.needsApproval("Shell command execution requires user approval", "shell_tool_default");
         }
 
         // 文件写入/编辑工具需要审批
         if (toolName != null && FILE_WRITE_TOOL_NAMES.contains(toolName)) {
             log.info("[ToolGuard] NEEDS_APPROVAL (file write tool): tool={}", toolName);
-            return ToolGuardResult.needsApproval("文件写入/编辑操作需要用户确认", "file_write_tool_default");
+            return ToolGuardResult.needsApproval("File write/edit operation requires user approval", "file_write_tool_default");
         }
 
         return ToolGuardResult.allow();
