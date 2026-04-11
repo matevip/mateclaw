@@ -36,6 +36,12 @@ public class DefaultToolGuard implements ToolGuard {
             "edit_file"
     );
 
+    /** 定时任务变更工具 —— 创建和删除需要用户审批 */
+    private static final Set<String> CRON_APPROVAL_TOOL_NAMES = Set.of(
+            "create_cron_job",
+            "delete_cron_job"
+    );
+
     /** 极端破坏性模式 —— 即使是 shell 工具也直接 BLOCK，不允许审批覆盖 */
     private final List<DangerousPattern> absoluteBlockPatterns;
 
@@ -92,6 +98,12 @@ public class DefaultToolGuard implements ToolGuard {
         if (toolName != null && FILE_WRITE_TOOL_NAMES.contains(toolName)) {
             log.info("[ToolGuard] NEEDS_APPROVAL (file write tool): tool={}", toolName);
             return ToolGuardResult.needsApproval("File write/edit operation requires user approval", "file_write_tool_default");
+        }
+
+        // 定时任务创建/删除需要审批
+        if (toolName != null && CRON_APPROVAL_TOOL_NAMES.contains(toolName)) {
+            log.info("[ToolGuard] NEEDS_APPROVAL (cron job tool): tool={}", toolName);
+            return ToolGuardResult.needsApproval("Cron job create/delete requires user approval", "cron_tool_default");
         }
 
         return ToolGuardResult.allow();
