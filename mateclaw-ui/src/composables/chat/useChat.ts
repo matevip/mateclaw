@@ -175,6 +175,44 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     return metadata
   }
 
+  /**
+   * SSE 以 error/done 结束但审批实际上已失效时，收口残留的 awaiting_approval UI 状态。
+   * 必须用 updateMessage 触发响应式更新，不能只改嵌套字段。
+   */
+  const expirePendingApprovals = (finalStatus: 'completed' | 'failed' | 'stopped') => {
+    for (const m of messages.value) {
+      if (m.role !== 'assistant') continue
+      const metadata = parseMetadata((m as any).metadata)
+      const pendingApproval = metadata?.pendingApproval
+      const hasPendingApproval = pendingApproval?.status === 'pending_approval'
+      const isAwaitingApprovalMsg = m.status === 'awaiting_approval' || metadata?.currentPhase === 'awaiting_approval'
+      if (!hasPendingApproval && !isAwaitingApprovalMsg) continue
+      if (m.id === undefined || m.id === null) continue
+
+      const toolCalls = Array.isArray(metadata?.toolCalls)
+        ? metadata.toolCalls.map((tc: any) => (
+            tc?.status === 'running' || tc?.status === 'awaiting_approval'
+              ? { ...tc, status: 'completed' }
+              : tc
+          ))
+        : metadata?.toolCalls
+
+      updateMessage(m.id, {
+        ...m,
+        status: m.status === 'awaiting_approval' ? finalStatus : m.status,
+        metadata: {
+          ...metadata,
+          currentPhase: undefined,
+          runningToolName: undefined,
+          toolCalls,
+          pendingApproval: hasPendingApproval
+            ? { ...pendingApproval, status: 'expired' }
+            : pendingApproval,
+        },
+      } as any)
+    }
+  }
+
   // 消息管理
   const {
     messages,
@@ -384,6 +422,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       : data.status === 'stopped' ? 'stopped' : 'completed'
     if (data.status !== 'awaiting_approval') {
       phaseInfo.value = null
+      expirePendingApprovals(data.status === 'stopped' ? 'stopped' : 'completed')
     }
 
     // 兜底清理排队状态（如果 queued_input_started 已经处理了则这里是 no-op）
@@ -431,6 +470,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     phaseInfo.value = null
     // 错误时清理排队状态，避免脏残留
     messageQueue.clear()
+    expirePendingApprovals('failed')
 
     if (errorFired) return
     errorFired = true

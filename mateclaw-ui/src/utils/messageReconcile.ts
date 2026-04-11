@@ -93,6 +93,9 @@ function mergeContentParts(localParts: any[], fetchedParts: any[]): any[] {
   return merged.sort((a, b) => (order[a.type] ?? 99) - (order[b.type] ?? 99))
 }
 
+/** 审批的已决状态（前端通过 SSE 实时更新，比后端持久化更新） */
+const RESOLVED_APPROVAL = new Set(['expired', 'approved', 'denied'])
+
 function mergeMetadata(localMetaRaw: any, fetchedMetaRaw: any): Record<string, any> {
   const localMeta = safeParseMeta(localMetaRaw)
   const fetchedMeta = safeParseMeta(fetchedMetaRaw)
@@ -114,7 +117,16 @@ function mergeMetadata(localMetaRaw: any, fetchedMetaRaw: any): Record<string, a
     merged.toolCalls = fetchedToolCalls
   }
 
-  if (!merged.pendingApproval && localMeta.pendingApproval) {
+  // pendingApproval：前端已决/过期状态不被后端的 pending 状态回退
+  const localApprovalStatus = localMeta.pendingApproval?.status
+  if (RESOLVED_APPROVAL.has(localApprovalStatus)) {
+    merged.pendingApproval = localMeta.pendingApproval
+    // 清除已过期审批关联的 phase 字段，防止 UI 残留
+    if (localApprovalStatus === 'expired') {
+      delete merged.currentPhase
+      delete merged.runningToolName
+    }
+  } else if (!merged.pendingApproval && localMeta.pendingApproval) {
     merged.pendingApproval = localMeta.pendingApproval
   }
 
@@ -142,7 +154,10 @@ function mergeAssistantMessages(localMsg: Message, fetchedMsg: Message): Message
       : localMsg.content,
     contentParts,
     metadata: mergeMetadata(localMsg.metadata, fetchedMsg.metadata),
-    status: fetchedMsg.status || localMsg.status,
+    // 不要把已终结的状态（failed/completed/stopped）回退为 awaiting_approval
+    status: (fetchedMsg.status === 'awaiting_approval' && localMsg.status && localMsg.status !== 'awaiting_approval')
+      ? localMsg.status
+      : (fetchedMsg.status || localMsg.status),
     promptTokens: fetchedMsg.promptTokens ?? localMsg.promptTokens,
     completionTokens: fetchedMsg.completionTokens ?? localMsg.completionTokens,
     createTime: fetchedMsg.createTime || localMsg.createTime,

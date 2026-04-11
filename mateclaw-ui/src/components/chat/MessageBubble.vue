@@ -659,19 +659,19 @@ const segments = computed<MessageSegment[]>(() => {
 const useSegmentedView = computed(() => segments.value.length > 1)
 
 const toolCallsMeta = computed<ToolCallMeta[]>(() => {
-  return props.message.metadata?.toolCalls || []
+  return parsedMetadata.value?.toolCalls || []
 })
 
 const browserActionsMeta = computed<BrowserAction[]>(() => {
-  return props.message.metadata?.browserActions || []
+  return parsedMetadata.value?.browserActions || []
 })
 
 const planMeta = computed<PlanMeta | undefined>(() => {
-  return props.message.metadata?.plan
+  return parsedMetadata.value?.plan
 })
 
 const currentPhaseName = computed(() => {
-  const phase = props.message.metadata?.currentPhase
+  const phase = parsedMetadata.value?.currentPhase
   switch (phase) {
     case 'reasoning': return 'Reasoning'
     case 'action': return 'Executing tools'
@@ -693,7 +693,9 @@ const truncateArgs = (args: string) => {
 
 // --- 审批面板 ---
 const pendingApproval = computed(() => {
-  return props.message.metadata?.pendingApproval || null
+  const approval = parsedMetadata.value?.pendingApproval
+  if (!approval || approval.status === 'expired') return null
+  return approval
 })
 
 const approvalSeverityClass = computed(() => {
@@ -724,7 +726,7 @@ const showExecutionPanel = computed(() => {
   if (role.value !== 'assistant') return false
   // 审批卡片有独立的渲染区域，但 execution panel 也应该在审批阶段展示上下文
   return toolCallsMeta.value.length > 0 || !!planMeta.value
-    || (isGenerating.value && props.message.metadata?.currentPhase)
+    || (isGenerating.value && parsedMetadata.value?.currentPhase)
     || !!pendingApproval.value
 })
 
