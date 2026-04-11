@@ -169,6 +169,14 @@ export const skillInstallApi = {
     http.post(`/skills/install/cancel/${taskId}`),
   uninstall: (skillName: string) =>
     http.delete(`/skills/install/${skillName}`),
+  uploadZip: (file: File, options?: { enable?: boolean; overwrite?: boolean; targetName?: string }) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return http.post('/skills/install/upload', formData, {
+      params: options,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
 }
 
 // ==================== Datasource ====================

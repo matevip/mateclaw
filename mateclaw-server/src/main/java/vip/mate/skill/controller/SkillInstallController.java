@@ -3,10 +3,14 @@ package vip.mate.skill.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import vip.mate.common.result.R;
 import vip.mate.skill.installer.SkillInstaller;
+import vip.mate.skill.installer.ZipSkillFetcher;
 import vip.mate.skill.installer.model.*;
+import vip.mate.skill.runtime.SkillFrontmatterParser;
 
 import java.util.List;
 import java.util.Map;
@@ -26,6 +30,7 @@ import java.util.Map;
 public class SkillInstallController {
 
     private final SkillInstaller skillInstaller;
+    private final SkillFrontmatterParser frontmatterParser;
 
     @Operation(summary = "搜索 ClawHub 市场")
     @GetMapping("/hub/search")
@@ -59,6 +64,29 @@ public class SkillInstallController {
     public R<Void> cancel(@PathVariable String taskId) {
         skillInstaller.cancelTask(taskId);
         return R.ok();
+    }
+
+    @Operation(summary = "上传 ZIP 安装 skill")
+    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public R<Map<String, Object>> uploadZip(
+            @RequestPart("file") MultipartFile zipFile,
+            @RequestParam(defaultValue = "true") Boolean enable,
+            @RequestParam(defaultValue = "false") Boolean overwrite,
+            @RequestParam(required = false) String targetName) {
+        // 校验文件类型
+        String filename = zipFile.getOriginalFilename();
+        if (filename == null || !filename.toLowerCase().endsWith(".zip")) {
+            return R.fail(400, "Only .zip files are accepted");
+        }
+        try {
+            SkillBundle bundle = ZipSkillFetcher.parse(zipFile, frontmatterParser);
+            Map<String, Object> result = skillInstaller.installFromBundle(bundle, enable, overwrite, targetName);
+            return R.ok(result);
+        } catch (IllegalArgumentException e) {
+            return R.fail(400, e.getMessage());
+        } catch (Exception e) {
+            return R.fail("ZIP install failed: " + e.getMessage());
+        }
     }
 
     @Operation(summary = "卸载 skill")

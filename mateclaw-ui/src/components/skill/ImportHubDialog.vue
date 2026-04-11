@@ -19,6 +19,9 @@
           <button class="import-tab" :class="{ active: activeTab === 'search' }" @click="activeTab = 'search'">
             {{ t('skills.import.searchTab') }}
           </button>
+          <button class="import-tab" :class="{ active: activeTab === 'zip' }" @click="activeTab = 'zip'">
+            {{ t('skills.import.zipTab') }}
+          </button>
         </div>
 
         <!-- URL 安装 -->
@@ -85,6 +88,42 @@
           </div>
         </div>
 
+        <!-- ZIP 上传 -->
+        <div v-if="activeTab === 'zip'" class="tab-content">
+          <div class="upload-zone"
+               :class="{ 'drag-over': dragOver, 'has-file': zipFile }"
+               @dragover.prevent="dragOver = true"
+               @dragleave="dragOver = false"
+               @drop.prevent="handleDrop"
+               @click="triggerFileInput">
+            <input ref="zipInputRef" type="file" accept=".zip" class="hidden-input" @change="handleFileSelect" />
+            <svg v-if="!zipFile" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity: 0.4; margin-bottom: 8px;">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p v-if="!zipFile" class="upload-hint">{{ t('skills.import.dropHint') }}</p>
+            <p v-if="!zipFile" class="upload-sub">{{ t('skills.import.zipRequirement') }}</p>
+            <div v-if="zipFile" class="file-preview">
+              <span class="file-icon">📦</span>
+              <span class="file-name">{{ zipFile.name }}</span>
+              <span class="file-size">{{ formatSize(zipFile.size) }}</span>
+              <button class="file-remove" @click.stop="zipFile = null">&times;</button>
+            </div>
+          </div>
+          <div class="form-options">
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="enableAfterInstall" />
+              {{ t('skills.import.enableAfterInstall') }}
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="overwriteExisting" />
+              {{ t('skills.import.overwrite') }}
+            </label>
+          </div>
+          <button class="btn-primary install-btn" @click="uploadZip" :disabled="!zipFile || installing">
+            {{ installing ? t('skills.import.uploading') : t('skills.import.install') }}
+          </button>
+        </div>
+
         <!-- 安装进度 -->
         <div v-if="currentTask" class="install-progress">
           <div class="progress-header">
@@ -122,7 +161,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const activeTab = ref<'url' | 'search'>('url')
+const activeTab = ref<'url' | 'search' | 'zip'>('url')
 const urlInput = ref('')
 const searchQuery = ref('')
 const searchResults = ref<HubSkillInfo[]>([])
@@ -132,6 +171,9 @@ const installing = ref(false)
 const enableAfterInstall = ref(true)
 const overwriteExisting = ref(false)
 const currentTask = ref<InstallTask | null>(null)
+const zipFile = ref<File | null>(null)
+const zipInputRef = ref<HTMLInputElement | null>(null)
+const dragOver = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 watch(() => props.visible, (val) => {
@@ -210,6 +252,59 @@ async function cancelInstall() {
     ElMessage.info(t('skills.import.cancelled'))
   } catch {
     // ignore
+  }
+}
+
+function triggerFileInput() {
+  zipInputRef.value?.click()
+}
+
+function handleFileSelect(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file && file.name.endsWith('.zip')) {
+    zipFile.value = file
+  } else if (file) {
+    ElMessage.warning(t('skills.import.invalidZip'))
+  }
+  input.value = ''
+}
+
+function handleDrop(e: DragEvent) {
+  dragOver.value = false
+  const file = e.dataTransfer?.files?.[0]
+  if (file && file.name.endsWith('.zip')) {
+    zipFile.value = file
+  } else {
+    ElMessage.warning(t('skills.import.invalidZip'))
+  }
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+async function uploadZip() {
+  if (!zipFile.value) return
+  if (zipFile.value.size > 50 * 1024 * 1024) {
+    ElMessage.error(t('skills.import.tooLarge'))
+    return
+  }
+  installing.value = true
+  try {
+    const res: any = await skillInstallApi.uploadZip(zipFile.value, {
+      enable: enableAfterInstall.value,
+      overwrite: overwriteExisting.value,
+    })
+    ElMessage.success(t('skills.import.uploadSuccess'))
+    zipFile.value = null
+    emit('installed')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.msg || e?.message || t('skills.import.uploadFailed'))
+  } finally {
+    installing.value = false
   }
 }
 
@@ -305,4 +400,19 @@ function getStatusLabel(status: string): string {
 .progress-url { font-size: 11px; color: var(--mc-text-tertiary); font-family: monospace; word-break: break-all; margin-bottom: 4px; }
 .progress-error { font-size: 12px; color: var(--mc-danger); margin-top: 4px; }
 .progress-result { font-size: 13px; color: var(--mc-text-primary); margin-top: 4px; }
+
+/* ZIP upload zone */
+.upload-zone { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 140px; border: 2px dashed var(--mc-border); border-radius: 12px; padding: 24px; cursor: pointer; transition: all 0.2s; text-align: center; }
+.upload-zone:hover { border-color: var(--mc-primary); background: var(--mc-bg-muted); }
+.upload-zone.drag-over { border-color: var(--mc-primary); background: var(--mc-primary-light, rgba(217,119,87,0.06)); }
+.upload-zone.has-file { border-style: solid; border-color: var(--mc-primary); }
+.upload-hint { font-size: 14px; color: var(--mc-text-secondary); margin: 0; }
+.upload-sub { font-size: 12px; color: var(--mc-text-tertiary); margin: 4px 0 0; }
+.hidden-input { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+.file-preview { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.file-icon { font-size: 20px; }
+.file-name { font-weight: 500; color: var(--mc-text-primary); }
+.file-size { font-size: 12px; color: var(--mc-text-tertiary); }
+.file-remove { border: none; background: none; color: var(--mc-text-tertiary); font-size: 18px; cursor: pointer; padding: 0 4px; }
+.file-remove:hover { color: var(--mc-danger); }
 </style>

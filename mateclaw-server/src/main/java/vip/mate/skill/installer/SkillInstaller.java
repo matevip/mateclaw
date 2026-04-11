@@ -235,6 +235,90 @@ public class SkillInstaller {
         return CompletableFuture.completedFuture(null);
     }
 
+    /**
+     * 同步安装 SkillBundle（用于 ZIP 上传等本地解析场景，无需异步任务）
+     *
+     * @return 安装结果 Map（skillId, name, version, filesCount）
+     */
+    public Map<String, Object> installFromBundle(SkillBundle bundle, boolean enable, boolean overwrite, String targetName) {
+        String skillName = (targetName != null && !targetName.isBlank()) ? targetName : bundle.name();
+        if (skillName == null || skillName.isBlank()) {
+            throw new vip.mate.exception.MateClawException("err.skill.name_required", "Cannot determine skill name from bundle");
+        }
+
+        boolean exists = skillService.listSkills().stream()
+                .anyMatch(s -> s.getName().equals(skillName));
+        if (exists && !overwrite) {
+            throw new vip.mate.exception.MateClawException("err.skill.name_exists",
+                    "Skill '" + skillName + "' already exists. Enable overwrite to replace.");
+        }
+
+        // 写入 workspace
+        if (exists) {
+            workspaceManager.cleanWorkspaceDataDirs(skillName);
+        }
+        workspaceManager.initWorkspace(skillName, bundle.content());
+
+        if (bundle.references() != null) {
+            for (var entry : bundle.references().entrySet()) {
+                String key = entry.getKey();
+                if (!key.startsWith("references/")) key = "references/" + key;
+                workspaceManager.writeWorkspaceFile(skillName, key, entry.getValue());
+            }
+        }
+        if (bundle.scripts() != null) {
+            for (var entry : bundle.scripts().entrySet()) {
+                String key = entry.getKey();
+                if (!key.startsWith("scripts/")) key = "scripts/" + key;
+                workspaceManager.writeWorkspaceFile(skillName, key, entry.getValue());
+            }
+        }
+
+        // 注册/更新 DB
+        SkillEntity skillEntity;
+        if (exists) {
+            skillEntity = skillService.listSkills().stream()
+                    .filter(s -> s.getName().equals(skillName))
+                    .findFirst().orElseThrow();
+            skillEntity.setSkillContent(bundle.content());
+            skillEntity.setDescription(bundle.description());
+            skillEntity.setVersion(bundle.version());
+            skillEntity.setAuthor(bundle.author());
+            skillEntity.setIcon(bundle.icon());
+            skillEntity.setConfigJson(buildConfigJson(bundle));
+            if (enable) skillEntity.setEnabled(true);
+            skillService.updateSkill(skillEntity);
+        } else {
+            skillEntity = new SkillEntity();
+            skillEntity.setName(skillName);
+            skillEntity.setDescription(bundle.description());
+            skillEntity.setSkillType("dynamic");
+            skillEntity.setVersion(bundle.version());
+            skillEntity.setAuthor(bundle.author());
+            skillEntity.setIcon(bundle.icon());
+            skillEntity.setSkillContent(bundle.content());
+            skillEntity.setConfigJson(buildConfigJson(bundle));
+            skillEntity.setEnabled(enable);
+            skillService.createSkill(skillEntity);
+        }
+
+        eventPublisher.publishEvent(new SkillWorkspaceEvent(
+                skillName, SkillWorkspaceEvent.Type.INSTALLED,
+                workspaceManager.resolveConventionPath(skillName)));
+
+        int filesCount = (bundle.references() != null ? bundle.references().size() : 0)
+                + (bundle.scripts() != null ? bundle.scripts().size() : 0) + 1;
+
+        log.info("Skill '{}' installed from ZIP (v{}, {} files)", skillName, bundle.version(), filesCount);
+
+        return Map.of(
+                "skillId", skillEntity.getId(),
+                "name", skillName,
+                "version", bundle.version() != null ? bundle.version() : "",
+                "filesCount", filesCount
+        );
+    }
+
     // ==================== 工具方法 ====================
 
     private String buildConfigJson(SkillBundle bundle) {
