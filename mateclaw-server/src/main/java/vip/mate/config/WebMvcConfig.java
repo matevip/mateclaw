@@ -1,6 +1,7 @@
 package vip.mate.config;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
@@ -19,6 +20,10 @@ public class WebMvcConfig implements WebMvcConfigurer {
 
     private final WorkspaceAccessInterceptor workspaceAccessInterceptor;
 
+    /** CORS allowed origins, comma-separated. Default "*" for dev, restrict in production. */
+    @Value("${mateclaw.cors.allowed-origins:*}")
+    private String allowedOrigins;
+
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(workspaceAccessInterceptor)
@@ -28,7 +33,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-                .allowedOriginPatterns("*")
+                .allowedOriginPatterns(allowedOrigins.split(","))
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
                 .allowCredentials(true)

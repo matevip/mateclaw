@@ -40,7 +40,7 @@ spring:
 
   h2:
     console:
-      enabled: true
+      enabled: ${H2_CONSOLE_ENABLED:false}
       path: /h2-console
 
   # Spring AI Alibaba (DashScope) - Spring AI Alibaba 1.1.x 配置路径
@@ -92,7 +92,7 @@ springdoc:
 # MateClaw 自定义配置
 mateclaw:
   jwt:
-    secret: MateClaw-JWT-Secret-Key-2024-Please-Change-In-Production
+    secret: ${JWT_SECRET:MateClaw-JWT-Secret-Key-2024-Please-Change-In-Production}
     expiration: 86400000
   # 搜索配置已迁移至数据库（mate_system_setting 表），通过 UI 系统设置管理
   # MCP server 配置已迁移至数据库（mate_mcp_server 表），通过 UI 管理
