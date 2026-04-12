@@ -146,6 +146,8 @@ export default {
     approvalWaiting: '等待输入框确认...',
     pendingApprovalPlaceholder: '输入 /approve 或 /deny 来回复...',
     messagePlaceholder: '输入消息... (Enter 发送, Shift+Enter 换行)',
+    thinkingOn: '深度思考已开启',
+    thinkingOff: '点击开启深度思考',
     subtitle: '基于 Spring AI Alibaba 的智能 AI 助手',
     // 排队相关
     queuedSending: '正在发送排队消息...',
@@ -613,8 +615,17 @@ export default {
       description: '描述',
       systemPrompt: '系统提示词',
       maxIterations: '最大迭代次数',
+      defaultThinkingLevel: '默认思考深度',
       tags: '标签',
       enabled: '启用',
+    },
+    thinkingLevels: {
+      auto: '跟随模型',
+      off: '关闭',
+      low: '低',
+      medium: '标准',
+      high: '深度',
+      max: '极限',
     },
     types: {
       react: 'ReAct（工具调用）',

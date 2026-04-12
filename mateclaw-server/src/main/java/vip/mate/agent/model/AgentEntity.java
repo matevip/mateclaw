@@ -52,6 +52,9 @@ public class AgentEntity {
     /** 所属工作区 ID（默认 1 = default） */
     private Long workspaceId;
 
+    /** 默认思考深度：off / low / medium / high / max，null 表示跟随模型默认 */
+    private String defaultThinkingLevel;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

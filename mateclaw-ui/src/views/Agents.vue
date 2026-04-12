@@ -185,6 +185,17 @@
               <label class="form-label">{{ t('agents.fields.maxIterations') }}</label>
               <input v-model.number="form.maxIterations" type="number" min="1" max="50" class="form-input" />
             </div>
+            <div class="form-group">
+              <label class="form-label">{{ t('agents.fields.defaultThinkingLevel') }}</label>
+              <select v-model="form.defaultThinkingLevel" class="form-input">
+                <option :value="null">{{ t('agents.thinkingLevels.auto') }}</option>
+                <option value="off">{{ t('agents.thinkingLevels.off') }}</option>
+                <option value="low">{{ t('agents.thinkingLevels.low') }}</option>
+                <option value="medium">{{ t('agents.thinkingLevels.medium') }}</option>
+                <option value="high">{{ t('agents.thinkingLevels.high') }}</option>
+                <option value="max">{{ t('agents.thinkingLevels.max') }}</option>
+              </select>
+            </div>
             <div class="form-group full-width">
               <label class="form-label">{{ t('agents.fields.description') }}</label>
               <input v-model="form.description" class="form-input" :placeholder="t('agents.placeholders.description')" />
@@ -297,7 +308,7 @@ const filterTabs = [
   { key: 'agents.tabs.disabled', value: 'disabled' },
 ]
 
-const defaultForm = (): Partial<Agent> & { name: string } => ({
+const defaultForm = (): Partial<Agent> & { name: string; defaultThinkingLevel: string | null } => ({
   name: '',
   description: '',
   agentType: 'react',
@@ -306,6 +317,7 @@ const defaultForm = (): Partial<Agent> & { name: string } => ({
   icon: '🤖',
   tags: '',
   enabled: true,
+  defaultThinkingLevel: null,
 })
 
 const form = ref(defaultForm())
@@ -402,6 +414,7 @@ async function openEditModal(agent: Agent) {
     icon: agent.icon || '🤖',
     tags: agent.tags || '',
     enabled: agent.enabled,
+    defaultThinkingLevel: (agent as any).defaultThinkingLevel || null,
   }
   modalTab.value = 'basic'
   showModal.value = true

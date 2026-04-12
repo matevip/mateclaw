@@ -233,6 +233,8 @@
         @approve="handleApprove"
         @deny="handleDeny"
         :enable-talk-mode="!!selectedAgentId"
+        :thinking-enabled="thinkingEnabled"
+        @toggle-thinking="thinkingEnabled = !thinkingEnabled"
         @talk="showTalkMode = true"
       />
     </div>
@@ -344,6 +346,11 @@ const providers = ref<ProviderInfo[]>([])
 const activeModels = ref<ActiveModelsInfo | null>(null)
 const pendingAttachments = ref<ChatAttachment[]>([])
 const uploadingAttachment = ref(false)
+
+// 思考模式：只有两个状态 — 开或关
+const thinkingEnabled = ref(localStorage.getItem('mateclaw_thinking') !== 'off')
+const thinkingLevel = computed(() => thinkingEnabled.value ? 'high' : 'off')
+watch(thinkingEnabled, (v) => localStorage.setItem('mateclaw_thinking', v ? 'on' : 'off'))
 
 // Dropdowns & menus
 const agentDropdownOpen = ref(false)
@@ -550,6 +557,7 @@ const {
   resetForNewConversation,
 } = useChat({
   baseUrl: '',
+  thinkingLevel,
   onStreamEnd: async (meta) => {
     // 流结束后刷新会话列表（更新 lastActiveTime / 标题等）
     await loadConversations()
@@ -1040,6 +1048,7 @@ async function handleSendMessage(content: string) {
       conversationId: currentConversationId.value,
       agentId: selectedAgentId.value,
       contentParts,
+      thinkingLevel: thinkingLevel.value,
       attachments: outgoingAttachments.map(a => ({
         type: 'file' as const,
         fileUrl: a.url,
@@ -1220,7 +1229,10 @@ function normalizeMessage(raw: Message): Message {
   if (msg.contentParts.length === 0 && msg.content) {
     if (msg.role === 'assistant') {
       const parsed = parseThinkingContent(msg.content)
-      if (parsed.thinking) msg.contentParts.push({ type: 'thinking', text: parsed.thinking })
+      // thinkingLevel=off 时不展示 thinking 内容，直接剥离 <think> 标签
+      if (parsed.thinking && thinkingLevel.value !== 'off') {
+        msg.contentParts.push({ type: 'thinking', text: parsed.thinking })
+      }
       if (parsed.content) msg.contentParts.push({ type: 'text', text: parsed.content })
       msg.content = parsed.content
     } else {

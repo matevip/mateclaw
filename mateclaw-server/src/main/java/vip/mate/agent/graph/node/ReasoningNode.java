@@ -17,6 +17,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.util.StringUtils;
 import vip.mate.agent.AgentToolSet;
 import vip.mate.agent.GraphEventPublisher;
+import vip.mate.agent.ThinkingLevelHolder;
 import vip.mate.agent.graph.NodeStreamingChatHelper;
 import vip.mate.agent.context.ConversationWindowManager;
 import vip.mate.agent.context.RuntimeContextInjector;
@@ -177,11 +178,16 @@ public class ReasoningNode implements NodeAction {
         promptMessages.add(new UserMessage(RuntimeContextInjector.buildContextMessage(workspaceBasePath)));
         promptMessages.addAll(messages);
 
+        // 请求级思考深度覆盖（ThinkingLevelHolder 由 AgentService 设置）
+        String effectiveReasoning = resolveEffectiveReasoningEffort();
+        log.info("[ReasoningNode] thinkingLevel={}, effectiveReasoningEffort={}, nodeDefault={}",
+                ThinkingLevelHolder.get(), effectiveReasoning, this.reasoningEffort);
+
         ChatOptions options;
-        if (StringUtils.hasText(reasoningEffort)) {
+        if (StringUtils.hasText(effectiveReasoning)) {
             OpenAiChatOptions oaiOpts = OpenAiChatOptions.builder()
                     .toolCallbacks(toolCallbacks)
-                    .reasoningEffort(reasoningEffort)
+                    .reasoningEffort(effectiveReasoning)
                     .maxTokens(maxOutputTokens)
                     .build();
             oaiOpts.setInternalToolExecutionEnabled(false);
@@ -372,5 +378,29 @@ public class ReasoningNode implements NodeAction {
         }
         streamTracker.updatePhase(conversationId, phase);
         streamTracker.broadcastObject(conversationId, "phase", GraphEventPublisher.phase(phase, extra).data());
+    }
+
+    /**
+     * 解析有效的 reasoningEffort。
+     * 优先级：ThinkingLevelHolder（请求级） > 构造时的 reasoningEffort（Agent/模型默认）。
+     * "off" 会清除 reasoningEffort（返回 null）。
+     */
+    private String resolveEffectiveReasoningEffort() {
+        String requestLevel = ThinkingLevelHolder.get();
+        if (requestLevel != null) {
+            if ("off".equalsIgnoreCase(requestLevel)) {
+                return null;
+            }
+            // thinkingLevel → reasoningEffort 映射
+            return switch (requestLevel.toLowerCase()) {
+                case "low" -> "low";
+                case "medium" -> "medium";
+                case "high" -> "high";
+                case "max" -> "high"; // OpenAI 最高支持 high
+                default -> requestLevel; // 透传未知值
+            };
+        }
+        // 无请求级覆盖，使用构造时的默认值
+        return this.reasoningEffort;
     }
 }

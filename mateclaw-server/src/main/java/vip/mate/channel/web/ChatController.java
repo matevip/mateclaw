@@ -418,7 +418,7 @@ public class ChatController {
                 ));
 
                 streamTracker.incrementFlux(conversationId);
-                Disposable disposable = agentService.chatStructuredStream(agentId, promptText, conversationId, username)
+                Disposable disposable = agentService.chatStructuredStream(agentId, promptText, conversationId, username, request.getThinkingLevel())
                         .doOnNext(delta -> {
                             if (emitterDone.get()) return;
                             try {
@@ -922,6 +922,8 @@ public class ChatController {
         private List<MessageContentPart> contentParts;
         /** true 表示断线重连，不发送新消息，只附着到已有的流 */
         private Boolean reconnect;
+        /** 思考深度：off / low / medium / high / max，null 表示跟随 Agent 默认 */
+        private String thinkingLevel;
     }
 
     /**

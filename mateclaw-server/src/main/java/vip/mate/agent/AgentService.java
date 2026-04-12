@@ -103,20 +103,40 @@ public class AgentService {
     }
 
     public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId) {
-        return chatStructuredStream(agentId, message, conversationId, "");
+        return chatStructuredStream(agentId, message, conversationId, "", null);
     }
 
     public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId,
                                                    String requesterId) {
+        return chatStructuredStream(agentId, message, conversationId, requesterId, null);
+    }
+
+    public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId,
+                                                   String requesterId, String thinkingLevel) {
         memoryRecallTracker.trackRecalls(agentId, message);
         BaseAgent agent = getOrBuildAgent(agentId);
 
+        // 设置请求级思考深度（通过 ThreadLocal 传递到 StateGraph 执行）
+        if (thinkingLevel != null && !thinkingLevel.isBlank()) {
+            ThinkingLevelHolder.set(thinkingLevel);
+        } else {
+            // 尝试从 Agent 默认配置读取
+            AgentEntity entity = getAgent(agentId);
+            if (entity != null && entity.getDefaultThinkingLevel() != null) {
+                ThinkingLevelHolder.set(entity.getDefaultThinkingLevel());
+            } else {
+                ThinkingLevelHolder.clear();
+            }
+        }
+
         if (agent instanceof StructuredStreamCapable capable) {
             return capable.chatStructuredStream(message, conversationId,
-                    requesterId != null ? requesterId : "");
+                    requesterId != null ? requesterId : "")
+                    .doFinally(signal -> ThinkingLevelHolder.clear());
         }
 
         // 降级：不支持结构化流的 Agent，包装为纯内容流
+        ThinkingLevelHolder.clear();
         return agent.chatStream(message, conversationId)
                 .map(chunk -> new StreamDelta(chunk, null));
     }

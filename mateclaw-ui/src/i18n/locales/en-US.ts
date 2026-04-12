@@ -146,6 +146,8 @@ export default {
     approvalWaiting: 'Awaiting confirmation below...',
     pendingApprovalPlaceholder: 'Type /approve or /deny to respond...',
     messagePlaceholder: 'Type a message... (Enter to send, Shift+Enter for new line)',
+    thinkingOn: 'Deep thinking enabled',
+    thinkingOff: 'Click to enable deep thinking',
     subtitle: 'Your intelligent AI assistant powered by Spring AI Alibaba',
     // Queue related
     queuedSending: 'Sending queued message...',
@@ -613,8 +615,17 @@ export default {
       description: 'Description',
       systemPrompt: 'System Prompt',
       maxIterations: 'Max Iterations',
+      defaultThinkingLevel: 'Default Thinking Level',
       tags: 'Tags',
       enabled: 'Enabled',
+    },
+    thinkingLevels: {
+      auto: 'Follow Model',
+      off: 'Off',
+      low: 'Low',
+      medium: 'Standard',
+      high: 'Deep',
+      max: 'Maximum',
     },
     types: {
       react: 'ReAct (Tool Calling)',

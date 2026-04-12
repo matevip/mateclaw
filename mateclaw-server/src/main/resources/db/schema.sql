@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS mate_agent (
     icon           VARCHAR(256),
     tags           VARCHAR(256),
     workspace_id   BIGINT       NOT NULL DEFAULT 1,
+    default_thinking_level VARCHAR(32) DEFAULT NULL,
     create_time    DATETIME     NOT NULL,
     update_time    DATETIME     NOT NULL,
     deleted        INT          NOT NULL DEFAULT 0

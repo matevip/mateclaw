@@ -320,7 +320,10 @@ public class NodeStreamingChatHelper {
                             return;
                         }
                         thinkingAccum.append(thinkingDelta);
-                        if (broadcast) {
+                        // thinkingLevel=off 时不广播 thinking（模型仍可能产生，但前端不展示）
+                        boolean suppressThinking = "off".equalsIgnoreCase(
+                                vip.mate.agent.ThinkingLevelHolder.get());
+                        if (broadcast && !suppressThinking) {
                             broadcastDelta(conversationId, "thinking_delta", thinkingDelta);
                         }
                     }

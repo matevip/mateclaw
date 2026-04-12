@@ -136,6 +136,18 @@
           <el-icon><Paperclip /></el-icon>
         </button>
 
+        <!-- 深度思考开关 -->
+        <button
+          type="button"
+          class="action-btn thinking-btn"
+          :class="{ active: thinkingEnabled }"
+          :disabled="disabled"
+          @click="emit('toggle-thinking')"
+          :title="thinkingEnabled ? t('chat.thinkingOn') : t('chat.thinkingOff')"
+        >
+          <el-icon><MagicStick /></el-icon>
+        </button>
+
         <!-- Talk Mode 按钮 -->
         <button
           v-if="enableTalkMode"
@@ -190,7 +202,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { CloseBold, Microphone, Paperclip, Promotion, Select, Timer, WarningFilled } from '@element-plus/icons-vue'
+import { CloseBold, MagicStick, Microphone, Paperclip, Promotion, Select, Timer, WarningFilled } from '@element-plus/icons-vue'
 import type { ChatAttachment, PendingApprovalMeta, StreamPhase, QueuedMessage } from '@/types'
 
 interface Props {
@@ -224,6 +236,8 @@ interface Props {
   queueSize?: number
   /** 是否启用 Talk Mode 按钮 */
   enableTalkMode?: boolean
+  /** 深度思考开关状态 */
+  thinkingEnabled?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -241,6 +255,7 @@ const props = withDefaults(defineProps<Props>(), {
   queuedMessage: null,
   queueSize: 0,
   enableTalkMode: false,
+  thinkingEnabled: false,
 })
 
 const emit = defineEmits<{
@@ -253,6 +268,7 @@ const emit = defineEmits<{
   approve: [pendingId: string]
   deny: [pendingId: string]
   talk: []
+  'toggle-thinking': []
 }>()
 
 const { t } = useI18n()
@@ -561,6 +577,28 @@ defineExpose({
 .action-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.thinking-btn {
+  position: relative;
+}
+.thinking-btn.active {
+  color: var(--el-color-primary, #409eff);
+}
+.thinking-btn.active::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--el-color-primary, #409eff);
+}
+.thinking-btn:hover:not(:disabled) {
+  color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary-light-9, rgba(64, 158, 255, 0.08));
 }
 
 .talk-btn:hover:not(:disabled) {

@@ -21,6 +21,8 @@ export interface UseChatOptions {
   baseUrl: string
   /** 认证 Token */
   token?: string
+  /** 当前思考深度（响应式 ref），off 时抑制 thinking 展示 */
+  thinkingLevel?: import('vue').Ref<string>
   /**
    * 统一回调：流结束后（done/error/stopped 都会触发）。
    * 前端应在此回调中做持久化历史收口（reconcile）。
@@ -86,10 +88,13 @@ export interface SendMessageOptions {
   attachments?: MessageContentPart[]
   /** 消息内容 */
   contentParts?: MessageContentPart[]
+  /** 思考深度：off / low / medium / high / max */
+  thinkingLevel?: string
 }
 
 export function useChat(options: UseChatOptions): UseChatReturn {
   const { baseUrl, token, onStreamEnd } = options
+  const thinkingLevelRef = options.thinkingLevel
 
   /**
    * 带认证的 fetch 封装 — 从 localStorage 读取 token（与 useStream / http.ts 一致）
@@ -274,10 +279,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   stream.on('thinking_delta', (data) => {
     if (isStaleEvent(data)) return
+    // thinkingLevel=off 时抑制 thinking 展示
+    if (options.thinkingLevel?.value === 'off') return
     if (currentAssistantId.value) {
       appendMessageContent(currentAssistantId.value, data.delta || '', 'thinking')
       if (streamPhase.value !== 'summarizing_observations') {
-        streamPhase.value = 'thinking'
+        streamPhase.value = options.thinkingLevel?.value === 'off' ? 'streaming' : 'thinking'
       }
       // 分段：追加到当前 thinking segment 或创建新的
       const segs = currentSegments.value
@@ -818,7 +825,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     const assistantMessage = createAssistantMessage('', convId2)
     ;(assistantMessage as any)._turnId = activeTurnId
     currentAssistantId.value = assistantMessage.id as string
-    streamPhase.value = 'thinking'
+    streamPhase.value = options.thinkingLevel?.value === 'off' ? 'streaming' : 'thinking'
     phaseInfo.value = null
   })
 
@@ -932,7 +939,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     error.value = null
     errorFired = false
     streamConversationId = conversationId
-    streamPhase.value = 'thinking'
+    streamPhase.value = thinkingLevelRef?.value === 'off' ? 'streaming' : 'thinking'
     phaseInfo.value = null
 
     try {
@@ -946,12 +953,16 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       currentAssistantId.value = assistantMessage.id as string
 
       // contentParts 已由 buildOutgoingParts 包含 file entries，不要重复合并 attachments
-      await stream.connect({
+      const body: Record<string, any> = {
         agentId,
         message: content,
         conversationId,
         contentParts,
-      })
+      }
+      if (options.thinkingLevel) {
+        body.thinkingLevel = options.thinkingLevel
+      }
+      await stream.connect(body)
     } catch (e) {
       error.value = e instanceof Error ? e : new Error(String(e))
       streamPhase.value = 'idle'
@@ -998,7 +1009,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         const assistantMessage = createAssistantMessage('', conversationId)
         ;(assistantMessage as any)._turnId = activeTurnId
         currentAssistantId.value = assistantMessage.id as string
-        streamPhase.value = 'thinking'
+        streamPhase.value = thinkingLevelRef?.value === 'off' ? 'streaming' : 'thinking'
         phaseInfo.value = null
         await stream.connect({
           agentId,
