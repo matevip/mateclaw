@@ -183,22 +183,7 @@ public class ReasoningNode implements NodeAction {
         log.info("[ReasoningNode] thinkingLevel={}, effectiveReasoningEffort={}, nodeDefault={}",
                 ThinkingLevelHolder.get(), effectiveReasoning, this.reasoningEffort);
 
-        ChatOptions options;
-        if (StringUtils.hasText(effectiveReasoning)) {
-            OpenAiChatOptions oaiOpts = OpenAiChatOptions.builder()
-                    .toolCallbacks(toolCallbacks)
-                    .reasoningEffort(effectiveReasoning)
-                    .maxTokens(maxOutputTokens)
-                    .build();
-            oaiOpts.setInternalToolExecutionEnabled(false);
-            options = oaiOpts;
-        } else {
-            options = ToolCallingChatOptions.builder()
-                    .toolCallbacks(toolCallbacks)
-                    .internalToolExecutionEnabled(false)
-                    .maxTokens(maxOutputTokens)
-                    .build();
-        }
+        ChatOptions options = buildChatOptions(effectiveReasoning);
 
         Prompt prompt = new Prompt(promptMessages, options);
 
@@ -381,6 +366,62 @@ public class ReasoningNode implements NodeAction {
     }
 
     /**
+     * 根据 ChatModel 类型构建合适的 ChatOptions。
+     * - AnthropicChatModel → AnthropicChatOptions（支持 extended thinking）
+     * - 其他（OpenAI/DashScope）→ OpenAiChatOptions（支持 reasoningEffort）
+     */
+    private ChatOptions buildChatOptions(String effectiveReasoning) {
+        // Anthropic 协议模型（AnthropicChatModel）：MiniMax 也用此协议但不支持 thinking
+        if (chatModel instanceof org.springframework.ai.anthropic.AnthropicChatModel anthropicModel) {
+            org.springframework.ai.anthropic.AnthropicChatOptions.Builder builder =
+                    org.springframework.ai.anthropic.AnthropicChatOptions.builder()
+                    .toolCallbacks(toolCallbacks)
+                    .internalToolExecutionEnabled(false);
+
+            // 仅对真正的 Claude 模型启用 extended thinking（MiniMax 等走 Anthropic 协议但不支持）
+            String thinkingLevel = ThinkingLevelHolder.get();
+            boolean thinkingOn = thinkingLevel != null && !"off".equalsIgnoreCase(thinkingLevel);
+            String currentModel = getAnthropicModelName(anthropicModel);
+            boolean isClaudeModel = currentModel != null && currentModel.toLowerCase().contains("claude");
+
+            if (thinkingOn && isClaudeModel) {
+                int budgetTokens = switch (thinkingLevel.toLowerCase()) {
+                    case "low" -> 4096;
+                    case "medium" -> 8192;
+                    case "high" -> 16384;
+                    case "max" -> 32768;
+                    default -> 16384;
+                };
+                builder.thinking(org.springframework.ai.anthropic.api.AnthropicApi.ThinkingType.ENABLED, budgetTokens);
+                builder.maxTokens(budgetTokens + maxOutputTokens);
+                builder.temperature(1.0);
+                log.info("[ReasoningNode] Anthropic extended thinking enabled: model={}, budget={}", currentModel, budgetTokens);
+            } else {
+                builder.maxTokens(maxOutputTokens);
+                if (thinkingOn && !isClaudeModel) {
+                    log.debug("[ReasoningNode] Anthropic protocol model {} does not support thinking, skipping", currentModel);
+                }
+            }
+            return builder.build();
+        }
+
+        // OpenAI / DashScope / 其他
+        // 始终使用 OpenAiChatOptions（而非 ToolCallingChatOptions），
+        // 因为 ToolCallingChatOptions 会丢失 OpenAI 特有参数（streamUsage 等），
+        // 导致 Kimi 等 OpenAI 兼容 API 响应异常或提前截断。
+        OpenAiChatOptions.Builder oaiBuilder = OpenAiChatOptions.builder()
+                .toolCallbacks(toolCallbacks)
+                .maxTokens(maxOutputTokens);
+        if (StringUtils.hasText(effectiveReasoning)) {
+            oaiBuilder.reasoningEffort(effectiveReasoning);
+        }
+        OpenAiChatOptions oaiOpts = oaiBuilder.build();
+        oaiOpts.setInternalToolExecutionEnabled(false);
+        oaiOpts.setStreamUsage(true);
+        return oaiOpts;
+    }
+
+    /**
      * 解析有效的 reasoningEffort。
      * 优先级：ThinkingLevelHolder（请求级） > 构造时的 reasoningEffort（Agent/模型默认）。
      * "off" 会清除 reasoningEffort（返回 null）。
@@ -402,5 +443,21 @@ public class ReasoningNode implements NodeAction {
         }
         // 无请求级覆盖，使用构造时的默认值
         return this.reasoningEffort;
+    }
+
+    /**
+     * 从 AnthropicChatModel 的 defaultOptions 中提取模型名称。
+     * 用于判断是否为真正的 Claude 模型（vs MiniMax 等走 Anthropic 协议的非 Claude 模型）。
+     */
+    private String getAnthropicModelName(org.springframework.ai.anthropic.AnthropicChatModel model) {
+        try {
+            var options = model.getDefaultOptions();
+            if (options instanceof org.springframework.ai.anthropic.AnthropicChatOptions aOpts) {
+                return aOpts.getModel();
+            }
+        } catch (Exception e) {
+            log.debug("[ReasoningNode] Failed to extract Anthropic model name: {}", e.getMessage());
+        }
+        return null;
     }
 }

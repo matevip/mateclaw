@@ -286,21 +286,18 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       if (streamPhase.value !== 'summarizing_observations') {
         streamPhase.value = options.thinkingLevel?.value === 'off' ? 'streaming' : 'thinking'
       }
-      // 分段：追加到当前 thinking segment 或创建新的
+      // 分段：所有 thinking 合并到一个 segment（不因 tool_call 中断而创建多个）
       const segs = currentSegments.value
-      let thinkSeg = segs.findLast((s: MessageSegment) => s.type === 'thinking' && s.status === 'running')
+      // 优先复用已有的 thinking segment（无论 running 还是 completed）
+      let thinkSeg = segs.find((s: MessageSegment) => s.type === 'thinking')
       if (!thinkSeg) {
         thinkSeg = { id: genSegId(), type: 'thinking', status: 'running', thinkingText: '', timestamp: Date.now() }
-        // 修复：如果前面已有 content segment（模型先发 content 后发 thinking），
-        // 把 thinking 插入到第一个 content 之前，确保 thinking 在上方显示
-        const firstContentIdx = segs.findIndex((s: MessageSegment) => s.type === 'content')
-        if (firstContentIdx >= 0 && !segs.some((s: MessageSegment) => s.type === 'tool_call')) {
-          segs.splice(firstContentIdx, 0, thinkSeg)
-        } else {
-          segs.push(thinkSeg)
-        }
+        // 插入到开头（thinking 始终在最上方）
+        segs.unshift(thinkSeg)
         flushSegmentsToMessage()
       }
+      // 新的 thinking 到来，重新设为 running
+      thinkSeg.status = 'running'
       thinkSeg.thinkingText = (thinkSeg.thinkingText || '') + (data.delta || '')
     }
   })

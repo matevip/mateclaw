@@ -362,9 +362,18 @@ const showThinkingPanel = computed(() => !!thinkingContent.value)
 // 思考耗时（生成结束后显示）
 const thinkingDuration = computed(() => {
   if (isGenerating.value) return ''
+  if (!thinkingContent.value) return ''
+  // 优先使用 segment 真实时间戳
+  const segs = (props.message as any).segments || []
+  const thinkSeg = segs.find((s: any) => s.type === 'thinking')
+  const contentSeg = segs.find((s: any) => s.type === 'content')
+  if (thinkSeg?.timestamp && contentSeg?.timestamp) {
+    const sec = Math.max(1, Math.round((contentSeg.timestamp - thinkSeg.timestamp) / 1000))
+    return sec >= 60 ? `${Math.floor(sec / 60)}m ${sec % 60}s` : `${sec}s`
+  }
+  // 回退：从内容长度估算
   const len = thinkingContent.value.length
   if (len < 50) return ''
-  // 粗略估计：每 100 字符约 1 秒
   const sec = Math.max(1, Math.round(len / 100))
   return sec >= 60 ? `${Math.floor(sec / 60)}m ${sec % 60}s` : `${sec}s`
 })

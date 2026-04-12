@@ -37,6 +37,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
+import vip.mate.agent.ThinkingLevelHolder;
 import vip.mate.agent.graph.StateGraphReActAgent;
 import vip.mate.agent.graph.NodeStreamingChatHelper;
 import vip.mate.agent.graph.executor.ToolExecutionExecutor;
@@ -940,18 +941,40 @@ public class AgentGraphBuilder {
         if (StringUtils.hasText(runtimeModel.getModelName())) {
             builder.model(runtimeModel.getModelName());
         }
-        // Anthropic API does not allow temperature and top_p to be specified simultaneously.
-        // Prefer temperature; only fall back to top_p when temperature is absent.
-        if (runtimeModel.getTemperature() != null) {
-            builder.temperature(runtimeModel.getTemperature());
-        } else if (runtimeModel.getTopP() != null) {
-            builder.topP(runtimeModel.getTopP());
-        }
-        if (runtimeModel.getMaxTokens() != null) {
-            builder.maxTokens(runtimeModel.getMaxTokens());
+
+        // Extended thinking: 通过 ThinkingLevelHolder 获取请求级思考深度
+        String thinkingLevel = ThinkingLevelHolder.get();
+        boolean thinkingEnabled = thinkingLevel != null && !"off".equalsIgnoreCase(thinkingLevel);
+
+        if (thinkingEnabled) {
+            // Anthropic thinking 模式下：temperature 必须为 1，不能设 top_p
+            // budget_tokens 根据级别映射
+            int budgetTokens = switch (thinkingLevel.toLowerCase()) {
+                case "low" -> 4096;
+                case "medium" -> 8192;
+                case "high" -> 16384;
+                case "max" -> 32768;
+                default -> 16384;
+            };
+            builder.thinking(org.springframework.ai.anthropic.api.AnthropicApi.ThinkingType.ENABLED, budgetTokens);
+            // Thinking 模式要求 max_tokens 足够大（含 thinking tokens）
+            builder.maxTokens(Math.max(budgetTokens + 4096,
+                    runtimeModel.getMaxTokens() != null ? runtimeModel.getMaxTokens() : 8192));
+            // Anthropic thinking 模式要求 temperature=1
+            builder.temperature(1.0);
         } else {
-            // Anthropic requires max_tokens; set a safe default
-            builder.maxTokens(4096);
+            // 非 thinking 模式：正常设置参数
+            // Anthropic API does not allow temperature and top_p to be specified simultaneously.
+            if (runtimeModel.getTemperature() != null) {
+                builder.temperature(runtimeModel.getTemperature());
+            } else if (runtimeModel.getTopP() != null) {
+                builder.topP(runtimeModel.getTopP());
+            }
+            if (runtimeModel.getMaxTokens() != null) {
+                builder.maxTokens(runtimeModel.getMaxTokens());
+            } else {
+                builder.maxTokens(4096);
+            }
         }
         return builder.internalToolExecutionEnabled(false).build();
     }
