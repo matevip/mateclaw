@@ -61,6 +61,8 @@ public class ReasoningNode implements NodeAction {
     private final ConversationWindowManager conversationWindowManager;
     private final ChatStreamTracker streamTracker;
     private final int maxOutputTokens;
+    /** Wiki 相关性注入（可选，null 时跳过） */
+    private final vip.mate.wiki.service.WikiContextService wikiContextService;
 
     public ReasoningNode(ChatModel chatModel, AgentToolSet toolSet, String reasoningEffort,
                          NodeStreamingChatHelper streamingHelper,
@@ -74,6 +76,15 @@ public class ReasoningNode implements NodeAction {
                          NodeStreamingChatHelper streamingHelper,
                          ConversationWindowManager conversationWindowManager,
                          ChatStreamTracker streamTracker, int maxOutputTokens) {
+        this(chatModel, toolSet, reasoningEffort, streamingHelper, conversationWindowManager,
+                streamTracker, maxOutputTokens, null);
+    }
+
+    public ReasoningNode(ChatModel chatModel, AgentToolSet toolSet, String reasoningEffort,
+                         NodeStreamingChatHelper streamingHelper,
+                         ConversationWindowManager conversationWindowManager,
+                         ChatStreamTracker streamTracker, int maxOutputTokens,
+                         vip.mate.wiki.service.WikiContextService wikiContextService) {
         this.chatModel = chatModel;
         this.toolCallbacks = toolSet.callbacks();
         this.reasoningEffort = reasoningEffort;
@@ -81,6 +92,7 @@ public class ReasoningNode implements NodeAction {
         this.conversationWindowManager = conversationWindowManager;
         this.streamTracker = streamTracker;
         this.maxOutputTokens = maxOutputTokens > 0 ? maxOutputTokens : DEFAULT_MAX_OUTPUT_TOKENS;
+        this.wikiContextService = wikiContextService;
     }
 
     public ReasoningNode(ChatModel chatModel, AgentToolSet toolSet, String reasoningEffort,
@@ -111,6 +123,7 @@ public class ReasoningNode implements NodeAction {
         this.conversationWindowManager = null;
         this.streamTracker = null;
         this.maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS;
+        this.wikiContextService = null;
     }
 
     @Override
@@ -176,6 +189,22 @@ public class ReasoningNode implements NodeAction {
         List<Message> promptMessages = new ArrayList<>();
         promptMessages.add(new SystemMessage(systemPrompt));
         promptMessages.add(new UserMessage(RuntimeContextInjector.buildContextMessage(workspaceBasePath)));
+
+        // Wiki 相关性注入：根据用户消息提取相关页面摘要
+        if (wikiContextService != null) {
+            String agentIdStr = state.value(MateClawStateKeys.AGENT_ID, "");
+            String userMsg = state.value(MateClawStateKeys.USER_MESSAGE, "");
+            try {
+                Long parsedAgentId = Long.parseLong(agentIdStr);
+                String wikiRelevant = wikiContextService.buildRelevantContext(parsedAgentId, userMsg);
+                if (wikiRelevant != null && !wikiRelevant.isBlank()) {
+                    promptMessages.add(new UserMessage(wikiRelevant));
+                }
+            } catch (NumberFormatException ignored) {
+                // agentId 无法解析时跳过 wiki 注入
+            }
+        }
+
         promptMessages.addAll(messages);
 
         // 请求级思考深度覆盖（ThinkingLevelHolder 由 AgentService 设置）

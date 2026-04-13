@@ -1,15 +1,16 @@
 <template>
   <div class="page-viewer" v-if="store.currentPage">
+    <!-- Header -->
     <div class="page-viewer-header">
       <div class="page-viewer-copy">
-        <div class="page-viewer-kicker">{{ t('wiki.pageKicker') }}</div>
+        <div class="page-viewer-kicker">
+          <span class="kicker-dot" :class="store.currentPage.lastUpdatedBy === 'manual' ? 'manual' : 'ai'"></span>
+          {{ store.currentPage.lastUpdatedBy === 'ai' ? t('wiki.generatedByAi') : t('wiki.editedManually') }}
+        </div>
         <h2 class="page-viewer-title">{{ store.currentPage.title }}</h2>
         <div class="page-viewer-meta">
-          <span>v{{ store.currentPage.version }}</span>
-          <span>&middot;</span>
-          <span>{{ store.currentPage.lastUpdatedBy === 'ai' ? t('wiki.generatedByAi') : t('wiki.editedManually') }}</span>
-          <span>&middot;</span>
-          <span>{{ store.currentPage.slug }}</span>
+          <span class="meta-badge">v{{ store.currentPage.version }}</span>
+          <span class="meta-slug">{{ store.currentPage.slug }}</span>
         </div>
       </div>
       <div class="page-viewer-actions">
@@ -19,16 +20,20 @@
         <button v-if="editing" class="btn-primary btn-sm" @click="saveEdit">
           {{ t('common.save') }}
         </button>
+        <button v-if="!editing" class="btn-secondary btn-sm btn-delete" @click="handleDelete">
+          {{ t('common.delete') }}
+        </button>
       </div>
     </div>
 
-    <!-- Summary -->
-    <div v-if="store.currentPage.summary" class="page-summary">
-      {{ store.currentPage.summary }}
+    <!-- Summary Card -->
+    <div v-if="store.currentPage.summary && !editing" class="page-summary">
+      <div class="summary-label">Summary</div>
+      <p class="summary-text">{{ store.currentPage.summary }}</p>
     </div>
 
     <!-- Content -->
-    <div v-if="!editing" class="page-content markdown-body" v-html="renderedContent"></div>
+    <article v-if="!editing" class="page-content markdown-body" v-html="renderedContent"></article>
     <textarea v-else v-model="editContent" class="page-editor" rows="30"></textarea>
 
     <!-- Backlinks -->
@@ -93,6 +98,19 @@ async function saveEdit() {
   editing.value = false
 }
 
+async function handleDelete() {
+  if (!store.currentKB || !store.currentPage) return
+  const confirmed = confirm(t('wiki.confirmDelete', { title: store.currentPage.title }))
+  if (!confirmed) return
+  try {
+    await wikiApi.deletePage(store.currentKB.id, store.currentPage.slug)
+    store.currentPage = null
+    await store.fetchPages(store.currentKB.id)
+  } catch (e: any) {
+    alert(e?.message || 'Delete failed')
+  }
+}
+
 async function openPage(slug: string) {
   if (!store.currentKB) return
   await store.loadPage(store.currentKB.id, slug)
@@ -125,17 +143,26 @@ onMounted(() => {
 .btn-secondary { padding: 8px 16px; background: var(--mc-bg-elevated); color: var(--mc-text-primary); border: 1px solid var(--mc-border); border-radius: 10px; font-size: 14px; cursor: pointer; }
 .btn-secondary:hover { background: var(--mc-bg-sunken); }
 .btn-secondary.btn-sm { padding: 6px 14px; font-size: 13px; }
+.btn-secondary.btn-delete { color: var(--el-color-danger, #f56c6c); }
+.btn-secondary.btn-delete:hover { background: var(--el-color-danger-light-9, #fef0f0); border-color: var(--el-color-danger-light-5, #fab6b6); }
 
 /* Header */
-.page-viewer-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--mc-border-light); }
+.page-viewer-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--mc-border-light); }
 .page-viewer-copy { min-width: 0; }
-.page-viewer-kicker { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--mc-accent); margin-bottom: 6px; }
-.page-viewer-title { font-size: clamp(26px, 3vw, 34px); line-height: 1.02; letter-spacing: -0.04em; font-weight: 800; color: var(--mc-text-primary); margin: 0; }
-.page-viewer-meta { font-size: 12px; color: var(--mc-text-secondary); display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-.page-viewer-actions { display: flex; gap: 8px; }
+.page-viewer-kicker { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mc-text-secondary); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.kicker-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.kicker-dot.ai { background: var(--el-color-primary, #409eff); }
+.kicker-dot.manual { background: var(--el-color-success, #67c23a); }
+.page-viewer-title { font-size: clamp(24px, 3vw, 32px); line-height: 1.1; letter-spacing: -0.03em; font-weight: 700; color: var(--mc-text-primary); margin: 0; }
+.page-viewer-meta { font-size: 12px; color: var(--mc-text-secondary); display: flex; gap: 10px; margin-top: 10px; align-items: center; }
+.meta-badge { padding: 2px 8px; background: var(--mc-bg-sunken); border-radius: 6px; font-weight: 600; font-size: 11px; }
+.meta-slug { font-family: 'JetBrains Mono', monospace; font-size: 11px; opacity: 0.7; }
+.page-viewer-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
 /* Summary */
-.page-summary { padding: 14px 16px; background: linear-gradient(180deg, var(--mc-bg-muted), var(--mc-bg-elevated)); border-radius: 16px; font-size: 14px; color: var(--mc-text-secondary); border-left: 3px solid var(--mc-primary); line-height: 1.7; }
+.page-summary { padding: 16px 20px; background: var(--mc-bg-muted); border-radius: 12px; border-left: 3px solid var(--mc-primary); }
+.summary-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mc-text-secondary); margin-bottom: 6px; }
+.summary-text { font-size: 14px; color: var(--mc-text-primary); line-height: 1.7; margin: 0; }
 
 /* Content */
 .page-content { font-size: 15px; line-height: 1.8; color: var(--mc-text-primary); padding: 2px 2px 0; }

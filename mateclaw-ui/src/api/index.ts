@@ -388,6 +388,8 @@ export const wikiApi = {
     http.put(`/wiki/knowledge-bases/${kbId}/pages/${encodeURIComponent(slug)}`, { content }),
   deletePage: (kbId: number, slug: string) =>
     http.delete(`/wiki/knowledge-bases/${kbId}/pages/${encodeURIComponent(slug)}`),
+  batchDeletePages: (kbId: number, slugs: string[]) =>
+    http.delete(`/wiki/knowledge-bases/${kbId}/pages/batch`, { data: slugs }),
   getBacklinks: (kbId: number, slug: string) =>
     http.get(`/wiki/knowledge-bases/${kbId}/pages/${encodeURIComponent(slug)}/backlinks`),
 

@@ -1143,6 +1143,7 @@ export default {
     selectKB: '请选择一个知识库',
     selectPage: '从左侧选择一个页面查看',
     pageKicker: '知识页面',
+    confirmDelete: '确认删除页面「{title}」？此操作不可撤销。',
     kbName: '名称',
     kbNamePlaceholder: '输入知识库名称',
     kbDescription: '描述',

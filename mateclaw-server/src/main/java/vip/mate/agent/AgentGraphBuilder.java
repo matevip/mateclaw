@@ -342,7 +342,7 @@ public class AgentGraphBuilder {
             ChatModel fallbackModel = buildFallbackModel(chatModel);
             NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackModel);
             ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties);
-            ReasoningNode reasoningNode = new ReasoningNode(chatModel, toolSet, reasoningEffort, streamingHelper, conversationWindowManager, streamTracker);
+            ReasoningNode reasoningNode = new ReasoningNode(chatModel, toolSet, reasoningEffort, streamingHelper, conversationWindowManager, streamTracker, 0, wikiContextService);
             ActionNode actionNode = new ActionNode(executor, streamTracker);
             ObservationProcessor observationProcessor = new ObservationProcessor(graphObservationProperties);
             ObservationNode observationNode = new ObservationNode(observationProcessor, streamTracker);

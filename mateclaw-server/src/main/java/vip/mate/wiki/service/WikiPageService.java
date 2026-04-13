@@ -12,6 +12,7 @@ import vip.mate.wiki.repository.WikiPageMapper;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -30,6 +31,13 @@ public class WikiPageService {
     private final ObjectMapper objectMapper;
 
     private static final Pattern WIKI_LINK_PATTERN = Pattern.compile("\\[\\[([^\\]]+)]]");
+
+    /** 页面摘要缓存：kbId → (data, expiresAt)。5 分钟 TTL，写操作失效。 */
+    private record CachedSummaries(List<WikiPageEntity> data, long expiresAt) {
+        boolean isExpired() { return System.currentTimeMillis() > expiresAt; }
+    }
+    private final ConcurrentHashMap<Long, CachedSummaries> summaryCache = new ConcurrentHashMap<>();
+    private static final long SUMMARY_CACHE_TTL_MS = 5 * 60_000; // 5 分钟
 
     /**
      * 列出知识库的所有页面（不含 content）
@@ -54,16 +62,39 @@ public class WikiPageService {
     }
 
     /**
-     * 列出页面摘要（用于上下文注入和 LLM 消化）
+     * 列出页面摘要（用于上下文注入和 LLM 消化）。
+     * 带 5 分钟 TTL 缓存，写操作自动失效。
      */
     public List<WikiPageEntity> listSummaries(Long kbId) {
+        CachedSummaries cached = summaryCache.get(kbId);
+        if (cached != null && !cached.isExpired()) {
+            return cached.data;
+        }
         List<WikiPageEntity> pages = pageMapper.selectList(
                 new LambdaQueryWrapper<WikiPageEntity>()
                         .select(WikiPageEntity::getSlug, WikiPageEntity::getTitle,
                                 WikiPageEntity::getSummary, WikiPageEntity::getLastUpdatedBy)
                         .eq(WikiPageEntity::getKbId, kbId)
                         .orderByAsc(WikiPageEntity::getTitle));
+        summaryCache.put(kbId, new CachedSummaries(pages, System.currentTimeMillis() + SUMMARY_CACHE_TTL_MS));
         return pages;
+    }
+
+    /** 失效指定知识库的摘要缓存（页面增删改时调用） */
+    public void evictSummaryCache(Long kbId) {
+        summaryCache.remove(kbId);
+    }
+
+    /**
+     * DB 级别搜索页面（不加载 content CLOB 到 Java 内存）
+     */
+    public List<WikiPageEntity> searchPages(Long kbId, String query) {
+        String escaped = query.toLowerCase()
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
+        String pattern = "%" + escaped + "%";
+        return pageMapper.searchByKeyword(kbId, pattern);
     }
 
     public WikiPageEntity getBySlug(Long kbId, String slug) {
@@ -94,6 +125,7 @@ public class WikiPageService {
         entity.setVersion(1);
         entity.setLastUpdatedBy("ai");
         pageMapper.insert(entity);
+        evictSummaryCache(kbId);
         return entity;
     }
 
@@ -118,6 +150,8 @@ public class WikiPageService {
                     rawIds.add(newRawId);
                     existing.setSourceRawIds(toJson(rawIds));
                     pageMapper.updateById(existing);
+                    evictSummaryCache(kbId);
+                    return getBySlug(kbId, slug); // 从 DB 重新加载确保一致性
                 }
             }
             return existing;
@@ -139,6 +173,7 @@ public class WikiPageService {
         }
 
         pageMapper.updateById(existing);
+        evictSummaryCache(kbId);
         return existing;
     }
 
@@ -208,6 +243,50 @@ public class WikiPageService {
                 new LambdaQueryWrapper<WikiPageEntity>()
                         .eq(WikiPageEntity::getKbId, kbId)
                         .eq(WikiPageEntity::getSlug, slug));
+        evictSummaryCache(kbId);
+    }
+
+    /**
+     * 批量删除页面（按 slug 列表）
+     */
+    @Transactional
+    public int batchDelete(Long kbId, List<String> slugs) {
+        int count = 0;
+        for (String slug : slugs) {
+            delete(kbId, slug);
+            count++;
+        }
+        return count;
+    }
+
+    /**
+     * 删除某材料独占的旧页面（重处理前清理）。
+     * 安全策略：只删同时满足以下条件的页面：
+     * 1. sourceRawIds 仅包含该 rawId（独占，非共享）
+     * 2. lastUpdatedBy != 'manual'（非人工维护）
+     * 多来源页面：仅移除该 rawId 引用，保留页面。
+     */
+    @Transactional
+    public int deleteExclusiveBySourceRawId(Long kbId, Long rawId) {
+        List<WikiPageEntity> allPages = listByKbId(kbId);
+        int deleted = 0;
+        for (WikiPageEntity page : allPages) {
+            if ("manual".equals(page.getLastUpdatedBy())) continue;
+            List<Long> sourceIds = parseSourceRawIds(page.getSourceRawIds());
+            if (sourceIds.contains(rawId)) {
+                if (sourceIds.size() == 1) {
+                    // 独占页面：直接删除
+                    delete(kbId, page.getSlug());
+                    deleted++;
+                } else {
+                    // 多来源页面：仅移除该 rawId 引用
+                    sourceIds.remove(rawId);
+                    page.setSourceRawIds(toJson(sourceIds));
+                    pageMapper.updateById(page);
+                }
+            }
+        }
+        return deleted;
     }
 
     public int countByKbId(Long kbId) {

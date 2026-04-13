@@ -1133,6 +1133,7 @@ export default {
     selectKB: 'Select a knowledge base',
     selectPage: 'Select a page from the sidebar',
     pageKicker: 'Knowledge Page',
+    confirmDelete: 'Delete page "{title}"? This cannot be undone.',
     kbName: 'Name',
     kbNamePlaceholder: 'Enter knowledge base name',
     kbDescription: 'Description',

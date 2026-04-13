@@ -19,7 +19,13 @@ import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.model.WikiRawMaterialEntity;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Wiki 处理服务
@@ -40,6 +46,11 @@ public class WikiProcessingService {
     private final ModelConfigService modelConfigService;
     private final AgentGraphBuilder agentGraphBuilder;
     private final ObjectMapper objectMapper;
+
+    /** 并行 chunk 处理执行器（JDK 21 虚拟线程） */
+    private static final ExecutorService WIKI_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
+    /** 最大并行 chunk 数 */
+    private static final int MAX_PARALLEL_CHUNKS = 3;
 
     /**
      * 处理单个原始材料
@@ -74,13 +85,22 @@ public class WikiProcessingService {
                 return;
             }
 
-            // Phase 2: LLM 消化
+            // Phase 2: 清除该材料之前生成的旧页面（仅独占+非手工页面）
+            int cleaned = pageService.deleteExclusiveBySourceRawId(kb.getId(), rawId);
+            if (cleaned > 0) {
+                log.info("[Wiki] Cleaned {} exclusive old pages for raw material {} before reprocessing", cleaned, rawId);
+            }
+
+            // Phase 3: 构建已有页面索引（一次构建，所有 chunk 共用）
+            String existingPagesIndex = buildExistingPagesIndex(kb.getId());
+
+            // Phase 3: LLM 消化
             // result[0] = totalPages, result[1] = failedChunks, result[2] = totalChunks
             int[] result;
             if (textContent.length() > properties.getMaxChunkSize()) {
-                result = processInChunks(kb, raw, textContent);
+                result = processInChunks(kb, raw, textContent, existingPagesIndex);
             } else {
-                int pages = processChunk(kb, raw, textContent);
+                int pages = processChunk(kb, raw, textContent, existingPagesIndex);
                 result = new int[]{pages, pages == 0 ? 1 : 0, 1};
             }
 
@@ -128,53 +148,130 @@ public class WikiProcessingService {
     }
 
     /**
-     * 分块处理大文档
+     * 分块处理大文档（并行执行，Semaphore 控制并发）
      *
      * @return int[3]: [totalPages, failedChunks, totalChunks]
      */
-    private int[] processInChunks(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw, String text) {
-        int chunkSize = properties.getMaxChunkSize();
-        int overlap = 500; // 块间重叠
-        int start = 0;
-        int totalPages = 0;
-        int failedChunks = 0;
+    private int[] processInChunks(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw, String text,
+                                      String existingPagesIndex) {
+        // Phase 1: 切分文本为 chunks
+        List<String> chunks = splitIntoChunks(text);
+        int totalChunks = chunks.size();
+        log.info("[Wiki] Split into {} chunks for raw={}, kbId={}", totalChunks, raw.getId(), kb.getId());
 
-        int chunkIndex = 0;
+        if (totalChunks == 1) {
+            // 单 chunk 不走并行
+            try {
+                int pages = processChunk(kb, raw, chunks.get(0), existingPagesIndex);
+                return new int[]{pages, pages == 0 ? 1 : 0, 1};
+            } catch (Exception e) {
+                log.warn("[Wiki] Single chunk failed: {}", e.getMessage());
+                return new int[]{0, 1, 1};
+            }
+        }
+
+        // Phase 2: 并行处理（Semaphore 限制并发数）
+        Semaphore semaphore = new Semaphore(MAX_PARALLEL_CHUNKS);
+        AtomicInteger totalPages = new AtomicInteger(0);
+        AtomicInteger failedChunks = new AtomicInteger(0);
+
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (int i = 0; i < totalChunks; i++) {
+            final int chunkIndex = i;
+            final String chunk = chunks.get(i);
+            futures.add(CompletableFuture.runAsync(() -> {
+                try {
+                    semaphore.acquire();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    failedChunks.incrementAndGet();
+                    return;
+                }
+                try {
+                    log.info("[Wiki] Processing chunk {}/{}: {} chars", chunkIndex + 1, totalChunks, chunk.length());
+                    int pages = processChunk(kb, raw, chunk, existingPagesIndex);
+                    totalPages.addAndGet(pages);
+                } catch (Exception e) {
+                    failedChunks.incrementAndGet();
+                    if (e.getMessage() != null && e.getMessage().contains("content_filter")) {
+                        log.warn("[Wiki] Chunk {}/{} blocked by content filter", chunkIndex + 1, totalChunks);
+                    } else {
+                        log.warn("[Wiki] Chunk {}/{} failed: {}", chunkIndex + 1, totalChunks, e.getMessage());
+                    }
+                } finally {
+                    semaphore.release();
+                }
+            }, WIKI_EXECUTOR));
+        }
+
+        // 等待全部完成
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+        return new int[]{totalPages.get(), failedChunks.get(), totalChunks};
+    }
+
+    /**
+     * 将文本切分为多个 chunks（智能句子边界，支持中英文）
+     */
+    private List<String> splitIntoChunks(String text) {
+        int chunkSize = properties.getMaxChunkSize();
+        int overlap = Math.min(500, chunkSize / 10);
+        List<String> chunks = new ArrayList<>();
+        int start = 0;
+
         while (start < text.length()) {
-            int previousStart = start;
             int end = Math.min(start + chunkSize, text.length());
 
-            // 在句子边界切分
+            // 在句子边界切分（支持中英文）
             if (end < text.length()) {
-                int lastPeriod = text.lastIndexOf("。", end);
-                int lastNewline = text.lastIndexOf("\n", end);
-                int breakAt = Math.max(lastPeriod, lastNewline);
-                if (breakAt > start + chunkSize / 2) {
-                    end = breakAt + 1;
+                int breakAt = findSentenceBoundary(text, start, end, chunkSize);
+                if (breakAt > start) {
+                    end = breakAt;
                 }
             }
 
-            String chunk = text.substring(start, end);
-            log.info("[Wiki] Processing chunk {}: chars {}-{} of {}", chunkIndex, start, end, text.length());
-            try {
-                totalPages += processChunk(kb, raw, chunk);
-            } catch (Exception e) {
-                failedChunks++;
-                // content_filter 错误：标注后继续处理其他 chunk
-                if (e.getMessage() != null && e.getMessage().contains("content_filter")) {
-                    log.warn("[Wiki] Chunk {} blocked by content filter, skipping", chunkIndex);
-                } else {
-                    log.warn("[Wiki] Chunk {} failed: {}", chunkIndex, e.getMessage());
-                }
-            }
+            chunks.add(text.substring(start, end));
 
-            start = end - overlap;
-            if (start < 0) start = 0;
-            // 保证前进，防止死循环
-            if (start <= previousStart) start = end;
-            chunkIndex++;
+            // 前进（带 overlap 防止边界上下文丢失）
+            int nextStart = end - overlap;
+            if (nextStart <= start) nextStart = end; // 防止死循环
+            start = nextStart;
         }
-        return new int[]{totalPages, failedChunks, chunkIndex};
+        return chunks;
+    }
+
+    /**
+     * 在指定范围内找句子边界（优先级：段落 > 中文句号 > 英文句号 > 换行 > 空格）
+     */
+    private int findSentenceBoundary(String text, int start, int end, int chunkSize) {
+        int halfChunk = start + chunkSize / 2;
+
+        // 优先：段落分隔（双换行）
+        int lastPara = text.lastIndexOf("\n\n", end);
+        if (lastPara > halfChunk) return lastPara + 2;
+
+        // 中文句号
+        int lastChinese = text.lastIndexOf("。", end);
+        if (lastChinese > halfChunk) return lastChinese + 1;
+
+        // 英文句号（后面跟空格或换行，排除缩写如 "Dr." "e.g."）
+        for (int i = end - 1; i > halfChunk; i--) {
+            if (text.charAt(i) == '.' && i + 1 < text.length()
+                    && (text.charAt(i + 1) == ' ' || text.charAt(i + 1) == '\n')
+                    && i > 0 && Character.isLowerCase(text.charAt(i - 1))) {
+                return i + 1;
+            }
+        }
+
+        // 换行
+        int lastNewline = text.lastIndexOf("\n", end);
+        if (lastNewline > halfChunk) return lastNewline + 1;
+
+        // 空格（word boundary）
+        int lastSpace = text.lastIndexOf(" ", end);
+        if (lastSpace > halfChunk) return lastSpace + 1;
+
+        return end; // 无合适边界，硬切
     }
 
     /**
@@ -182,9 +279,8 @@ public class WikiProcessingService {
      *
      * @return 创建+更新的页面数
      */
-    private int processChunk(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw, String textContent) {
-        // 构建已有页面索引
-        String existingPagesIndex = buildExistingPagesIndex(kb.getId());
+    private int processChunk(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw, String textContent,
+                               String existingPagesIndex) {
 
         // 加载 prompt 模板
         String systemPrompt = PromptLoader.loadPrompt("wiki/digest-system");
@@ -222,7 +318,15 @@ public class WikiProcessingService {
     private int applyLlmResponse(Long kbId, Long rawId, String llmResponse) {
         JsonNode root = parseJsonResponse(llmResponse);
         if (root == null) {
-            log.warn("[Wiki] Failed to parse LLM response for kbId={}, rawId={}", kbId, rawId);
+            log.warn("[Wiki] Failed to parse LLM response for kbId={}, rawId={}, responseLen={}, first200={}",
+                    kbId, rawId, llmResponse != null ? llmResponse.length() : 0,
+                    llmResponse != null ? llmResponse.substring(0, Math.min(200, llmResponse.length())) : "null");
+            return 0;
+        }
+
+        // 结构校验：必须有 pages 数组
+        if (!root.has("pages") || !root.get("pages").isArray()) {
+            log.warn("[Wiki] LLM response missing 'pages' array for kbId={}, rawId={}", kbId, rawId);
             return 0;
         }
 

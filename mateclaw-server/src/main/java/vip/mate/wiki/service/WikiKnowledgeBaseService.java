@@ -25,21 +25,22 @@ public class WikiKnowledgeBaseService {
     private static final String DEFAULT_CONFIG = """
             # Wiki Processing Rules
 
-            ## Page Generation
-            - Create 10-15 wiki pages per source document
-            - Each page should cover a single concept, entity, or topic
+            ## Quality First
+            - Create high-quality pages — prefer fewer complete pages over many shallow ones
+            - Each page focuses on one concept, entity, or process
+            - A page must have at least 3 sentences of substantive content
+            - Target 3-5 pages per source material (not 10-15)
+            - If a concept already exists in the wiki, update it instead of duplicating
+
+            ## Format
             - Use clear Markdown headers (## and ###)
             - Include a one-paragraph summary at the top of each page
-
-            ## Linking
-            - Use [[Page Title]] syntax for bidirectional links
-            - Pages should cross-reference each other liberally
-            - Link to existing pages whenever relevant concepts are mentioned
+            - Use [[Page Title]] syntax for bidirectional links between pages
 
             ## Updates
-            - When updating existing pages with new information, merge rather than replace
+            - Merge new information into existing pages, do not replace
             - Preserve manually edited content (last_updated_by = 'manual')
-            - Mark contradictions between new and existing information clearly
+            - Mark contradictions clearly with a "Note:" annotation
 
             ## Language
             - Write wiki pages in the same language as the source material

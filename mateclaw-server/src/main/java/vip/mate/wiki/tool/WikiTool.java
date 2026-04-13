@@ -114,14 +114,8 @@ public class WikiTool {
             return error("No wiki knowledge base found for this agent");
         }
 
-        String queryLower = query.toLowerCase();
-        List<WikiPageEntity> allPages = pageService.listByKbIdWithContent(kbId);
-        List<WikiPageEntity> matched = allPages.stream()
-                .filter(p -> (p.getTitle() != null && p.getTitle().toLowerCase().contains(queryLower))
-                        || (p.getSummary() != null && p.getSummary().toLowerCase().contains(queryLower))
-                        || (p.getContent() != null && p.getContent().toLowerCase().contains(queryLower)))
-                .limit(20)
-                .toList();
+        // DB 级别搜索（不加载 content CLOB 到 Java 内存）
+        List<WikiPageEntity> matched = pageService.searchPages(kbId, query);
 
         JSONArray arr = new JSONArray();
         for (WikiPageEntity page : matched) {
@@ -130,9 +124,6 @@ public class WikiTool {
                     .set("slug", page.getSlug())
                     .set("summary", page.getSummary())
                     .set("sourceFiles", resolveSourceFiles(page.getSourceRawIds()));
-            boolean titleMatch = page.getTitle() != null && page.getTitle().toLowerCase().contains(queryLower);
-            boolean contentMatch = page.getContent() != null && page.getContent().toLowerCase().contains(queryLower);
-            obj.set("matchIn", titleMatch ? "title" : contentMatch ? "content" : "summary");
             arr.add(obj);
         }
 
@@ -223,6 +214,44 @@ public class WikiTool {
                 .set("title", page.getTitle())
                 .set("slug", page.getSlug())
                 .set("kbId", kbId)
+                .toString();
+    }
+
+    @Tool(description = """
+            删除一个 AI 生成的 Wiki 页面。无法删除人工维护的页面（lastUpdatedBy = 'manual'）。
+            用于清理过时、冗余或不准确的 Wiki 页面。
+            """)
+    public String wiki_delete_page(
+            @ToolParam(description = "当前 Agent 的 ID") Long agentId,
+            @ToolParam(description = "要删除的页面 slug") String slug) {
+
+        if (slug == null || slug.isBlank()) {
+            return error("slug is required");
+        }
+
+        Long kbId = resolveKbId(agentId);
+        if (kbId == null) {
+            return error("No wiki knowledge base found for this agent");
+        }
+
+        WikiPageEntity page = pageService.getBySlug(kbId, slug);
+        if (page == null) {
+            return error("Page not found: " + slug);
+        }
+
+        // 安全保护：禁止删除人工维护的页面
+        if ("manual".equals(page.getLastUpdatedBy())) {
+            return error("Cannot delete manually curated page: " + page.getTitle() + ". Please manage via admin UI.");
+        }
+
+        pageService.delete(kbId, slug);
+        log.info("[WikiTool] Deleted page: {} (slug={}, kbId={})", page.getTitle(), slug, kbId);
+
+        return JSONUtil.createObj()
+                .set("ok", true)
+                .set("message", "Page deleted")
+                .set("slug", slug)
+                .set("title", page.getTitle())
                 .toString();
     }
 

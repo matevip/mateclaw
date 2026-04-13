@@ -296,6 +296,17 @@ public class WikiController {
         return R.ok();
     }
 
+    @Operation(summary = "批量删除 Wiki 页面")
+    @DeleteMapping("/knowledge-bases/{kbId}/pages/batch")
+    public R<Integer> batchDeletePages(@PathVariable Long kbId,
+                                        @RequestBody List<String> slugs,
+                                        @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyKBWorkspace(kbId, workspaceId);
+        int deleted = pageService.batchDelete(kbId, slugs);
+        kbService.setPageCount(kbId, pageService.countByKbId(kbId));
+        return R.ok(deleted);
+    }
+
     @RequireWorkspaceRole("viewer")
     @Operation(summary = "获取反向链接")
     @GetMapping("/knowledge-bases/{kbId}/pages/{slug}/backlinks")
