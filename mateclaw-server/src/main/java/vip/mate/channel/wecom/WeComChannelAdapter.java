@@ -508,6 +508,7 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
 
             List<MessageContentPart> contentParts = new ArrayList<>();
             String textContent = null;
+            boolean hasVoice = false;
 
             switch (msgType) {
                 case "text" -> {
@@ -534,6 +535,7 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
                     textContent = "[图片]";
                 }
                 case "voice" -> {
+                    hasVoice = true;
                     Map<String, Object> voiceBody = (Map<String, Object>) body.getOrDefault("voice", Map.of());
                     String asrText = ((String) voiceBody.getOrDefault("content", "")).trim();
                     if (!asrText.isBlank()) {
@@ -569,10 +571,26 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
                                 textBuilder.append(txt).append('\n');
                             }
                         } else if ("image".equals(itemType)) {
+                            // 与独立 image 消息对齐：下载 + AES 解密（对齐 CoPaw）
                             Map<String, Object> img = (Map<String, Object>) item.getOrDefault("image", Map.of());
                             String url = (String) img.getOrDefault("url", "");
-                            if (!url.isBlank()) {
+                            String aesKey = (String) img.getOrDefault("aeskey", "");
+                            if (getConfigBoolean("media_download_enabled", true) && !url.isBlank()) {
+                                String localPath = downloadAndDecryptMedia(url, aesKey, msgId, "mixed_image.jpg");
+                                if (localPath != null) {
+                                    contentParts.add(MessageContentPart.image(localPath, url));
+                                } else {
+                                    contentParts.add(MessageContentPart.image(url, url));
+                                }
+                            } else if (!url.isBlank()) {
                                 contentParts.add(MessageContentPart.image(url, url));
+                            }
+                        } else if ("voice".equals(itemType)) {
+                            Map<String, Object> v = (Map<String, Object>) item.getOrDefault("voice", Map.of());
+                            String asrText = ((String) v.getOrDefault("content", "")).trim();
+                            if (!asrText.isBlank()) {
+                                hasVoice = true;
+                                textBuilder.append(asrText).append('\n');
                             }
                         }
                     }
@@ -621,6 +639,7 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
                     .content(textContent != null ? textContent.trim() : "")
                     .contentType(msgType)
                     .contentParts(contentParts)
+                    .inputMode(hasVoice ? "voice" : "text")
                     .timestamp(LocalDateTime.now())
                     .replyToken(isGroup ? chatId : senderId)
                     .rawPayload(Map.of(
@@ -734,7 +753,9 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
                 content, filterThinking, filterToolMessages, format, maxLen);
 
         boolean first = true;
-        for (String segment : segments) {
+        for (String rawSegment : segments) {
+            // WeCom 专用：格式化 Markdown 表格（对齐 CoPaw format_markdown_tables）
+            String segment = formatMarkdownTables(rawSegment);
             // 第一条分段用 processingStreamId 覆盖"思考中..."
             if (first && ctx != null && ctx.processingStreamId() != null
                     && !ctx.processingStreamId().isBlank()) {
@@ -766,6 +787,14 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
                             } else {
                                 sendMessage(targetId, part.getText());
                             }
+                            sentText = true;
+                        }
+                    }
+                    case "refusal" -> {
+                        // 模型拒绝回复（如内容策略限制），以文本形式发送
+                        String refusalText = part.getText();
+                        if (refusalText != null && !refusalText.isBlank()) {
+                            sendMessage(targetId, "⚠️ " + refusalText);
                             sentText = true;
                         }
                     }
@@ -1133,6 +1162,131 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
             );
             sendFrameWithAck(reqId, frame);
         }
+    }
+
+    // ==================== Markdown 表格格式化（对齐 CoPaw format_markdown_tables）====================
+
+    /**
+     * 格式化 GFM Markdown 表格，使其在企业微信中对齐显示。
+     * <p>
+     * 企业微信要求表格列宽一致才能正确渲染。此方法解析表格，
+     * 计算每列最大宽度，统一填充空格对齐。
+     * 代码块内的表格不做处理。
+     * <p>
+     * 移植自 CoPaw wecom/utils.py format_markdown_tables()
+     */
+    static String formatMarkdownTables(String text) {
+        if (text == null || !text.contains("|")) return text;
+
+        String[] lines = text.split("\n", -1);
+        List<String> result = new ArrayList<>();
+        int i = 0;
+        boolean inCodeFence = false;
+
+        while (i < lines.length) {
+            String line = lines[i];
+            String stripped = line.strip();
+
+            // 跟踪代码块（``` 内的内容不处理）
+            if (stripped.startsWith("```")) {
+                inCodeFence = !inCodeFence;
+                result.add(line);
+                i++;
+                continue;
+            }
+            if (inCodeFence) {
+                result.add(line);
+                i++;
+                continue;
+            }
+
+            // 检测表格开始（含 | 的行）
+            if (line.contains("|")) {
+                List<String> tableLines = new ArrayList<>();
+                while (i < lines.length && lines[i].contains("|")
+                        && !lines[i].strip().startsWith("```")) {
+                    tableLines.add(lines[i]);
+                    i++;
+                }
+                if (!tableLines.isEmpty()) {
+                    result.addAll(formatTable(tableLines));
+                }
+                continue;
+            }
+
+            result.add(line);
+            i++;
+        }
+        return String.join("\n", result);
+    }
+
+    /**
+     * 格式化单个 Markdown 表格
+     */
+    private static List<String> formatTable(List<String> lines) {
+        if (lines.isEmpty()) return lines;
+
+        // 检测第二行是否为分隔行（只含 -, :, |, 空格）
+        boolean hasSeparator = lines.size() >= 2
+                && lines.get(1).strip().matches("[\\s\\-:|]+");
+
+        // 解析单元格（跳过分隔行，后面会重建）
+        List<List<String>> rows = new ArrayList<>();
+        for (int idx = 0; idx < lines.size(); idx++) {
+            if (hasSeparator && idx == 1) continue;
+            String[] cells = lines.get(idx).split("\\|", -1);
+            List<String> trimmed = new ArrayList<>();
+            for (String cell : cells) {
+                trimmed.add(cell.strip());
+            }
+            // 去掉首尾空元素（由前导/尾随 | 产生）
+            if (!trimmed.isEmpty() && trimmed.getFirst().isEmpty()) trimmed.removeFirst();
+            if (!trimmed.isEmpty() && trimmed.getLast().isEmpty()) trimmed.removeLast();
+            if (!trimmed.isEmpty()) rows.add(trimmed);
+        }
+
+        if (rows.isEmpty()) return lines;
+
+        // 计算每列最大宽度
+        int colCount = rows.stream().mapToInt(List::size).max().orElse(0);
+        int[] widths = new int[colCount];
+        for (List<String> row : rows) {
+            for (int j = 0; j < colCount; j++) {
+                String cell = j < row.size() ? row.get(j) : "";
+                widths[j] = Math.max(widths[j], cell.length());
+            }
+        }
+
+        // 构建格式化结果
+        List<String> formatted = new ArrayList<>();
+        for (int idx = 0; idx < rows.size(); idx++) {
+            List<String> row = rows.get(idx);
+            StringBuilder sb = new StringBuilder("| ");
+            for (int j = 0; j < colCount; j++) {
+                String cell = j < row.size() ? row.get(j) : "";
+                sb.append(padRight(cell, widths[j]));
+                if (j < colCount - 1) sb.append(" | ");
+            }
+            sb.append(" |");
+            formatted.add(sb.toString());
+
+            // 头部行后插入分隔行
+            if (idx == 0) {
+                StringBuilder sep = new StringBuilder("| ");
+                for (int j = 0; j < colCount; j++) {
+                    sep.append("-".repeat(Math.max(3, widths[j])));
+                    if (j < colCount - 1) sep.append(" | ");
+                }
+                sep.append(" |");
+                formatted.add(sep.toString());
+            }
+        }
+        return formatted;
+    }
+
+    private static String padRight(String s, int width) {
+        if (s.length() >= width) return s;
+        return s + " ".repeat(width - s.length());
     }
 
     // ==================== 帧发送基础设施 ====================

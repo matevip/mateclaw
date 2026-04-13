@@ -83,6 +83,19 @@ public class WeixinChannelAdapter extends AbstractChannelAdapter {
     /** 用户最新 context_token 缓存（用于主动推送） */
     private final ConcurrentHashMap<String, String> userContextTokens = new ConcurrentHashMap<>();
 
+    /** context_token 持久化文件路径 */
+    private Path contextTokensFile;
+
+    /** bot_token 持久化文件路径 */
+    private Path botTokenFile;
+
+    /** 文件名扩展名列表（用于过滤纯文件名文本，避免误触发 Agent） */
+    private static final Set<String> FILENAME_EXTENSIONS = Set.of(
+            ".txt", ".doc", ".docx", ".pdf", ".jpg", ".jpeg", ".png", ".gif",
+            ".mp4", ".avi", ".mov", ".mp3", ".wav", ".zip", ".rar",
+            ".xlsx", ".xls", ".ppt", ".pptx", ".csv", ".json", ".xml"
+    );
+
     // ==================== 输入中提示 ====================
 
     /** 输入提示 ticket 缓存：userId -> (ticket, expireTime) */
@@ -124,7 +137,17 @@ public class WeixinChannelAdapter extends AbstractChannelAdapter {
 
     @Override
     protected void doStart() {
+        // 初始化持久化路径
+        String dataDir = getConfigString("data_dir", "data/weixin");
+        Path dataDirPath = Path.of(dataDir, String.valueOf(channelEntity.getId()));
+        botTokenFile = dataDirPath.resolve("bot_token.txt");
+        contextTokensFile = dataDirPath.resolve("context_tokens.json");
+
+        // bot_token 优先级：config > 持久化文件
         String botToken = getConfigString("bot_token", "");
+        if (botToken.isBlank()) {
+            botToken = loadBotTokenFromFile();
+        }
         String baseUrl = getConfigString("base_url", ILinkClient.DEFAULT_BASE_URL);
 
         if (botToken.isBlank()) {
@@ -139,6 +162,12 @@ public class WeixinChannelAdapter extends AbstractChannelAdapter {
             return t;
         });
 
+        // 加载持久化的 context_tokens（用于重启后主动推送）
+        loadContextTokens();
+
+        // 持久化 bot_token（QR 登录后或首次启动时保存）
+        saveBotTokenToFile(botToken);
+
         // 启动长轮询线程
         stopSignal.set(false);
         cursor = "";
@@ -146,13 +175,18 @@ public class WeixinChannelAdapter extends AbstractChannelAdapter {
         pollThread.setDaemon(true);
         pollThread.start();
 
-        log.info("[weixin] Channel started: {} (token={}...)", channelEntity.getName(),
-                botToken.substring(0, Math.min(12, botToken.length())));
+        log.info("[weixin] Channel started: {} (token={}..., cached_contexts={})",
+                channelEntity.getName(),
+                botToken.substring(0, Math.min(12, botToken.length())),
+                userContextTokens.size());
     }
 
     @Override
     protected void doStop() {
         stopSignal.set(true);
+
+        // 持久化 context_tokens（重启后可恢复主动推送能力）
+        saveContextTokens();
 
         // 停止所有输入提示任务
         typingTasks.values().forEach(f -> f.cancel(false));
@@ -275,10 +309,10 @@ public class WeixinChannelAdapter extends AbstractChannelAdapter {
 
             switch (itemType) {
                 case 1 -> {
-                    // Text
+                    // Text — 过滤纯文件名文本（借鉴 CoPaw: 避免文件名误触发 Agent）
                     Map<String, Object> textItem = (Map<String, Object>) item.getOrDefault("text_item", Map.of());
                     String text = getStr(textItem, "text").strip();
-                    if (!text.isEmpty()) {
+                    if (!text.isEmpty() && !isFilenameOnly(text)) {
                         textParts.add(text);
                     }
                 }
@@ -313,14 +347,53 @@ public class WeixinChannelAdapter extends AbstractChannelAdapter {
                 }
                 case 3 -> {
                     // Voice — 使用 ASR 语音识别文本
+                    // iLink API 的 ASR 文本可能在两个位置（参考 CoPaw 实现）：
+                    //   路径1: voice_item.text_item.text（嵌套结构）
+                    //   路径2: voice_item.text（直接结构）
                     hasVoice = true;
                     Map<String, Object> voiceItem = (Map<String, Object>) item.getOrDefault("voice_item", Map.of());
-                    Map<String, Object> voiceTextItem = (Map<String, Object>) voiceItem.getOrDefault("text_item", Map.of());
-                    String asrText = getStr(voiceTextItem, "text").strip();
+                    String asrText = "";
+
+                    // 路径1: voice_item → text_item → text
+                    Object textItemObj = voiceItem.get("text_item");
+                    if (textItemObj instanceof Map<?,?> textItemMap) {
+                        asrText = getStr((Map<String, Object>) textItemMap, "text").strip();
+                    }
+
+                    // 路径2: voice_item → text（直接字段，CoPaw fallback）
+                    if (asrText.isEmpty()) {
+                        asrText = getStr(voiceItem, "text").strip();
+                    }
+
+                    // 路径3: voice_item → content（与 WeCom 一致的字段名）
+                    if (asrText.isEmpty()) {
+                        asrText = getStr(voiceItem, "content").strip();
+                    }
+
+                    log.debug("[weixin] Voice item payload: {}", voiceItem);
+
                     if (!asrText.isEmpty()) {
                         textParts.add(asrText);
+                        log.info("[weixin] Voice ASR text: {}", asrText.length() > 50
+                                ? asrText.substring(0, 50) + "..." : asrText);
                     } else {
-                        textParts.add("[语音: 无转写结果]");
+                        // ASR 为空：可能是语音过短、噪音、或 iLink API 字段变更
+                        // 尝试下载语音文件保存到本地（供后续调试 / 自有 STT 使用）
+                        if (mediaDownloadEnabled) {
+                            String voicePath = downloadMediaItem(item, "voice_item", "voice.amr", mediaDir);
+                            if (voicePath != null) {
+                                // 保存为 audio content part，即使无 ASR 文本
+                                MessageContentPart audioPart = new MessageContentPart();
+                                audioPart.setType("audio");
+                                audioPart.setPath(voicePath);
+                                audioPart.setFileName("voice.amr");
+                                contentParts.add(audioPart);
+                                log.info("[weixin] Voice audio downloaded (no ASR): {}", voicePath);
+                            }
+                        }
+                        textParts.add("[语音消息]");
+                        log.warn("[weixin] Voice message with no ASR result. voice_item keys: {}, full: {}",
+                                voiceItem.keySet(), voiceItem);
                     }
                 }
                 case 4 -> {
@@ -383,9 +456,13 @@ public class WeixinChannelAdapter extends AbstractChannelAdapter {
             return;
         }
 
-        // 缓存 context_token（用于主动推送）
+        // 缓存 context_token（用于主动推送）并定期持久化
         if (!fromUserId.isBlank() && !contextToken.isBlank()) {
-            userContextTokens.put(fromUserId, contextToken);
+            String prev = userContextTokens.put(fromUserId, contextToken);
+            // token 变更时才持久化（减少 I/O）
+            if (!contextToken.equals(prev)) {
+                saveContextTokens();
+            }
         }
 
         // 构建统一消息
@@ -841,5 +918,90 @@ public class WeixinChannelAdapter extends AbstractChannelAdapter {
                     + Character.digit(hex.charAt(i + 1), 16));
         }
         return data;
+    }
+
+    // ==================== Token 持久化（对齐 CoPaw）====================
+
+    /**
+     * 从文件加载 bot_token（启动时如果 config 中无 token，尝试从文件恢复）
+     */
+    private String loadBotTokenFromFile() {
+        if (botTokenFile == null) return "";
+        try {
+            if (Files.exists(botTokenFile)) {
+                String token = Files.readString(botTokenFile).strip();
+                if (!token.isBlank()) {
+                    log.info("[weixin] Loaded bot_token from {}", botTokenFile);
+                    return token;
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[weixin] Failed to read bot_token file: {}", e.getMessage());
+        }
+        return "";
+    }
+
+    /**
+     * 持久化 bot_token 到文件（QR 登录后或首次启动时保存）
+     */
+    private void saveBotTokenToFile(String token) {
+        if (botTokenFile == null || token == null || token.isBlank()) return;
+        try {
+            Files.createDirectories(botTokenFile.getParent());
+            Files.writeString(botTokenFile, token);
+            log.info("[weixin] Bot token saved to {}", botTokenFile);
+        } catch (Exception e) {
+            log.warn("[weixin] Failed to save bot_token file: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 从文件加载 context_tokens（启动时恢复主动推送能力）
+     */
+    @SuppressWarnings("unchecked")
+    private void loadContextTokens() {
+        if (contextTokensFile == null) return;
+        try {
+            if (Files.exists(contextTokensFile)) {
+                String json = Files.readString(contextTokensFile);
+                Map<String, String> data = objectMapper.readValue(json,
+                        objectMapper.getTypeFactory().constructMapType(HashMap.class, String.class, String.class));
+                if (data != null && !data.isEmpty()) {
+                    userContextTokens.putAll(data);
+                    log.info("[weixin] Loaded {} context_tokens from {}", data.size(), contextTokensFile);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[weixin] Failed to load context_tokens: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 持久化 context_tokens 到文件（停止时保存 + token 变更时保存）
+     */
+    private void saveContextTokens() {
+        if (contextTokensFile == null || userContextTokens.isEmpty()) return;
+        try {
+            Files.createDirectories(contextTokensFile.getParent());
+            Files.writeString(contextTokensFile,
+                    objectMapper.writeValueAsString(new HashMap<>(userContextTokens)));
+        } catch (Exception e) {
+            log.debug("[weixin] Failed to save context_tokens: {}", e.getMessage());
+        }
+    }
+
+    // ==================== 文件名过滤（对齐 CoPaw）====================
+
+    /**
+     * 判断文本是否仅为文件名（如 "photo.jpg"、"report.pdf"）。
+     * 微信发送文件时会同时发一条文本消息包含文件名，这不应触发 Agent 回复。
+     * 参考 CoPaw channel.py:538-566
+     */
+    private static boolean isFilenameOnly(String text) {
+        if (text == null || text.isBlank()) return false;
+        // 文件名不应包含换行（多行文本不是纯文件名）
+        if (text.contains("\n")) return false;
+        String lower = text.strip().toLowerCase();
+        return FILENAME_EXTENSIONS.stream().anyMatch(lower::endsWith);
     }
 }
