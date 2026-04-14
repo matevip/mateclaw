@@ -78,7 +78,7 @@ public class WikiProperties {
      * 是否启用两阶段消化（路由 → 逐页 merge）。
      * <p>
      * RFC-012 M2：true 时单 chunk 的 LLM 输出量大幅缩减，避免 nginx 60s 网关超时。
-     * 默认 false 保持向后兼容；M2 实现完成后切到 true。
+     * 默认 true（M2 上线）；遇问题可在 application.yml 配 mate.wiki.use-two-phase-digest=false 回退到旧行为。
      */
-    private boolean useTwoPhaseDigest = false;
+    private boolean useTwoPhaseDigest = true;
 }

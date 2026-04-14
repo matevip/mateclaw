@@ -1,0 +1,25 @@
+## 知识库处理规则
+
+{config}
+
+## 待合并的现有 Wiki 页面
+
+slug：`{page_slug}`
+标题：{page_title}
+最近编辑者：{page_last_updated_by}
+
+### 现有内容
+
+{page_content}
+
+## 新材料
+
+标题：{raw_title}
+
+{raw_content}
+
+---
+
+请把新材料中与本页面主题相关的信息合并进**这一个页面**，输出完整的 JSON（按 system 规则）。
+- 如果新材料对本页面无新增信息：原 content 原样返回即可。
+- 不要输出其他页面，不要 diff，不要追加。
