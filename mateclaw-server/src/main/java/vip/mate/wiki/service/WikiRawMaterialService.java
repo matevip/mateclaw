@@ -191,6 +191,17 @@ public class WikiRawMaterialService {
     }
 
     /**
+     * 记录本次成功处理时的 content_hash（RFC-012 Change 5 的短路依据）。
+     */
+    @Transactional
+    public void setLastProcessedHash(Long id, String hash) {
+        WikiRawMaterialEntity entity = rawMapper.selectById(id);
+        if (entity == null) return;
+        entity.setLastProcessedHash(hash);
+        rawMapper.updateById(entity);
+    }
+
+    /**
      * 重新处理：重置状态为 pending 并发布事件
      */
     @Transactional

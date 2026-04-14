@@ -240,14 +240,19 @@ public class WikiController {
     }
 
     @RequireWorkspaceRole("member")
-    @Operation(summary = "重新处理原始材料")
+    @Operation(summary = "重新处理原始材料（force=true 时绕过 content_hash 短路）")
     @PostMapping("/knowledge-bases/{kbId}/raw/{rawId}/reprocess")
     public R<Void> reprocessRaw(@PathVariable Long kbId, @PathVariable Long rawId,
+                                 @RequestParam(value = "force", defaultValue = "false") boolean force,
                                  @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyKBWorkspace(kbId, workspaceId);
         WikiRawMaterialEntity raw = rawService.getById(rawId);
         if (raw == null || !kbId.equals(raw.getKbId())) {
             return R.fail("Raw material not found in this knowledge base");
+        }
+        // RFC-012 Change 5：force=true 时清空 last_processed_hash，让下一次处理必然执行完整管线
+        if (force) {
+            rawService.setLastProcessedHash(rawId, null);
         }
         rawService.reprocess(rawId);
         return R.ok();
@@ -320,16 +325,27 @@ public class WikiController {
     // ==================== Processing ====================
 
     @RequireWorkspaceRole("member")
-    @Operation(summary = "触发知识库处理（异步）")
+    @Operation(summary = "触发知识库处理（异步）；force=true 时清空所有 last_processed_hash 并重新入队全部材料")
     @PostMapping("/knowledge-bases/{kbId}/process")
     public R<Map<String, Object>> processKB(@PathVariable Long kbId,
+                                             @RequestParam(value = "force", defaultValue = "false") boolean force,
                                              @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyKBWorkspace(kbId, workspaceId);
-        List<WikiRawMaterialEntity> pending = rawService.listPending(kbId);
-        for (WikiRawMaterialEntity raw : pending) {
+        List<WikiRawMaterialEntity> targets;
+        if (force) {
+            // 强制重处理：所有非 pending 的材料重置为 pending，并清空 hash 短路
+            targets = rawService.listByKbId(kbId);
+            for (WikiRawMaterialEntity r : targets) {
+                rawService.setLastProcessedHash(r.getId(), null);
+                rawService.reprocess(r.getId());   // reprocess 会把状态设为 pending 并发布事件
+            }
+            return R.ok(Map.of("queued", targets.size(), "force", true));
+        }
+        targets = rawService.listPending(kbId);
+        for (WikiRawMaterialEntity raw : targets) {
             eventPublisher.publishEvent(new WikiProcessingEvent(this, raw.getId(), kbId));
         }
-        return R.ok(Map.of("queued", pending.size()));
+        return R.ok(Map.of("queued", targets.size(), "force", false));
     }
 
     @RequireWorkspaceRole("viewer")

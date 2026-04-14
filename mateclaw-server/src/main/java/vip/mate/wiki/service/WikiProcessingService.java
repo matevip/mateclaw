@@ -47,15 +47,23 @@ public class WikiProcessingService {
     private final AgentGraphBuilder agentGraphBuilder;
     private final ObjectMapper objectMapper;
 
-    /** 并行 chunk 处理执行器（JDK 21 虚拟线程） */
-    private static final ExecutorService WIKI_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
-    /** 最大并行 chunk 数 */
-    private static final int MAX_PARALLEL_CHUNKS = 3;
+    /** 并行 chunk / 材料处理执行器（JDK 21 虚拟线程）；Listener 跨包需要引用，故 public */
+    public static final ExecutorService WIKI_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
     /**
      * 处理单个原始材料
      */
     public void processRawMaterial(Long rawId) {
+        processRawMaterial(rawId, false);
+    }
+
+    /**
+     * 处理单个原始材料（支持强制重跑）
+     *
+     * @param rawId 材料 ID
+     * @param force 为 true 时忽略 content_hash 短路（RFC-012 Change 5），用于模型/提示词变更后的强制重跑
+     */
+    public void processRawMaterial(Long rawId, boolean force) {
         // CAS 式抢占：防止并发重复处理
         if (!rawService.claimForProcessing(rawId)) {
             log.debug("[Wiki] Raw material {} already claimed or not pending, skipping", rawId);
@@ -65,6 +73,15 @@ public class WikiProcessingService {
         WikiRawMaterialEntity raw = rawService.getById(rawId);
         if (raw == null) {
             log.warn("[Wiki] Raw material not found: {}", rawId);
+            return;
+        }
+
+        // RFC-012 Change 5：若 content_hash 与上次成功处理时一致，直接短路
+        if (!force
+                && raw.getContentHash() != null
+                && raw.getContentHash().equals(raw.getLastProcessedHash())) {
+            rawService.updateProcessingStatus(rawId, "completed", "Skipped: content unchanged since last processing");
+            log.info("[Wiki] Skip reprocessing raw={} (content unchanged, hash={})", rawId, raw.getContentHash());
             return;
         }
 
@@ -115,8 +132,14 @@ public class WikiProcessingService {
                 // 部分成功：有些 chunk 失败但有些产出了页面
                 rawService.updateProcessingStatus(rawId, "partial",
                         failedChunks + " of " + totalChunks + " chunks failed, " + totalPages + " pages generated");
+                // 【Review Bug 1】partial 不写 lastProcessedHash：partial 的语义就是"还有失败、需要再跑"，
+                // 写了会导致下次用户点"重新处理"被 hash 短路直接跳过，永远没机会修失败的 chunk。
             } else {
                 rawService.updateProcessingStatus(rawId, "completed", null);
+                // RFC-012 Change 5：记录本次成功处理时的 hash，供下次短路判断
+                if (raw.getContentHash() != null) {
+                    rawService.setLastProcessedHash(rawId, raw.getContentHash());
+                }
             }
             int pageCount = pageService.countByKbId(kb.getId());
             kbService.setPageCount(kb.getId(), pageCount);
@@ -134,6 +157,8 @@ public class WikiProcessingService {
 
     /**
      * 处理知识库中所有待处理的原始材料
+     * <p>
+     * RFC-012 Change 1：材料级并行，受 {@link WikiProperties#getMaxParallelRawMaterials()} 约束。
      */
     public void processAllPending(Long kbId) {
         List<WikiRawMaterialEntity> pendingList = rawService.listPending(kbId);
@@ -141,10 +166,29 @@ public class WikiProcessingService {
             log.info("[Wiki] No pending raw materials for kbId={}", kbId);
             return;
         }
-        log.info("[Wiki] Processing {} pending raw materials for kbId={}", pendingList.size(), kbId);
+        int parallel = Math.max(1, properties.getMaxParallelRawMaterials());
+        log.info("[Wiki] Processing {} pending raw materials for kbId={} with parallelism={}",
+                pendingList.size(), kbId, parallel);
+
+        Semaphore rawSem = new Semaphore(parallel);
+        List<CompletableFuture<Void>> futures = new ArrayList<>(pendingList.size());
         for (WikiRawMaterialEntity raw : pendingList) {
-            processRawMaterial(raw.getId());
+            final Long rawId = raw.getId();
+            futures.add(CompletableFuture.runAsync(() -> {
+                try {
+                    rawSem.acquire();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                try {
+                    processRawMaterial(rawId);
+                } finally {
+                    rawSem.release();
+                }
+            }, WIKI_EXECUTOR));
         }
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
     }
 
     /**
@@ -171,7 +215,8 @@ public class WikiProcessingService {
         }
 
         // Phase 2: 并行处理（Semaphore 限制并发数）
-        Semaphore semaphore = new Semaphore(MAX_PARALLEL_CHUNKS);
+        int parallelChunks = Math.max(1, properties.getMaxParallelChunks());
+        Semaphore semaphore = new Semaphore(parallelChunks);
         AtomicInteger totalPages = new AtomicInteger(0);
         AtomicInteger failedChunks = new AtomicInteger(0);
 
@@ -292,19 +337,12 @@ public class WikiProcessingService {
                 .replace("{raw_title}", raw.getTitle())
                 .replace("{raw_content}", textContent);
 
-        // 调用 LLM
-        String llmResponse;
-        try {
-            ChatModel chatModel = buildChatModel();
-            Prompt prompt = new Prompt(List.of(
-                    new SystemMessage(systemPrompt),
-                    new UserMessage(userPrompt)
-            ));
-            ChatResponse response = chatModel.call(prompt);
-            llmResponse = response.getResult().getOutput().getText();
-        } catch (Exception e) {
-            throw new RuntimeException("LLM call failed: " + e.getMessage(), e);
-        }
+        // 调用 LLM（带无限重试，仅在模型不可用时终止）
+        Prompt prompt = new Prompt(List.of(
+                new SystemMessage(systemPrompt),
+                new UserMessage(userPrompt)
+        ));
+        String llmResponse = callLlmWithResilientRetry(prompt, "chunk of raw=" + raw.getId());
 
         // 解析并持久化页面
         return applyLlmResponse(kb.getId(), raw.getId(), llmResponse);
@@ -406,6 +444,118 @@ public class WikiProcessingService {
     private ChatModel buildChatModel() {
         ModelConfigEntity defaultModel = modelConfigService.getDefaultModel();
         return agentGraphBuilder.buildRuntimeChatModel(defaultModel);
+    }
+
+    /**
+     * 调用 LLM，带"任务完成或模型不可用才终止"的重试策略。
+     * <p>
+     * 可重试（一直重试直到成功）：网络抖动、5xx、429 限流、超时、连接中断、内容过滤偶发、JSON 空输出。
+     * <p>
+     * 立即终止（模型不可用）：401/403 认证失败、模型不存在、quota 用尽、非法 API key、
+     * InterruptedException（优雅关停）。
+     * <p>
+     * 使用指数退避（1s → 2s → 4s → ... → 封顶 60s），无最大尝试次数。
+     */
+    private String callLlmWithResilientRetry(Prompt prompt, String ctx) {
+        long backoffMs = 1000;
+        final long maxBackoffMs = 60_000;
+        int attempt = 0;
+        while (true) {
+            attempt++;
+            try {
+                ChatModel chatModel = buildChatModel();
+                ChatResponse response = chatModel.call(prompt);
+                if (response == null || response.getResult() == null
+                        || response.getResult().getOutput() == null
+                        || response.getResult().getOutput().getText() == null
+                        || response.getResult().getOutput().getText().isBlank()) {
+                    throw new TransientLlmException("Empty response from model");
+                }
+                if (attempt > 1) {
+                    log.info("[Wiki] LLM call for {} succeeded on attempt {}", ctx, attempt);
+                }
+                return response.getResult().getOutput().getText();
+            } catch (Throwable t) {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new RuntimeException("LLM call interrupted for " + ctx, t);
+                }
+                if (isFatalModelError(t)) {
+                    log.error("[Wiki] LLM unavailable (fatal) for {} after {} attempts: {}",
+                            ctx, attempt, t.getMessage());
+                    throw new RuntimeException("LLM unavailable: " + t.getMessage(), t);
+                }
+                log.warn("[Wiki] LLM transient failure for {} attempt={}, retrying in {}ms: {}",
+                        ctx, attempt, backoffMs, t.getMessage());
+                try {
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("LLM retry interrupted for " + ctx, ie);
+                }
+                backoffMs = Math.min(maxBackoffMs, backoffMs * 2);
+            }
+        }
+    }
+
+    /**
+     * 判断是否为"模型不可用"级别的致命错误（不重试，立即终止）。
+     * <p>
+     * 三类视为 fatal：
+     * <ul>
+     *   <li><b>鉴权 / 配额 / 模型不存在</b>：401/403、invalid api key、model not found、quota 用尽</li>
+     *   <li><b>prompt 结构性错误</b>：上下文超长、max_tokens 限制、prompt too long（重试也得同样结果）</li>
+     *   <li><b>内容审核过滤</b>：content_filter 触发（被 safety 挡下的 prompt 重试也是同样结果）</li>
+     * </ul>
+     * 其余（网络、超时、5xx、429 限流、偶发空响应）均视为瞬时，按指数退避持续重试。
+     * <p>
+     * 说明：关键字启发式在极少数场景可能误判（例如瞬时错误的 message 恰好含 "authentication"），
+     * 但实际云厂商 SDK 的错误消息规范度较高，这个风险可接受。
+     */
+    private boolean isFatalModelError(Throwable t) {
+        Throwable cur = t;
+        int depth = 0;
+        while (cur != null && depth < 8) {
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String m = msg.toLowerCase();
+                // 鉴权 / 配额 / 模型不存在（HTTP 401/403 + 提供方错误字段）
+                if (m.contains("401") || m.contains("unauthorized")
+                        || m.contains("403") || m.contains("forbidden")
+                        || m.contains("invalid api key") || m.contains("invalid_api_key")
+                        || m.contains("authentication") || m.contains("api key not valid")
+                        || m.contains("model not found") || m.contains("model_not_found")
+                        || m.contains("invalidapikey") || m.contains("invalid_request_error")
+                        || m.contains("quota") || m.contains("insufficient_quota")
+                        || m.contains("no default model") || m.contains("model configuration")) {
+                    return true;
+                }
+                // 【Review Bug 3】prompt 结构性错误：重试也得同样结果，立即终止
+                if (m.contains("context_length_exceeded")
+                        || m.contains("context length")
+                        || m.contains("maximum context")
+                        || m.contains("max_tokens")
+                        || m.contains("prompt too long")
+                        || m.contains("input is too long")
+                        || m.contains("token limit")) {
+                    return true;
+                }
+                // 【Review Bug 2】内容审核过滤：被 safety 挡下的 prompt 重试也是同样结果
+                if (m.contains("content_filter")
+                        || m.contains("content filter")
+                        || m.contains("data_inspection_failed")
+                        || (m.contains("safety") && m.contains("block"))) {
+                    return true;
+                }
+            }
+            cur = cur.getCause();
+            depth++;
+        }
+        return false;
+    }
+
+    /** 瞬时错误的内部标记异常，确保空响应也能走重试路径 */
+    private static class TransientLlmException extends RuntimeException {
+        TransientLlmException(String msg) { super(msg); }
     }
 
     private JsonNode parseJsonResponse(String response) {

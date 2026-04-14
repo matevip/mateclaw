@@ -49,6 +49,9 @@ public class WikiRawMaterialEntity {
     /** 上次处理时间 */
     private LocalDateTime lastProcessedAt;
 
+    /** 上次成功处理时的 content_hash，用于重处理时的短路判断 */
+    private String lastProcessedHash;
+
     /** 错误信息 */
     private String errorMessage;
 
