@@ -1,6 +1,7 @@
--- V9: RFC-017 声明式 Hook 系统
+-- V10: 声明式 Hook 系统
 -- mate_hook       hook 定义（YAML 文件或 UI 写入）
 -- mate_hook_run   hook 触发审计（可选，按 mateclaw.hooks.audit.enabled 开关）
+-- (原本命名为 V9 但与 V9__usage_cache_tokens.sql 撞号；重命名为 V10 以共存)
 
 CREATE TABLE IF NOT EXISTS mate_hook (
     id                  BIGINT       NOT NULL PRIMARY KEY,
