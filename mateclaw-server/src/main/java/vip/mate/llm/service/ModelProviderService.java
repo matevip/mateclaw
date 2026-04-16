@@ -121,7 +121,15 @@ public class ModelProviderService {
 
     public ProviderInfoDTO addModel(String providerId, AddProviderModelRequest request) {
         getProvider(providerId);
-        modelConfigService.addModelToProvider(providerId, request.getId(), request.getName(), false);
+        // Defense-in-depth: the manual "Add model" form must apply the same
+        // protocol-level safety as auto-discovery — otherwise users can freely
+        // type an unknown model id (e.g. "qwen3.6-plus") that DashScope native
+        // rejects at runtime with the opaque "[InvalidParameter] url error".
+        String modelId = request.getId();
+        if (modelId != null && !modelId.isBlank()) {
+            ModelDiscoveryService.assertModelIdAcceptable(providerId, this.getProvider(providerId), modelId);
+        }
+        modelConfigService.addModelToProvider(providerId, modelId, request.getName(), false);
         return toProviderInfo(getProvider(providerId), modelConfigService.listModelsByProvider(providerId));
     }
 

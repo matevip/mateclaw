@@ -52,6 +52,15 @@ public class ModelDiscoveryService {
     );
 
     /**
+     * Pattern matching DashScope model ids that use a dot-versioned family (e.g.
+     * "qwen3.5-max", "qwen3.6-plus"). These are only offered on compatible-mode
+     * and consistently fail on the native endpoint with
+     * "[InvalidParameter] url error". Block them regardless of exact name.
+     */
+    private static final java.util.regex.Pattern DASHSCOPE_NATIVE_UNSUPPORTED_PATTERN =
+            java.util.regex.Pattern.compile("^qwen\\d+\\.\\d+.*", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
      * Allow-list prefixes for DashScope models that are known to work on the native
      * protocol. An empty set means "no prefix filter" (we still apply DENY).
      * Extend conservatively as we verify additional families.
@@ -120,21 +129,46 @@ public class ModelDiscoveryService {
         }
         int before = discovered.size();
         List<ModelInfoDTO> filtered = discovered.stream()
-                .filter(m -> {
-                    String id = m.getId();
-                    if (id == null || id.isBlank()) return false;
-                    String lower = id.toLowerCase();
-                    if (DASHSCOPE_NATIVE_DENY.contains(lower)) return false;
-                    // Allow if any allowed prefix matches; if allow-list is empty, permit everything
-                    if (DASHSCOPE_NATIVE_ALLOW_PREFIXES.isEmpty()) return true;
-                    return DASHSCOPE_NATIVE_ALLOW_PREFIXES.stream().anyMatch(lower::startsWith);
-                })
+                .filter(m -> isDashScopeModelIdAcceptable(m.getId()))
                 .toList();
         if (filtered.size() < before) {
             log.info("[ModelDiscovery] Filtered {} -> {} DashScope models for provider={} (allow/deny rules)",
                     before, filtered.size(), providerId);
         }
         return filtered;
+    }
+
+    /**
+     * Return true if a DashScope model id is allowed on the native protocol:
+     * not in the explicit DENY set, doesn't match the dot-version unsupported
+     * pattern, and matches at least one ALLOW prefix (or the allow list is empty).
+     */
+    private static boolean isDashScopeModelIdAcceptable(String modelId) {
+        if (modelId == null || modelId.isBlank()) return false;
+        String lower = modelId.toLowerCase();
+        if (DASHSCOPE_NATIVE_DENY.contains(lower)) return false;
+        if (DASHSCOPE_NATIVE_UNSUPPORTED_PATTERN.matcher(lower).matches()) return false;
+        if (DASHSCOPE_NATIVE_ALLOW_PREFIXES.isEmpty()) return true;
+        return DASHSCOPE_NATIVE_ALLOW_PREFIXES.stream().anyMatch(lower::startsWith);
+    }
+
+    /**
+     * Defensive guard for code paths that persist a model id without going through
+     * discovery (e.g. the manual "Add model" form). Throws a MateClawException with
+     * a user-friendly message if the id is known to be unusable under the provider's
+     * runtime protocol.
+     */
+    public static void assertModelIdAcceptable(String providerId, ModelProviderEntity provider, String modelId) {
+        if (provider == null) return;
+        ModelProtocol protocol = ModelProtocol.fromChatModel(provider.getChatModel());
+        if (protocol == ModelProtocol.DASHSCOPE_NATIVE && !isDashScopeModelIdAcceptable(modelId)) {
+            throw new MateClawException(
+                    "err.llm.model_not_supported",
+                    "Model id '" + modelId + "' is not supported on DashScope native protocol. " +
+                            "Dot-versioned families (e.g. qwen3.5-*, qwen3.6-*) are only available via compatible-mode. " +
+                            "Use an allowed id such as qwen-max / qwen-plus / qwen3-max."
+            );
+        }
     }
 
     /**
@@ -253,10 +287,9 @@ public class ModelDiscoveryService {
         for (String modelId : modelIds) {
             if (modelId == null || modelId.isBlank()) continue;
             if (existingIds.contains(modelId)) continue;
-            // Defense-in-depth: never add a DashScope model that is on the native protocol deny list
-            if (protocol == ModelProtocol.DASHSCOPE_NATIVE
-                    && DASHSCOPE_NATIVE_DENY.contains(modelId.toLowerCase())) {
-                log.warn("[ModelDiscovery] Refusing to add {} — on DashScope native deny list", modelId);
+            // Defense-in-depth: never add a DashScope model that fails the protocol-aware check
+            if (protocol == ModelProtocol.DASHSCOPE_NATIVE && !isDashScopeModelIdAcceptable(modelId)) {
+                log.warn("[ModelDiscovery] Refusing to add {} — blocked by DashScope native protocol filter", modelId);
                 skipped++;
                 continue;
             }

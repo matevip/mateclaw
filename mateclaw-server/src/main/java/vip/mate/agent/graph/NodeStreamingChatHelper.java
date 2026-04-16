@@ -152,6 +152,19 @@ public class NodeStreamingChatHelper {
                 || msg.contains("invalid_request_error") || msg.contains("unsupported")) {
             return ErrorType.CLIENT_ERROR;
         }
+        // DashScope-specific "model name does not map to a valid endpoint" — reported as
+        // "[InvalidParameter] url error, please check url" (see
+        // https://help.aliyun.com/zh/model-studio/error-code#error-url). Despite the wording
+        // it's not a URL issue — it's the provider rejecting an unknown/unsupported model id
+        // on the native protocol. Treat as client error so we do NOT retry.
+        if (msg.contains("[InvalidParameter]")
+                || msg.contains("InvalidParameter")
+                || msg.contains("url error")
+                || msg.contains("Model not exist")
+                || msg.contains("model_not_found")
+                || msg.contains("Model not found")) {
+            return ErrorType.CLIENT_ERROR;
+        }
         // Server errors
         if (msg.contains("500") || msg.contains("502") || msg.contains("503") || msg.contains("504")
                 || msg.contains("APITimeoutError") || msg.contains("APIConnectionError")
@@ -211,10 +224,15 @@ public class NodeStreamingChatHelper {
                 if (lastResult.errorType() == ErrorType.THINKING_BLOCK_ERROR) {
                     return lastResult; // 已经重试过了
                 }
-                // 成功或不可重试
+                // 成功
                 if (lastResult.errorMessage() == null || lastResult.errorType() == ErrorType.NONE) {
                     return lastResult;
                 }
+                // Any other non-null errored result with a classified type that doStreamCall
+                // chose NOT to retry (i.e. UNKNOWN, or RATE_LIMIT/SERVER_ERROR past MAX_RETRIES)
+                // must exit — otherwise we silently spin through attempts and waste seconds
+                // per turn on unrecoverable errors like DashScope's "url error" / unknown model.
+                return lastResult;
             }
             // lastResult == null 表示需要重试
         }
@@ -640,6 +658,13 @@ public class NodeStreamingChatHelper {
     private static String extractUserFriendlyError(Throwable error) {
         String msg = error.getMessage();
         if (msg == null) return error.getClass().getSimpleName();
+        // DashScope "url error" is really "model name not mapped to any valid endpoint".
+        // Translate it so users see the real cause and the actionable next step.
+        if (msg.contains("url error") || msg.contains("[InvalidParameter]")
+                || msg.contains("Model not exist") || msg.contains("model_not_found")
+                || msg.contains("Model not found")) {
+            return "Model name not available on this provider — verify the model exists and is supported (Settings → Models)";
+        }
         // 对 Jackson 反序列化错误，提取关键信息
         if (msg.contains("engine_overloaded")) return "Model service overloaded, please retry later";
         if (msg.contains("unsupported image format") || msg.contains("unsupported")) return "Unsupported file format (e.g. SVG), use PNG/JPG instead";
