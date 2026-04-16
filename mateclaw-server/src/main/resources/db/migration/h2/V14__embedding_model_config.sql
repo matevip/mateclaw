@@ -19,7 +19,9 @@ VALUES (1000001002, 'Text Embedding v2', 'dashscope', 'text-embedding-v2',
         'DashScope 通义千问 v2 文本向量模型（1536 维）', 0, 0, 0,
         TRUE, TRUE, FALSE, 'embedding', NOW(), NOW(), 0);
 
--- 设置 v3 为系统默认 embedding 模型（WikiEmbeddingService 的第 2 优先级）
-MERGE INTO mate_system_setting (setting_key, setting_value, description, create_time, update_time)
-KEY (setting_key)
-VALUES ('embedding.default.model.id', '1000001001', 'Default embedding model id for wiki semantic search', NOW(), NOW());
+-- 系统默认 embedding 模型记录到 mate_system_setting（id 必须显式指定，该表无自增）
+-- 1000001100 段保留给 embedding 相关设置
+MERGE INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+KEY (id)
+VALUES (1000001100, 'embedding.default.model.id', '1000001001',
+        'Default embedding model id for wiki semantic search', NOW(), NOW());

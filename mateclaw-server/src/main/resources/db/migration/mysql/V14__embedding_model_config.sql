@@ -15,6 +15,8 @@ VALUES (1000001002, 'Text Embedding v2', 'dashscope', 'text-embedding-v2',
         TRUE, TRUE, FALSE, 'embedding', NOW(), NOW(), 0)
 ON DUPLICATE KEY UPDATE model_type = 'embedding';
 
-INSERT INTO mate_system_setting (setting_key, setting_value, description, create_time, update_time)
-VALUES ('embedding.default.model.id', '1000001001', 'Default embedding model id for wiki semantic search', NOW(), NOW())
-ON DUPLICATE KEY UPDATE setting_value = setting_value;
+-- 系统默认 embedding 模型（id 必须显式指定，与 chat 段 100000xxxx 错开）
+INSERT INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+VALUES (1000001100, 'embedding.default.model.id', '1000001001',
+        'Default embedding model id for wiki semantic search', NOW(), NOW())
+ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);
