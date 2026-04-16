@@ -224,7 +224,7 @@ public class SkillSynthesisService {
         ModelConfigEntity model = null;
         if (properties.getModelId() != null && !properties.getModelId().isBlank()) {
             try {
-                model = modelConfigService.getById(Long.parseLong(properties.getModelId()));
+                model = modelConfigService.getModel(Long.parseLong(properties.getModelId()));
             } catch (Exception e) {
                 log.warn("[SkillSynthesis] Invalid modelId '{}', falling back to default", properties.getModelId());
             }
