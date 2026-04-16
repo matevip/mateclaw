@@ -20,6 +20,7 @@ import vip.mate.wiki.repository.WikiChunkMapper;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -128,29 +129,35 @@ public class WikiEmbeddingService {
         }
 
         int batchSize = Math.max(1, properties.getEmbeddingBatchSize());
+        int maxChars = Math.max(500, properties.getEmbeddingMaxChars());
         int total = 0;
 
         for (int offset = 0; offset < pending.size(); offset += batchSize) {
             List<WikiChunkEntity> batch = pending.subList(offset, Math.min(offset + batchSize, pending.size()));
-            try {
-                List<String> inputs = batch.stream()
-                        .map(WikiChunkEntity::getContent)
-                        .toList();
 
-                EmbeddingResponse resp = r.model().call(new EmbeddingRequest(inputs, null));
-
-                for (int i = 0; i < batch.size(); i++) {
-                    float[] vec = resp.getResults().get(i).getOutput();
-                    WikiChunkEntity chunk = batch.get(i);
-                    chunk.setEmbedding(floatsToBytes(vec));
-                    chunk.setEmbeddingModel(modelName);
-                    chunkMapper.updateById(chunk);
+            // Split the batch into short chunks (direct batch embed) and long chunks
+            // (split into sub-segments, embed each, then mean-pool into a single vector)
+            List<WikiChunkEntity> shortBatch = new ArrayList<>();
+            List<WikiChunkEntity> longChunks = new ArrayList<>();
+            for (WikiChunkEntity c : batch) {
+                if (c.getContent() == null || c.getContent().isBlank()) continue;
+                if (c.getContent().length() <= maxChars) {
+                    shortBatch.add(c);
+                } else {
+                    longChunks.add(c);
                 }
-                total += batch.size();
-            } catch (Exception e) {
-                log.error("[WikiEmbedding] Batch embedding failed (kbId={}, batchSize={}, model={}): {}",
-                        kbId, batch.size(), modelName, e.getMessage());
-                // 继续下一批，不中断
+            }
+
+            // Short chunks: existing batch path
+            if (!shortBatch.isEmpty()) {
+                total += embedShortBatch(shortBatch, r.model(), modelName, kbId);
+            }
+
+            // Long chunks: each goes through sub-segment split + mean pool
+            for (WikiChunkEntity longChunk : longChunks) {
+                if (embedLongChunk(longChunk, r.model(), modelName, maxChars)) {
+                    total++;
+                }
             }
         }
 
@@ -165,13 +172,160 @@ public class WikiEmbeddingService {
     }
 
     /**
+     * Embed a batch of chunks whose content fits within the per-segment char limit.
+     * One API call per batch; individual results are persisted independently.
+     * Returns the number of chunks that were successfully embedded and persisted.
+     */
+    private int embedShortBatch(List<WikiChunkEntity> batch, EmbeddingModel model,
+                                 String modelName, Long kbId) {
+        try {
+            List<String> inputs = batch.stream().map(WikiChunkEntity::getContent).toList();
+            EmbeddingResponse resp = model.call(new EmbeddingRequest(inputs, null));
+            for (int i = 0; i < batch.size(); i++) {
+                float[] vec = resp.getResults().get(i).getOutput();
+                WikiChunkEntity chunk = batch.get(i);
+                chunk.setEmbedding(floatsToBytes(vec));
+                chunk.setEmbeddingModel(modelName);
+                chunkMapper.updateById(chunk);
+            }
+            return batch.size();
+        } catch (Exception e) {
+            log.error("[WikiEmbedding] Short-batch embedding failed (kbId={}, batchSize={}, model={}): {}",
+                    kbId, batch.size(), modelName, e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * Embed a single chunk whose content exceeds the per-segment char limit:
+     *   1. Split into sub-segments (each ≤ maxChars) along sentence boundaries
+     *   2. Batch-embed all sub-segments in one API call
+     *   3. Fall back to per-segment retry if the batch fails (partial recovery)
+     *   4. Mean-pool successful vectors and re-normalize (L2) to restore unit length
+     *   5. Store the single pooled vector against this chunk's id
+     * <p>
+     * Returns true if at least one sub-segment succeeded and the chunk was persisted.
+     */
+    private boolean embedLongChunk(WikiChunkEntity chunk, EmbeddingModel model,
+                                    String modelName, int maxChars) {
+        List<String> segments = splitForEmbedding(chunk.getContent(), maxChars);
+        if (segments.isEmpty()) {
+            log.warn("[WikiEmbedding] Chunk {} produced no embeddable segments after split", chunk.getId());
+            return false;
+        }
+        log.info("[WikiEmbedding] Chunk {} ({} chars) split into {} sub-segments",
+                chunk.getId(), chunk.getContent().length(), segments.size());
+
+        List<float[]> vectors = new ArrayList<>();
+        try {
+            EmbeddingResponse resp = model.call(new EmbeddingRequest(segments, null));
+            for (int i = 0; i < resp.getResults().size(); i++) {
+                vectors.add(resp.getResults().get(i).getOutput());
+            }
+        } catch (Exception e) {
+            // Batch failed — degrade to per-segment retry; whatever succeeds is still usable
+            log.warn("[WikiEmbedding] Batch of {} sub-segments failed for chunk {}: {} — retrying one-by-one",
+                    segments.size(), chunk.getId(), e.getMessage());
+            vectors.clear();
+            for (String seg : segments) {
+                try {
+                    EmbeddingResponse single = model.call(new EmbeddingRequest(List.of(seg), null));
+                    vectors.add(single.getResults().get(0).getOutput());
+                } catch (Exception ignored) {
+                    // Skip this segment; proceed with remaining
+                }
+            }
+        }
+
+        if (vectors.isEmpty()) {
+            log.error("[WikiEmbedding] All {} sub-segments failed for chunk {}", segments.size(), chunk.getId());
+            return false;
+        }
+
+        float[] pooled = averageAndNormalize(vectors);
+        chunk.setEmbedding(floatsToBytes(pooled));
+        chunk.setEmbeddingModel(modelName);
+        chunkMapper.updateById(chunk);
+        return true;
+    }
+
+    /**
+     * Split a long text into sub-segments of at most {@code maxChars} characters,
+     * respecting sentence boundaries when possible.
+     * Boundary priority: double-newline > Chinese period > English period > newline > space.
+     * Hard-truncation fallback is applied when no boundary is found (e.g. a single
+     * run-on passage with no punctuation).
+     */
+    private List<String> splitForEmbedding(String text, int maxChars) {
+        if (text == null || text.isBlank()) return List.of();
+        if (text.length() <= maxChars) return List.of(text);
+
+        List<String> segments = new ArrayList<>();
+        int start = 0;
+        while (start < text.length()) {
+            int end = Math.min(start + maxChars, text.length());
+            if (end < text.length()) {
+                int boundary = findEmbeddingBoundary(text, start, end, maxChars);
+                if (boundary > start) end = boundary;
+            }
+            String seg = text.substring(start, end).trim();
+            if (!seg.isBlank()) {
+                // Hard-truncation fallback: a boundary beyond maxChars shouldn't happen
+                // with the logic above, but guard against edge cases defensively.
+                if (seg.length() > maxChars) {
+                    seg = seg.substring(0, maxChars);
+                }
+                segments.add(seg);
+            }
+            int nextStart = end;
+            if (nextStart <= start) nextStart = start + maxChars; // prevent infinite loop
+            start = nextStart;
+        }
+        return segments;
+    }
+
+    /**
+     * Find a sentence boundary within [start, end] for embedding sub-segmentation.
+     * Only returns boundaries past the midpoint so we don't produce tiny segments.
+     */
+    private int findEmbeddingBoundary(String text, int start, int end, int maxChars) {
+        int halfChunk = start + maxChars / 2;
+
+        int lastPara = text.lastIndexOf("\n\n", end);
+        if (lastPara > halfChunk) return lastPara + 2;
+
+        int lastChinese = text.lastIndexOf("。", end);
+        if (lastChinese > halfChunk) return lastChinese + 1;
+
+        for (int i = end - 1; i > halfChunk; i--) {
+            if (text.charAt(i) == '.' && i + 1 < text.length()
+                    && (text.charAt(i + 1) == ' ' || text.charAt(i + 1) == '\n')) {
+                return i + 1;
+            }
+        }
+
+        int lastNewline = text.lastIndexOf("\n", end);
+        if (lastNewline > halfChunk) return lastNewline + 1;
+
+        int lastSpace = text.lastIndexOf(" ", end);
+        if (lastSpace > halfChunk) return lastSpace + 1;
+
+        return end; // hard cut
+    }
+
+    /**
      * 查询向量化（混合搜索时调用，需指定 KB 以便解析对应模型）
      */
     public float[] embedQuery(Long kbId, String query) {
         Resolved r = resolveForKb(kbId);
         if (r == null) return null;
+        // Defensive truncation: user queries are usually short, but guard against
+        // callers that accidentally pass document-sized text as a query.
+        int maxChars = Math.max(500, properties.getEmbeddingMaxChars());
+        String safeQuery = (query != null && query.length() > maxChars)
+                ? query.substring(0, maxChars) : query;
         try {
-            EmbeddingResponse resp = r.model().call(new EmbeddingRequest(List.of(query), null));
+            EmbeddingResponse resp = r.model().call(new EmbeddingRequest(List.of(safeQuery), null));
             return resp.getResults().get(0).getOutput();
         } catch (Exception e) {
             log.error("[WikiEmbedding] Query embedding failed for kbId={}: {}", kbId, e.getMessage());
@@ -235,6 +389,39 @@ public class WikiEmbeddingService {
         float[] vec = new float[bytes.length / 4];
         for (int i = 0; i < vec.length; i++) vec[i] = buf.getFloat();
         return vec;
+    }
+
+    /**
+     * Arithmetic mean of N equal-length vectors, followed by L2 normalization.
+     * <p>
+     * Individual embedding outputs are usually unit vectors, but the arithmetic mean
+     * of multiple unit vectors is generally not unit length (||v̄|| < 1 unless all
+     * inputs are identical). Re-normalizing to unit length preserves the cosine
+     * similarity semantics used by downstream retrievers.
+     */
+    public static float[] averageAndNormalize(List<float[]> vectors) {
+        if (vectors == null || vectors.isEmpty()) {
+            throw new IllegalArgumentException("vectors must not be empty");
+        }
+        int dim = vectors.get(0).length;
+        float[] avg = new float[dim];
+        for (float[] v : vectors) {
+            if (v.length != dim) {
+                throw new IllegalArgumentException("dimension mismatch: expected " + dim + " got " + v.length);
+            }
+            for (int i = 0; i < dim; i++) avg[i] += v[i];
+        }
+        float n = vectors.size();
+        for (int i = 0; i < dim; i++) avg[i] /= n;
+
+        double norm = 0;
+        for (float x : avg) norm += x * x;
+        norm = Math.sqrt(norm);
+        if (norm > 0) {
+            float invNorm = (float) (1.0 / norm);
+            for (int i = 0; i < dim; i++) avg[i] *= invNorm;
+        }
+        return avg;
     }
 
     /** 余弦相似度 */

@@ -100,6 +100,14 @@ public class WikiProperties {
     /** 嵌入批量大小（一次 API 调用处理多少 chunk） */
     private int embeddingBatchSize = 16;
 
+    /**
+     * Embedding 模型单段最大字符数，超过则子段拆分 + 向量均值。
+     * <p>
+     * 默认 6000（中文安全值，对应 ~4000 token，远小于 text-embedding-v3 的 8192 上限）。
+     * 纯英文场景可调大到 7500；其他 embedding 模型切换时按该模型的 token 限制调整。
+     */
+    private int embeddingMaxChars = 6000;
+
     /** 混合搜索默认模式：keyword / semantic / hybrid */
     private String searchDefaultMode = "hybrid";
 }
