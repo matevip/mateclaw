@@ -46,6 +46,8 @@ public class WikiProcessingService {
     private final WikiKnowledgeBaseService kbService;
     private final WikiRawMaterialService rawService;
     private final WikiPageService pageService;
+    private final WikiChunkService chunkService;
+    private final WikiEmbeddingService embeddingService;
     private final WikiProperties properties;
     private final ModelConfigService modelConfigService;
     private final AgentGraphBuilder agentGraphBuilder;
@@ -172,6 +174,13 @@ public class WikiProcessingService {
             if (textContent.length() > properties.getMaxChunkSize()) {
                 result = processInChunks(kb, raw, textContent, existingPagesIndex);
             } else {
+                // 单 chunk 也持久化（RFC-013：保证所有 chunk 都入库）
+                try {
+                    chunkService.persistChunks(kb.getId(), rawId,
+                            List.of(textContent), List.of(new int[]{0, textContent.length()}));
+                } catch (Exception e) {
+                    log.warn("[Wiki] Single chunk persistence failed for raw={}: {}", rawId, e.getMessage());
+                }
                 int pages = processChunk(kb, raw, textContent, existingPagesIndex);
                 result = new int[]{pages, pages == 0 ? 1 : 0, 1};
             }
@@ -236,6 +245,25 @@ public class WikiProcessingService {
             log.info("[Wiki] Processing completed for raw={}, kbId={}, generatedPages={}, totalPages={}",
                     rawId, kb.getId(), totalPages, pageCount);
 
+            // RFC-011：异步嵌入新 chunk（不阻塞处理管线）
+            // 注意：此方法目前未加 @Transactional，每个 DB 操作短事务独立提交。
+            // 如果未来加了事务包裹 processRawMaterial，这里的异步任务需要改用
+            // TransactionSynchronizationManager.registerSynchronization(afterCommit)
+            // 否则新线程会查不到 chunk（事务未提交）导致 embedding 静默跳过。
+            if (totalPages > 0) {
+                final Long fKbId = kb.getId();
+                WIKI_EXECUTOR.submit(() -> {
+                    try {
+                        int embedded = embeddingService.embedMissingChunks(fKbId);
+                        if (embedded > 0) {
+                            log.info("[Wiki] Async embedding completed: kbId={}, embedded={}", fKbId, embedded);
+                        }
+                    } catch (Exception ex) {
+                        log.warn("[Wiki] Async embedding failed for kbId={}: {}", fKbId, ex.getMessage());
+                    }
+                });
+            }
+
         } catch (Exception e) {
             log.error("[Wiki] Processing failed for raw={}: {}", rawId, e.getMessage(), e);
             rawService.updateProcessingStatus(rawId, "failed", e.getMessage());
@@ -295,10 +323,20 @@ public class WikiProcessingService {
      */
     private int[] processInChunks(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw, String text,
                                       String existingPagesIndex) {
-        // Phase 1: 切分文本为 chunks
-        List<String> chunks = splitIntoChunks(text);
+        // Phase 1: 切分文本为 chunks（带偏移，供持久化）
+        List<ChunkWithOffset> chunksWithOffset = splitIntoChunksWithOffsets(text);
+        List<String> chunks = chunksWithOffset.stream().map(ChunkWithOffset::text).toList();
         int totalChunks = chunks.size();
         log.info("[Wiki] Split into {} chunks for raw={}, kbId={}", totalChunks, raw.getId(), kb.getId());
+
+        // RFC-013：持久化 chunk 到 mate_wiki_chunk（增量对账：hash 不变的保留）
+        try {
+            List<int[]> offsets = chunksWithOffset.stream()
+                    .map(c -> new int[]{c.startOffset(), c.endOffset()}).toList();
+            chunkService.persistChunks(kb.getId(), raw.getId(), chunks, offsets);
+        } catch (Exception e) {
+            log.warn("[Wiki] Chunk persistence failed for raw={}, continuing without: {}", raw.getId(), e.getMessage());
+        }
 
         if (totalChunks == 1) {
             // 单 chunk 不走并行
@@ -356,9 +394,19 @@ public class WikiProcessingService {
      * 将文本切分为多个 chunks（智能句子边界，支持中英文）
      */
     private List<String> splitIntoChunks(String text) {
+        return splitIntoChunksWithOffsets(text).stream().map(ChunkWithOffset::text).toList();
+    }
+
+    /** chunk 文本 + 在原始文本中的偏移 */
+    record ChunkWithOffset(String text, int startOffset, int endOffset) {}
+
+    /**
+     * 切分并记录每个 chunk 的原始偏移（RFC-013：供 WikiChunkService 持久化）
+     */
+    private List<ChunkWithOffset> splitIntoChunksWithOffsets(String text) {
         int chunkSize = properties.getMaxChunkSize();
         int overlap = Math.min(500, chunkSize / 10);
-        List<String> chunks = new ArrayList<>();
+        List<ChunkWithOffset> chunks = new ArrayList<>();
         int start = 0;
 
         while (start < text.length()) {
@@ -372,7 +420,7 @@ public class WikiProcessingService {
                 }
             }
 
-            chunks.add(text.substring(start, end));
+            chunks.add(new ChunkWithOffset(text.substring(start, end), start, end));
 
             // 前进（带 overlap 防止边界上下文丢失）
             int nextStart = end - overlap;

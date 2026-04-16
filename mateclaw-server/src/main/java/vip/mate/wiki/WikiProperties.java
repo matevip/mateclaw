@@ -91,4 +91,15 @@ public class WikiProperties {
      * 默认 true（M2 上线）；遇问题可在 application.yml 配 mate.wiki.use-two-phase-digest=false 回退到旧行为。
      */
     private boolean useTwoPhaseDigest = true;
+
+    // ==================== RFC-011: Embedding ====================
+
+    /** 嵌入模型名称（DashScope） */
+    private String embeddingModel = "text-embedding-v3";
+
+    /** 嵌入批量大小（一次 API 调用处理多少 chunk） */
+    private int embeddingBatchSize = 16;
+
+    /** 混合搜索默认模式：keyword / semantic / hybrid */
+    private String searchDefaultMode = "hybrid";
 }

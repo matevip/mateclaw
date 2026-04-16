@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.model.WikiRawMaterialEntity;
+import vip.mate.wiki.service.HybridRetriever;
 import vip.mate.wiki.service.WikiKnowledgeBaseService;
 import vip.mate.wiki.service.WikiPageService;
 import vip.mate.wiki.service.WikiRawMaterialService;
@@ -35,6 +36,7 @@ public class WikiTool {
     private final WikiPageService pageService;
     private final WikiKnowledgeBaseService kbService;
     private final WikiRawMaterialService rawService;
+    private final HybridRetriever hybridRetriever;
 
     @Tool(description = """
             读取 Wiki 知识库中指定页面的完整内容。
@@ -102,11 +104,13 @@ public class WikiTool {
 
     @Tool(description = """
             在 Wiki 知识库中搜索页面。
-            按关键词搜索页面标题、摘要和正文内容，返回匹配的页面列表及其来源文件。
+            支持三种模式：keyword（关键词匹配）、semantic（语义向量相似度）、hybrid（两者融合，默认）。
+            返回匹配的页面列表及其来源文件。
             """)
     public String wiki_search_pages(
             @ToolParam(description = "当前 Agent 的 ID") Long agentId,
-            @ToolParam(description = "搜索关键词") String query) {
+            @ToolParam(description = "搜索关键词或自然语言问题") String query,
+            @ToolParam(description = "搜索模式：keyword | semantic | hybrid（默认 hybrid）", required = false) String mode) {
 
         if (query == null || query.isBlank()) {
             return error("query is required");
@@ -117,29 +121,79 @@ public class WikiTool {
             return error("No wiki knowledge base found for this agent");
         }
 
-        // DB 级别搜索（不加载 content CLOB 到 Java 内存）
-        List<WikiPageEntity> matched = pageService.searchPages(kbId, query);
+        // RFC-011：走混合检索
+        List<HybridRetriever.PageHit> hits = hybridRetriever.searchPages(kbId, query, mode, 20);
 
-        // Agent 引用追踪（搜索结果中的页面都算被引用）
-        for (WikiPageEntity p : matched) {
-            pageService.trackReference(kbId, p.getSlug());
+        // Agent 引用追踪
+        for (HybridRetriever.PageHit h : hits) {
+            pageService.trackReference(kbId, h.slug());
         }
 
         JSONArray arr = new JSONArray();
-        for (WikiPageEntity page : matched) {
-            JSONObject obj = JSONUtil.createObj()
-                    .set("title", page.getTitle())
-                    .set("slug", page.getSlug())
-                    .set("summary", page.getSummary())
-                    .set("sourceFiles", resolveSourceFiles(page.getSourceRawIds()));
-            arr.add(obj);
+        for (HybridRetriever.PageHit hit : hits) {
+            arr.add(JSONUtil.createObj()
+                    .set("title", hit.title())
+                    .set("slug", hit.slug())
+                    .set("summary", hit.summary())
+                    .set("score", String.format("%.4f", hit.score())));
         }
 
         return JSONUtil.createObj()
                 .set("kbId", kbId)
                 .set("query", query)
-                .set("matchCount", matched.size())
+                .set("mode", mode != null ? mode : "hybrid")
+                .set("matchCount", hits.size())
                 .set("pages", arr)
+                .toString();
+    }
+
+    @Tool(description = """
+            在 Wiki 知识库中进行 chunk 级语义搜索。
+            返回与查询语义最接近的原始文本片段（chunk），包含相似度分数。
+            当 wiki_search_pages 返回的页面摘要不够具体时，使用此工具获取精确的源文本证据。
+            """)
+    public String wiki_semantic_search(
+            @ToolParam(description = "当前 Agent 的 ID") Long agentId,
+            @ToolParam(description = "自然语言查询") String query,
+            @ToolParam(description = "返回条数（默认 5）", required = false) Integer topK) {
+
+        if (query == null || query.isBlank()) {
+            return error("query is required");
+        }
+
+        Long kbId = resolveKbId(agentId);
+        if (kbId == null) {
+            return error("No wiki knowledge base found for this agent");
+        }
+
+        int k = (topK != null && topK > 0) ? Math.min(topK, 20) : 5;
+        List<HybridRetriever.ChunkHit> hits = hybridRetriever.searchChunks(kbId, query, k);
+
+        if (hits.isEmpty()) {
+            return JSONUtil.createObj()
+                    .set("kbId", kbId)
+                    .set("query", query)
+                    .set("matchCount", 0)
+                    .set("message", "No semantic matches found. Try wiki_search_pages with mode=keyword.")
+                    .toString();
+        }
+
+        JSONArray arr = new JSONArray();
+        for (HybridRetriever.ChunkHit hit : hits) {
+            // 解析 raw material 标题
+            WikiRawMaterialEntity raw = rawService.getById(hit.rawId());
+            arr.add(JSONUtil.createObj()
+                    .set("chunkId", hit.chunkId())
+                    .set("rawTitle", raw != null ? raw.getTitle() : "unknown")
+                    .set("snippet", hit.snippet())
+                    .set("score", String.format("%.4f", hit.score())));
+        }
+
+        return JSONUtil.createObj()
+                .set("kbId", kbId)
+                .set("query", query)
+                .set("matchCount", hits.size())
+                .set("chunks", arr)
                 .toString();
     }
 

@@ -36,6 +36,8 @@ public class WikiRawMaterialService {
     private final WikiProperties properties;
     private final ApplicationEventPublisher eventPublisher;
     private final DocumentExtractTool documentExtractTool;
+    /** RFC-013：删除时级联清理 chunk */
+    private final WikiChunkService chunkService;
 
     /**
      * RFC-012 follow-up #3：从 partial 状态触发的 reprocess 会在此 set 中打标，
@@ -278,6 +280,14 @@ public class WikiRawMaterialService {
     @Transactional
     public void delete(Long id) {
         rawMapper.deleteById(id);
+        // RFC-013：级联清理 chunk，避免语义搜索命中孤儿 chunk
+        try {
+            if (chunkService != null) {
+                chunkService.deleteByRawId(id);
+            }
+        } catch (Exception e) {
+            log.warn("[Wiki] Failed to cascade-delete chunks for raw={}: {}", id, e.getMessage());
+        }
     }
 
     /**
