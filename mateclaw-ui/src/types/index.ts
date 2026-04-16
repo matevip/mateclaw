@@ -574,6 +574,10 @@ export interface SystemSettings {
 export interface ProviderModelInfo {
   id: string
   name: string
+  /** Discovery probe result (backend `probeOk` field). True = verified reachable, false = probe failed, undefined = not probed */
+  probeOk?: boolean
+  /** Short error message when probeOk=false */
+  probeError?: string
 }
 
 export interface ProviderInfo {

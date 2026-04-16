@@ -51,6 +51,9 @@
                 <input type="checkbox" :value="model.id" :checked="selectedNewModelIds.includes(model.id)" @change="$emit('toggleModel', model.id)" />
                 <span class="discover-model-name">{{ model.name }}</span>
                 <span class="discover-model-id">{{ model.id }}</span>
+                <span v-if="model.probeOk === true" class="probe-badge probe-ok" title="Verified reachable">
+                  ✓ verified
+                </span>
               </label>
             </div>
             <div class="discover-actions">
@@ -62,6 +65,17 @@
                 {{ applyingModels ? t('settings.model.discovery.adding') : t('settings.model.discovery.addSelected') }}
                 ({{ selectedNewModelIds.length }})
               </button>
+            </div>
+            <!-- Show models that were discovered but failed the probe, so users see
+                 why they are not offered in the "add selected" list -->
+            <div v-if="discoveredUnavailable.length > 0" class="discover-unavailable">
+              <div class="discover-unavailable-title">
+                ⚠ {{ discoveredUnavailable.length }} discovered model(s) failed the reachability probe and were not listed above:
+              </div>
+              <div v-for="model in discoveredUnavailable" :key="model.id" class="discover-unavailable-item">
+                <span class="discover-model-id">{{ model.id }}</span>
+                <span class="discover-unavailable-reason">{{ model.probeError || 'not reachable' }}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -136,12 +150,13 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { DiscoverResult, ProviderInfo, ProviderModelInfo, TestResult } from '@/types'
 
 const { t } = useI18n()
 
-defineProps<{
+const props = defineProps<{
   show: boolean
   provider: ProviderInfo | null
   modelForm: { id: string; name: string }
@@ -157,6 +172,13 @@ defineProps<{
   getProviderIcon: (providerId: string) => string
   onIconError: (e: Event) => void
 }>()
+
+// Models from discovery that failed the probe — shown in a warning block
+// so users understand why they are not in the "add selected" list
+const discoveredUnavailable = computed(() => {
+  const all = props.discoverResult?.discoveredModels || []
+  return all.filter(m => m && m.probeOk === false)
+})
 
 defineEmits<{
   close: []
@@ -244,6 +266,12 @@ defineEmits<{
 .discover-checkbox:hover { background: var(--mc-bg-sunken); }
 .discover-model-name { font-weight: 500; color: var(--mc-text-primary); }
 .discover-model-id { color: var(--mc-text-tertiary); margin-left: auto; font-size: 12px; }
+.probe-badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 600; margin-left: 6px; }
+.probe-ok { background: rgba(34, 197, 94, 0.12); color: rgb(21, 128, 61); }
+.discover-unavailable { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: rgba(234, 179, 8, 0.08); border: 1px solid rgba(234, 179, 8, 0.3); }
+.discover-unavailable-title { font-size: 12px; font-weight: 600; color: rgb(161, 98, 7); margin-bottom: 6px; }
+.discover-unavailable-item { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 12px; }
+.discover-unavailable-reason { color: var(--mc-text-tertiary); margin-left: 10px; max-width: 60%; text-align: right; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
 .discover-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
 
 .model-list { display: grid; gap: 12px; }
