@@ -684,6 +684,44 @@ function handleKeyboardShortcuts(e: KeyboardEvent) {
   }
 }
 
+// 轮询定时器：让 ChatConsole 能实时感知外部渠道（WeChat/DingTalk/…）推进来的新消息，
+// 无需 F5 即可看到侧栏列表更新和选中会话的消息/流状态。
+let activityPollTimer: number | null = null
+const ACTIVITY_POLL_MS = 4000
+
+async function pollActivity() {
+  // 页面不可见时不轮询，避免切到别的标签还在空耗
+  if (typeof document !== 'undefined' && document.hidden) return
+  try {
+    await loadConversations()
+  } catch {
+    // 静默失败，下一轮再试
+  }
+  // 自己没在生成时才刷新当前选中会话的消息 + 探测是否该接入流
+  if (currentConversationId.value && !isGenerating.value && streamPhase.value !== 'awaiting_approval') {
+    const cid = currentConversationId.value
+    try {
+      const statusRes: any = await conversationApi.getStatus(cid)
+      if (currentConversationId.value !== cid) return
+      const running = statusRes?.data?.streamStatus === 'running'
+      if (running) {
+        // 外部渠道正在跑：
+        // 1. 先从 DB 拉消息，把刚插入的 user 消息（"你在干什么"之类）带进来，
+        //    否则只接入流的话前端只能看到 assistant content_delta，看不到用户问题。
+        // 2. 再接入流，让后续 content_delta 实时累积到 assistant 气泡。
+        await refreshCurrentConversationMessages(cid)
+        if (currentConversationId.value !== cid || isGenerating.value) return
+        await reconnectStream(cid)
+      } else {
+        // 不在跑：从 DB 对齐消息（新 user 消息 / 刚落库 assistant 会合并进来）
+        await refreshCurrentConversationMessages(cid)
+      }
+    } catch {
+      // 忽略探测失败
+    }
+  }
+}
+
 onMounted(async () => {
   document.addEventListener('keydown', handleKeyboardShortcuts)
   document.addEventListener('click', handleCodeCopy)
@@ -696,6 +734,7 @@ onMounted(async () => {
   mediumQuery.addEventListener('change', handleConvMediumChange)
   await Promise.all([loadAgents(), loadModelState(), loadConversations()])
   await hydrateStateFromRoute()
+  activityPollTimer = window.setInterval(pollActivity, ACTIVITY_POLL_MS)
 })
 
 onBeforeUnmount(() => {
@@ -704,6 +743,10 @@ onBeforeUnmount(() => {
   disposeECharts()
   mobileQuery?.removeEventListener('change', handleMobileChange)
   mediumQuery?.removeEventListener('change', handleConvMediumChange)
+  if (activityPollTimer !== null) {
+    clearInterval(activityPollTimer)
+    activityPollTimer = null
+  }
   stopChatGeneration()
   // 释放所有附件的 ObjectURL，防止内存泄漏
   revokeAllPreviewUrls()
@@ -834,7 +877,11 @@ function syncRouteState() {
 
 async function selectConversation(conv: Conversation) {
   if (isMobile.value) convPanelOpen.value = false
-  resetStreamingState()
+  // 切换到不同会话时才 reset（含 stop 旧流）；点同一个会话时只刷新状态，避免误杀正在跑的 observer 流
+  const switchingAway = currentConversationId.value !== conv.conversationId
+  if (switchingAway) {
+    resetStreamingState()
+  }
   currentConversationId.value = conv.conversationId
   selectedAgentId.value = conv.agentId || selectedAgentId.value
   const requestedConvId = conv.conversationId
@@ -842,7 +889,10 @@ async function selectConversation(conv: Conversation) {
     const res: any = await conversationApi.listMessages(requestedConvId)
     // Stale guard：await 返回后确认仍是当前会话，否则丢弃
     if (currentConversationId.value !== requestedConvId) return
-    messages.value = extractMessages(res).messages.map((msg: Message) => normalizeMessage(msg))
+    // 点同一个会话时，若已有 SSE 在跑就不要覆盖本地消息状态
+    if (switchingAway || !isGenerating.value) {
+      messages.value = extractMessages(res).messages.map((msg: Message) => normalizeMessage(msg))
+    }
 
     // Hydrate pending approvals：恢复刷新后丢失的审批卡片
     try {
@@ -875,7 +925,20 @@ async function selectConversation(conv: Conversation) {
       // hydration 失败不影响正常使用
     }
 
-    if (currentConversationId.value === requestedConvId && conv.streamStatus === 'running') {
+    // 决定是否重连 SSE：
+    // - 快照 streamStatus==='running' → 直接重连
+    // - 否则探测实时状态（兜底处理：渠道消息进入后侧栏快照未刷新时，仍能接入运行中的流）
+    let shouldReconnect = conv.streamStatus === 'running'
+    if (!shouldReconnect) {
+      try {
+        const statusRes: any = await conversationApi.getStatus(requestedConvId)
+        if (currentConversationId.value !== requestedConvId) return
+        shouldReconnect = statusRes?.data?.streamStatus === 'running'
+      } catch {
+        // 探测失败不阻断主流程
+      }
+    }
+    if (currentConversationId.value === requestedConvId && shouldReconnect) {
       await reconnectStream(requestedConvId)
     }
   } catch (e) {

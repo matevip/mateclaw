@@ -1118,6 +1118,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     const convId = streamConversationId
     const assistantId = currentAssistantId.value
 
+    // 仅在前端确实在生成时才触发停止（含 SSE 接收中 / reconnect 中 / 审批等待中）。
+    // 否则只是"旁观者"身份，不能把对方（渠道用户）的 agent run 也一起杀掉。
+    const activelyStreaming = isGenerating.value
+        || streamPhase.value === 'reconnecting'
+        || streamPhase.value === 'awaiting_approval'
+
+    if (!activelyStreaming) {
+      // 没有真正在流 → 什么都不做，让调用方直接走 resetForNewConversation
+      return
+    }
+
     // 先取消排队消息
     messageQueue.clear()
 
@@ -1190,8 +1201,22 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     errorFired = false
     phaseInfo.value = null
 
-    // 创建 assistant 占位消息用于接收重连后的流数据
     resetCurrentTurnState()
+
+    // 清理尾部的空 assistant 消息（来自上一轮被误杀的 run 留下的空壳，或 placeholder 遗留），
+    // 避免与即将重连产生的 streaming 气泡共存形成"重复两条"假象。
+    while (messages.value.length > 0) {
+      const tail = messages.value[messages.value.length - 1]
+      if (tail && tail.role === 'assistant'
+          && tail.conversationId === conversationId
+          && !tail.content
+          && (!tail.contentParts || tail.contentParts.length === 0)) {
+        messages.value.pop()
+      } else {
+        break
+      }
+    }
+
     const assistantMessage = createAssistantMessage('', conversationId)
     ;(assistantMessage as any)._turnId = activeTurnId
     currentAssistantId.value = assistantMessage.id as string

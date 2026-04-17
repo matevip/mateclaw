@@ -174,6 +174,16 @@ function mergeAssistantMessages(localMsg: Message, fetchedMsg: Message): Message
  * - assistant 消息：比较 richness，取更高分的版本
  * - 本地有但 fetched 没有的 assistant 消息：保留（防止 lagging snapshot 丢消息）
  */
+/**
+ * 判断是否为"客户端临时 id"（UUID / 带字母的非数字 id）。
+ * 服务端 id 是雪花算法生成的 Long（全数字字符串）。
+ */
+function isClientId(id: any): boolean {
+  if (id === null || id === undefined) return true
+  const s = String(id)
+  return s === '' || !/^\d+$/.test(s)
+}
+
 export function reconcileMessages(local: Message[], fetched: Message[]): Message[] {
   if (!local.length) return fetched
   if (!fetched.length) return local
@@ -186,19 +196,40 @@ export function reconcileMessages(local: Message[], fetched: Message[]): Message
   const matchedLocalIds = new Set<string>()
   const result: Message[] = []
 
+  // 收集未被 id 匹配过的本地 assistant（通常是流式产生的 client-uuid placeholder），
+  // 供 fetched 端新 assistant"认领"它们的 timeline，避免两条并排。
+  const unclaimedLocalAssistants: Message[] = []
+  for (const lm of local) {
+    if (lm.role === 'assistant' && isClientId(lm.id)) {
+      unclaimedLocalAssistants.push(lm)
+    }
+  }
+
   for (const fm of fetched) {
     const fid = String(fm.id)
     const lm = localMap.get(fid)
 
-    if (!lm) {
-      result.push(fm)
-    } else if (fm.role !== 'assistant') {
-      result.push(fm)
+    if (lm) {
+      if (fm.role !== 'assistant') {
+        result.push(fm)
+      } else {
+        // assistant 消息：不要整条覆盖，合并 fetched 的持久化字段与 local 的 richer timeline
+        result.push(mergeAssistantMessages(lm, fm))
+      }
       matchedLocalIds.add(fid)
+      continue
+    }
+
+    // fetched 里这条本地没有
+    if (fm.role === 'assistant' && unclaimedLocalAssistants.length > 0) {
+      // 尝试"认领"本地一个 client-uuid placeholder：
+      // 取队首（最早的未认领），合并 richness 后采用 fetched 的持久化 id/时间。
+      // 这消除了"本地流式气泡"+"刚落库的 DB assistant"同时存在的重复。
+      const claimed = unclaimedLocalAssistants.shift()!
+      matchedLocalIds.add(String(claimed.id))
+      result.push(mergeAssistantMessages(claimed, fm))
     } else {
-      // assistant 消息：不要整条覆盖，合并 fetched 的持久化字段与 local 的 richer timeline
-      result.push(mergeAssistantMessages(lm, fm))
-      matchedLocalIds.add(fid)
+      result.push(fm)
     }
   }
 

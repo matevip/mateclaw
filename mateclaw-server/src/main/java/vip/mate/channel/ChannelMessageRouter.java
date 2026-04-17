@@ -9,6 +9,7 @@ import vip.mate.approval.PendingApproval;
 import vip.mate.channel.model.ChannelEntity;
 import vip.mate.channel.notification.ApprovalNotificationService;
 import vip.mate.channel.service.ChannelService;
+import vip.mate.channel.web.ChatStreamTracker;
 import org.springframework.context.ApplicationEventPublisher;
 import vip.mate.memory.event.ConversationCompletedEvent;
 import vip.mate.tts.TtsService;
@@ -50,6 +51,7 @@ public class ChannelMessageRouter {
     private final ApplicationEventPublisher eventPublisher;
     private final TtsService ttsService;
     private final ObjectMapper objectMapper;
+    private final ChatStreamTracker streamTracker;
 
     /** 队列条目：封装消息及其路由上下文 */
     private record QueueEntry(ChannelMessage message, ChannelAdapter adapter, ChannelEntity channelEntity) {}
@@ -93,7 +95,8 @@ public class ChannelMessageRouter {
                                 ApprovalNotificationService approvalNotificationService,
                                 ApplicationEventPublisher eventPublisher,
                                 TtsService ttsService,
-                                ObjectMapper objectMapper) {
+                                ObjectMapper objectMapper,
+                                ChatStreamTracker streamTracker) {
         this.agentService = agentService;
         this.conversationService = conversationService;
         this.channelService = channelService;
@@ -103,6 +106,7 @@ public class ChannelMessageRouter {
         this.eventPublisher = eventPublisher;
         this.ttsService = ttsService;
         this.objectMapper = objectMapper;
+        this.streamTracker = streamTracker;
     }
 
     // ==================== 防抖辅助类 ====================
@@ -417,31 +421,58 @@ public class ChannelMessageRouter {
             // 构建 prompt（语音输入时注入场景提示词）
             String promptText = buildPromptFromParts(message.getContent(), parts, message.getInputMode());
 
-            // 流式路径：渠道实现了 StreamingChannelAdapter 则委托渠道渲染流式事件
-            if (adapter instanceof StreamingChannelAdapter streamingAdapter) {
-                processWithStreaming(message, streamingAdapter, conversationId, agentId, promptText, channelEntity);
-            } else {
-                // 同步路径：直接获取完整回复
-                String reply = agentService.chat(agentId, promptText, conversationId);
-
-                // 检查 chat 过程中是否产生了审批 pending
-                PendingApproval newPending = approvalService.findPendingByConversation(conversationId);
-                if (newPending != null) {
-                    // 有审批需求：不保存 LLM 的审批占位回复到 DB，直接从 pending 元数据构建通知
-                    String approvalNotice = buildApprovalNotice(newPending);
-                    adapter.renderAndSend(replyTarget, approvalNotice);
-                    log.info("[{}] Approval triggered during chat, sent notice (NOT saved to DB): tool={}",
-                            adapter.getChannelType(), newPending.getToolName());
+            // 注册到 ChatStreamTracker：让 graph 节点广播的事件（phase / content_delta / tool_call_* 等）
+            // 能被 ChatConsole observer 订阅到。不注册 → broadcast() 会因 state==null 短路丢弃。
+            // 同步 DB stream_status 让侧栏列表可以识别"该渠道对话正在运行"，从而触发 selectConversation 的 reconnect 分支。
+            streamTracker.register(conversationId);
+            streamTracker.incrementFlux(conversationId);
+            conversationService.updateStreamStatus(conversationId, "running");
+            try {
+                // 流式路径：渠道实现了 StreamingChannelAdapter 则委托渠道渲染流式事件
+                if (adapter instanceof StreamingChannelAdapter streamingAdapter) {
+                    processWithStreaming(message, streamingAdapter, conversationId, agentId, promptText, channelEntity);
                 } else {
-                    // 正常回复：保存并发送
-                    conversationService.saveMessage(conversationId, "assistant", reply);
-                    publishConversationCompletedEvent(agentId, conversationId, message.getContent(), reply);
-                    adapter.renderAndSend(replyTarget, reply);
-                    log.info("[{}] Reply sent to {}: {}chars",
-                            adapter.getChannelType(), replyTarget, reply.length());
+                    // 同步路径：直接获取完整回复
+                    String reply = agentService.chat(agentId, promptText, conversationId);
 
-                    // 语音回复：异步 TTS 合成并追加发送（先文本后语音，不阻塞）
-                    maybeGenerateVoiceReply(message, adapter, replyTarget, conversationId, reply, channelEntity);
+                    // 检查 chat 过程中是否产生了审批 pending
+                    PendingApproval newPending = approvalService.findPendingByConversation(conversationId);
+                    if (newPending != null) {
+                        // 有审批需求：不保存 LLM 的审批占位回复到 DB，直接从 pending 元数据构建通知
+                        String approvalNotice = buildApprovalNotice(newPending);
+                        adapter.renderAndSend(replyTarget, approvalNotice);
+                        log.info("[{}] Approval triggered during chat, sent notice (NOT saved to DB): tool={}",
+                                adapter.getChannelType(), newPending.getToolName());
+                    } else {
+                        // 正常回复：保存并发送
+                        conversationService.saveMessage(conversationId, "assistant", reply);
+                        publishConversationCompletedEvent(agentId, conversationId, message.getContent(), reply);
+                        adapter.renderAndSend(replyTarget, reply);
+                        log.info("[{}] Reply sent to {}: {}chars",
+                                adapter.getChannelType(), replyTarget, reply.length());
+
+                        // 给 observer 推送完整的 assistant 消息以便前端一次性渲染为气泡
+                        // （在 content_delta 事件可能没开的同步路径下作为兜底）
+                        streamTracker.broadcastObject(conversationId, "message_complete", Map.of(
+                                "conversationId", conversationId,
+                                "content", reply,
+                                "timestamp", System.currentTimeMillis()));
+
+                        // 语音回复：异步 TTS 合成并追加发送（先文本后语音，不阻塞）
+                        maybeGenerateVoiceReply(message, adapter, replyTarget, conversationId, reply, channelEntity);
+                    }
+                }
+            } finally {
+                // 广播 done 事件让 observer 前端收尾
+                streamTracker.broadcastObject(conversationId, "done", Map.of(
+                        "conversationId", conversationId,
+                        "status", "completed",
+                        "timestamp", System.currentTimeMillis()));
+                streamTracker.completeAndConsumeIfLast(conversationId);
+                try {
+                    conversationService.updateStreamStatus(conversationId, "idle");
+                } catch (Exception e) {
+                    log.debug("Failed to reset stream_status for {}: {}", conversationId, e.getMessage());
                 }
             }
 
