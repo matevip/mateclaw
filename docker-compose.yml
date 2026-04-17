@@ -2,15 +2,20 @@ version: '3.8'
 
 services:
   # MySQL 数据库
+  #
+  # ⚠️ 密码通过环境变量传入，必须从 .env 文件提供。首次部署前：
+  #   1. cp .env.example .env
+  #   2. 编辑 .env 把 DB_ROOT_PASSWORD / DB_PASSWORD 改成强密码
+  # 未设置会直接在 `docker compose up` 时报错，避免把默认密码带到生产环境。
   mysql:
     image: mysql:8.0
     container_name: mateclaw-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: mateclaw123
-      MYSQL_DATABASE: mateclaw
-      MYSQL_USER: mateclaw
-      MYSQL_PASSWORD: mateclaw123
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is required in .env}
+      MYSQL_DATABASE: ${DB_NAME:-mateclaw}
+      MYSQL_USER: ${DB_USERNAME:-mateclaw}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required in .env}
       TZ: Asia/Shanghai
     ports:
       - "3306:3306"
@@ -58,11 +63,13 @@ services:
       SPRING_PROFILES_ACTIVE: mysql
       DB_HOST: mysql
       DB_PORT: 3306
-      DB_NAME: mateclaw
-      DB_USERNAME: mateclaw
-      DB_PASSWORD: mateclaw123
-      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+      DB_NAME: ${DB_NAME:-mateclaw}
+      DB_USERNAME: ${DB_USERNAME:-mateclaw}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required in .env}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:?DASHSCOPE_API_KEY is required in .env}
       SERPER_API_KEY: ${SERPER_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      MATECLAW_CORS_ALLOWED_ORIGINS: ${MATECLAW_CORS_ALLOWED_ORIGINS:-}
     ports:
       - "18080:18080"
     volumes:

@@ -140,9 +140,15 @@ class SkillSecurityServiceTest {
 
         SkillValidationResult result = securityService.scanContent(content, "db_skill");
 
-        assertTrue(result.isBlocked());
+        // scanContent 走 FileRole.DOCUMENTATION 降级规则（database-only skill 只是描述文本，
+        // 不能执行代码）：SUDO/CURL_PIPE 等 script 规则会替换为 SUDO_DOC/CURL_PIPE_SH_DOC，
+        // 严重度降为 MEDIUM，**生成 finding 但不阻断**。阻断语义由 scanDirectory 里
+        // scripts/* 真实可执行文件触发。
         assertTrue(result.getFindings().stream()
-                .anyMatch(f -> f.getRuleId().equals("SUDO_USAGE") || f.getRuleId().equals("DESTRUCTIVE_RM")));
+                .anyMatch(f -> f.getRuleId().equals("SUDO_DOC")
+                            || f.getRuleId().equals("SUDO_USAGE")
+                            || f.getRuleId().equals("DESTRUCTIVE_RM")),
+                "danger-pattern finding should still be detected in database-only skill content");
     }
 
     @Test
@@ -203,7 +209,8 @@ class SkillSecurityServiceTest {
             .orElse(null);
 
         assertNotNull(sudoFinding);
-        assertEquals("scripts/bad.sh", sudoFinding.getFilePath());
+        // 归一化路径分隔符，让断言在 Windows / Unix 都稳定（Path.toString 在 Windows 用 `\`）
+        assertEquals("scripts/bad.sh", sudoFinding.getFilePath().replace('\\', '/'));
         assertEquals(3, sudoFinding.getLineNumber());
         assertNotNull(sudoFinding.getSnippet());
     }

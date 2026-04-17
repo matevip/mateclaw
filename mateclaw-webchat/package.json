@@ -1,6 +1,6 @@
 {
   "name": "@mateclaw/webchat",
-  "version": "1.0.0",
+  "version": "1.1.0-SNAPSHOT",
   "description": "MateClaw WebChat embeddable widget",
   "type": "module",
   "main": "dist/mateclaw-webchat.umd.js",

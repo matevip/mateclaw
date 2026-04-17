@@ -29,12 +29,16 @@ class ReasoningDispatcherLlmCallCountTest {
     @DisplayName("LLM 调用计数限制")
     class LlmCallCountLimit {
 
+        // ReasoningDispatcher.LLM_CALL_MULTIPLIER = 5（默认 maxIterations=10 → 阈值 50）。
+        // 本系列用例固定 MAX_ITERATIONS=10，所以 limit=50、limit-1=49。
+        // 如果后续 MULTIPLIER 再改，这里的常量也要同步。
+
         @Test
         @DisplayName("达到上限但有最终回答 → 放行到 finalAnswerNode")
         void shouldAllowFinalAnswerEvenWhenLlmCallLimitReached() throws Exception {
             OverAllState state = new OverAllState(Map.of(
                     CURRENT_ITERATION, 5, MAX_ITERATIONS, 10,
-                    LLM_CALL_COUNT, 30, NEEDS_TOOL_CALL, false
+                    LLM_CALL_COUNT, 50, NEEDS_TOOL_CALL, false
             ));
             assertEquals(FINAL_ANSWER_NODE, dispatcher.apply(state));
         }
@@ -44,7 +48,7 @@ class ReasoningDispatcherLlmCallCountTest {
         void shouldBlockToolCallWhenLlmCallLimitReached() throws Exception {
             OverAllState state = new OverAllState(Map.of(
                     CURRENT_ITERATION, 5, MAX_ITERATIONS, 10,
-                    LLM_CALL_COUNT, 30, NEEDS_TOOL_CALL, true
+                    LLM_CALL_COUNT, 50, NEEDS_TOOL_CALL, true
             ));
             assertEquals(LIMIT_EXCEEDED_NODE, dispatcher.apply(state));
         }
@@ -54,7 +58,7 @@ class ReasoningDispatcherLlmCallCountTest {
         void shouldBlockSummarizeWhenLlmCallLimitReached() throws Exception {
             OverAllState state = new OverAllState(Map.of(
                     CURRENT_ITERATION, 5, MAX_ITERATIONS, 10,
-                    LLM_CALL_COUNT, 30,
+                    LLM_CALL_COUNT, 50,
                     NEEDS_TOOL_CALL, false, SHOULD_SUMMARIZE, true
             ));
             assertEquals(LIMIT_EXCEEDED_NODE, dispatcher.apply(state));
@@ -95,7 +99,7 @@ class ReasoningDispatcherLlmCallCountTest {
         void shouldNotTriggerAtLimitMinusOne() throws Exception {
             OverAllState state = new OverAllState(Map.of(
                     CURRENT_ITERATION, 5, MAX_ITERATIONS, 10,
-                    LLM_CALL_COUNT, 29, NEEDS_TOOL_CALL, true
+                    LLM_CALL_COUNT, 49, NEEDS_TOOL_CALL, true
             ));
             assertEquals(ACTION_NODE, dispatcher.apply(state));
         }

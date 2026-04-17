@@ -86,7 +86,8 @@ class FinalAnswerNodeTest {
     void shouldFallbackWhenNoContentAndNotStopped() throws Exception {
         OverAllState state = new OverAllState(Map.of());
         Map<String, Object> result = node.apply(state);
-        assertEquals("未能生成回答，请重试。", result.get(FINAL_ANSWER));
+        // Fallback 文案在 Jobs-voice 改写后统一为英文（commit 01c3888）。
+        assertEquals("Failed to generate a response, please retry.", result.get(FINAL_ANSWER));
         assertEquals("error_fallback", result.get(FINISH_REASON));
     }
 }
