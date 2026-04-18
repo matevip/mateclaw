@@ -1,0 +1,28 @@
+# Git and IDE
+.git
+.idea
+*.iml
+
+# Node artifacts
+**/node_modules
+**/dist
+**/.nuxt
+**/.output
+
+# Maven build output (will be rebuilt in Docker)
+**/target
+
+# Desktop / webchat (not needed for server or sites build)
+mateclaw-desktop
+
+# Data and logs
+data
+*.log
+
+# Misc
+.env
+*.md
+!docs/**/*.md
+!matevip-sites/**/*.md
+!mateclaw-plugin-api/**
+!mateclaw-server/**

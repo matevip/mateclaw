@@ -50,8 +50,8 @@ services:
   # MateClaw 后端服务
   mateclaw-server:
     build:
-      context: ./mateclaw-server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: mateclaw-server/Dockerfile
     container_name: mateclaw-server
     restart: unless-stopped
     depends_on:
