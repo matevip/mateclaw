@@ -17,6 +17,5 @@ public class AgentSkillBinding {
     private LocalDateTime createTime;
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updateTime;
-    @TableLogic
     private Integer deleted;
 }
