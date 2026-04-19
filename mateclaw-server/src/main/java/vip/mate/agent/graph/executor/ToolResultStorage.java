@@ -52,9 +52,29 @@ public class ToolResultStorage {
     public static final String SPILL_MARKER_PREFIX = "[mate-tool-result-spill]";
 
     private final ToolResultProperties props;
+    /** Cached at construction; refreshed lazily if the underlying list mutates (rare). */
+    private volatile java.util.Set<String> excludedToolsSnapshot;
 
     public ToolResultStorage(ToolResultProperties props) {
         this.props = props;
+        this.excludedToolsSnapshot = props.excludedToolsSet();
+    }
+
+    /**
+     * Returns true when {@code toolName} is in the configured exclusion list.
+     * Excluded tools (typically retrieval tools like {@code read_file}) are
+     * never spilled — spilling their output would create a recursion where
+     * the agent reads a spill path and produces yet another spill.
+     */
+    private boolean isExcluded(String toolName) {
+        if (toolName == null) return false;
+        java.util.Set<String> snap = excludedToolsSnapshot;
+        java.util.Set<String> live = props.excludedToolsSet();
+        if (live != snap && !live.equals(snap)) {
+            this.excludedToolsSnapshot = live;
+            snap = live;
+        }
+        return snap.contains(toolName);
     }
 
     /**
@@ -71,6 +91,10 @@ public class ToolResultStorage {
     public String persistIfOversized(String result, String toolName, String toolUseId,
                                      String conversationId, String workspaceBasePath) {
         if (!props.isEnabled() || result == null) {
+            return result;
+        }
+        if (isExcluded(toolName)) {
+            // Retrieval-style tool — never spill, would cause read-back recursion.
             return result;
         }
         if (result.length() <= props.getPerResultThresholdChars()) {
@@ -115,20 +139,25 @@ public class ToolResultStorage {
         List<ToolResponseMessage.ToolResponse> mutable = new ArrayList<>(responses);
 
         while (aggregate > budget) {
-            // Find the largest response that has not yet been spilled.
+            // Find the largest response that has not yet been spilled and is
+            // not produced by an excluded (retrieval-style) tool.
             int targetIdx = -1;
             int targetLen = -1;
             for (int i = 0; i < mutable.size(); i++) {
-                String body = mutable.get(i).responseData();
+                ToolResponseMessage.ToolResponse r = mutable.get(i);
+                String body = r.responseData();
                 if (body == null || body.startsWith(SPILL_MARKER_PREFIX)) continue;
+                if (isExcluded(r.name())) continue;     // retrieval tools must not be spilled
                 if (body.length() > targetLen) {
                     targetLen = body.length();
                     targetIdx = i;
                 }
             }
             if (targetIdx < 0) {
-                // Nothing left to spill; aggregate is already as small as we can make it.
-                log.warn("[ToolResultStorage] aggregate still {} chars after spilling everything eligible",
+                // Nothing left to spill; remaining oversize is from excluded tools or
+                // already-spilled responses. Accept the over-budget state — better than
+                // breaking the agent's retrieval path.
+                log.warn("[ToolResultStorage] aggregate still {} chars after spilling everything eligible (excluded tools may push past budget)",
                         aggregate);
                 break;
             }

@@ -162,6 +162,14 @@ mate:
       per-turn-budget-chars: 16000
       preview-head-chars: 800
       storage-base-dir: ""
+      # Retrieval-style tools that must NEVER be spilled. Spilling read_file's
+      # output causes a recursion: the agent reads the spill path, that read also
+      # exceeds the threshold, gets spilled to a new path, agent reads that one,
+      # ad infinitum until MAX_TOOL_CALLS_PER_STEP is hit. Add MCP-provided
+      # readers here if they have the same role.
+      excluded-tools:
+        - read_file
+        - read_workspace_memory_file
     conversation:
       window:
         # 测试时临时调低：2000 token ≈ 2000 中文字，3 轮对话即可触发压缩
