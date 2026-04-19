@@ -88,16 +88,14 @@ public class WikiRawMaterialService {
     public WikiRawMaterialEntity addText(Long kbId, String title, String content) {
         String hash = computeHash(content);
 
-        // 去重：相同 hash 且已处理过的材料直接返回
+        // Dedup: reuse any existing row with the same hash in this KB (any status)
         WikiRawMaterialEntity existing = rawMapper.selectOne(
                 new LambdaQueryWrapper<WikiRawMaterialEntity>()
                         .eq(WikiRawMaterialEntity::getKbId, kbId)
                         .eq(WikiRawMaterialEntity::getContentHash, hash)
-                        .eq(WikiRawMaterialEntity::getProcessingStatus, "completed")
                         .last("LIMIT 1"));
         if (existing != null) {
-            log.info("[Wiki] Duplicate text detected (hash={}), returning existing id={}", hash, existing.getId());
-            return existing;
+            return handleDuplicate(existing);
         }
 
         WikiRawMaterialEntity entity = new WikiRawMaterialEntity();
@@ -142,17 +140,17 @@ public class WikiRawMaterialService {
             log.warn("[Wiki] Could not compute file hash for dedup: {}", e.getMessage());
         }
 
-        // 去重：相同 hash 且已处理过的材料直接返回已有记录
+        // Dedup: reuse any existing row with the same hash in this KB (any status)
         if (entity.getContentHash() != null) {
             WikiRawMaterialEntity existing = rawMapper.selectOne(
                     new LambdaQueryWrapper<WikiRawMaterialEntity>()
                             .eq(WikiRawMaterialEntity::getKbId, kbId)
                             .eq(WikiRawMaterialEntity::getContentHash, entity.getContentHash())
-                            .eq(WikiRawMaterialEntity::getProcessingStatus, "completed")
                             .last("LIMIT 1"));
             if (existing != null) {
-                log.info("[Wiki] Duplicate file detected (hash={}), returning existing id={}", entity.getContentHash(), existing.getId());
-                return existing;
+                // Clean up the newly uploaded file — we won't use it
+                cleanupFile(sourcePath);
+                return handleDuplicate(existing);
             }
         }
 
@@ -332,6 +330,35 @@ public class WikiRawMaterialService {
             }
         }
         return entity.getOriginalContent();
+    }
+
+    /**
+     * Handle a duplicate upload: decide what to do based on the existing row's status.
+     * - completed → return as-is (no reprocessing needed)
+     * - partial / failed → reprocess (partial enters resume branch)
+     * - pending / processing → return as-is (already queued or running)
+     */
+    private WikiRawMaterialEntity handleDuplicate(WikiRawMaterialEntity existing) {
+        String prevStatus = existing.getProcessingStatus();
+        log.info("[Wiki] Duplicate file detected, reusing id={}, prevStatus={}", existing.getId(), prevStatus);
+
+        if ("partial".equals(prevStatus) || "failed".equals(prevStatus)) {
+            reprocess(existing.getId());
+        }
+        // completed / pending / processing → return as-is
+        return existing;
+    }
+
+    /**
+     * Delete a file from disk if it exists (cleanup for dedup-discarded uploads).
+     */
+    private void cleanupFile(String path) {
+        if (path == null) return;
+        try {
+            java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(path));
+        } catch (Exception e) {
+            log.warn("[Wiki] Failed to clean up duplicate upload file {}: {}", path, e.getMessage());
+        }
     }
 
     private String computeHash(String content) {

@@ -108,7 +108,12 @@ export const useWikiStore = defineStore('wiki', () => {
   async function addRawText(kbId: number, title: string, content: string) {
     const res: any = await wikiApi.addRawText(kbId, { title, content })
     const raw = res.data || res
-    rawMaterials.value.unshift(raw)
+    const existingIdx = rawMaterials.value.findIndex(r => r.id === raw.id)
+    if (existingIdx >= 0) {
+      rawMaterials.value[existingIdx] = raw
+    } else {
+      rawMaterials.value.unshift(raw)
+    }
     return raw
   }
 
@@ -117,7 +122,13 @@ export const useWikiStore = defineStore('wiki', () => {
     formData.append('file', file)
     const res: any = await wikiApi.uploadRaw(kbId, formData)
     const raw = res.data || res
-    rawMaterials.value.unshift(raw)
+    // Dedup: if backend returned an existing record, replace it in the list instead of adding a duplicate
+    const existingIdx = rawMaterials.value.findIndex(r => r.id === raw.id)
+    if (existingIdx >= 0) {
+      rawMaterials.value[existingIdx] = raw
+    } else {
+      rawMaterials.value.unshift(raw)
+    }
     return raw
   }
 
