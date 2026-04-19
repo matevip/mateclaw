@@ -162,6 +162,10 @@
               {{ t('agents.tabs.tools', 'Tools') }}
               <span v-if="selectedToolNames.length" class="tab-badge">{{ selectedToolNames.length }}</span>
             </button>
+            <button v-if="editingAgent" class="modal-tab" :class="{ active: modalTab === 'providers' }" @click="modalTab = 'providers'">
+              {{ t('agents.tabs.providers', 'Providers') }}
+              <span v-if="selectedProviderIds.length" class="tab-badge">{{ selectedProviderIds.length }}</span>
+            </button>
           </div>
 
           <!-- Basic Tab -->
@@ -260,6 +264,38 @@
               </label>
             </div>
           </div>
+
+          <!-- Providers Tab (RFC-009 PR-3) -->
+          <div v-if="modalTab === 'providers'" class="binding-tab">
+            <p class="binding-hint">{{ t('agents.binding.providersHint') }}</p>
+            <!-- Picked: ordered list with up/down/remove controls -->
+            <div v-if="selectedProviderIds.length" class="provider-pref-list">
+              <div
+                v-for="(pid, idx) in selectedProviderIds"
+                :key="pid"
+                class="provider-pref-item"
+              >
+                <span class="provider-pref-rank">{{ idx + 1 }}</span>
+                <span class="provider-pref-name">{{ providerNameById(pid) }}</span>
+                <span class="provider-pref-id">{{ pid }}</span>
+                <button class="provider-pref-btn" :disabled="idx === 0" @click="moveProvider(idx, -1)">↑</button>
+                <button class="provider-pref-btn" :disabled="idx === selectedProviderIds.length - 1" @click="moveProvider(idx, 1)">↓</button>
+                <button class="provider-pref-btn danger" @click="removeProvider(idx)">✕</button>
+              </div>
+            </div>
+            <div v-else class="binding-empty">{{ t('agents.binding.noProviderPreferences') }}</div>
+
+            <!-- Unpicked: click to append -->
+            <div v-if="unpickedProviders.length" class="provider-pref-pool">
+              <p class="binding-hint" style="margin-top: 14px">{{ t('agents.binding.providersAddHint') }}</p>
+              <button
+                v-for="p in unpickedProviders"
+                :key="p.id"
+                class="provider-pref-add-btn"
+                @click="addProvider(p.id)"
+              >+ {{ p.name }}</button>
+            </div>
+          </div>
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" @click="closeModal">{{ t('common.cancel') }}</button>
@@ -277,7 +313,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { agentApi, agentBindingApi, skillApi, toolApi, templateApi } from '@/api/index'
+import { agentApi, agentBindingApi, modelApi, skillApi, toolApi, templateApi } from '@/api/index'
 import type { Agent } from '@/types/index'
 
 const router = useRouter()
@@ -287,13 +323,16 @@ const searchText = ref('')
 const activeFilter = ref('all')
 const showModal = ref(false)
 const editingAgent = ref<Agent | null>(null)
-const modalTab = ref<'basic' | 'skills' | 'tools'>('basic')
+const modalTab = ref<'basic' | 'skills' | 'tools' | 'providers'>('basic')
 
 // Binding state
 const availableSkills = ref<any[]>([])
 const availableTools = ref<any[]>([])
 const selectedSkillIds = ref<number[]>([])
 const selectedToolNames = ref<string[]>([])
+// RFC-009 PR-3: per-agent provider preference order
+const availableProviders = ref<{ id: string; name: string }[]>([])
+const selectedProviderIds = ref<string[]>([])
 
 // Template selector state
 const showTemplateSelector = ref(false)
@@ -376,7 +415,34 @@ function openBlankCreateModal() {
   modalTab.value = 'basic'
   selectedSkillIds.value = []
   selectedToolNames.value = []
+  selectedProviderIds.value = []
   showModal.value = true
+}
+
+// RFC-009 PR-3: provider preference helpers
+const unpickedProviders = computed(() =>
+  availableProviders.value.filter(p => !selectedProviderIds.value.includes(p.id))
+)
+
+function providerNameById(id: string): string {
+  return availableProviders.value.find(p => p.id === id)?.name || id
+}
+
+function addProvider(id: string) {
+  if (!selectedProviderIds.value.includes(id)) {
+    selectedProviderIds.value.push(id)
+  }
+}
+
+function removeProvider(idx: number) {
+  selectedProviderIds.value.splice(idx, 1)
+}
+
+function moveProvider(idx: number, dir: -1 | 1) {
+  const next = idx + dir
+  if (next < 0 || next >= selectedProviderIds.value.length) return
+  const arr = selectedProviderIds.value
+  ;[arr[idx], arr[next]] = [arr[next], arr[idx]]
 }
 
 async function loadTemplates() {
@@ -419,22 +485,32 @@ async function openEditModal(agent: Agent) {
   modalTab.value = 'basic'
   showModal.value = true
 
-  // Load available skills/tools and current bindings in parallel
+  // Load available skills/tools/providers and current bindings in parallel
   try {
-    const [skillsRes, toolsRes, boundSkillsRes, boundToolsRes] = await Promise.all([
+    const [skillsRes, toolsRes, providersRes, boundSkillsRes, boundToolsRes, providerPrefsRes] = await Promise.all([
       skillApi.list(),
       toolApi.list(),
+      modelApi.listProviders(),
       agentBindingApi.listSkills(agent.id),
       agentBindingApi.listTools(agent.id),
+      agentBindingApi.listProviderPreferences(agent.id),
     ])
     availableSkills.value = (skillsRes as any).data || []
     availableTools.value = (toolsRes as any).data || []
+    // Pool of providers the user has actually configured — no point letting an
+    // agent prefer a provider that doesn't exist on this deployment.
+    availableProviders.value = ((providersRes as any).data || [])
+      .filter((p: any) => p.configured)
+      .map((p: any) => ({ id: p.id, name: p.name }))
     selectedSkillIds.value = ((boundSkillsRes as any).data || [])
       .filter((b: any) => b.enabled)
       .map((b: any) => b.skillId)
     selectedToolNames.value = ((boundToolsRes as any).data || [])
       .filter((b: any) => b.enabled)
       .map((b: any) => b.toolName)
+    selectedProviderIds.value = ((providerPrefsRes as any).data || [])
+      .filter((b: any) => b.enabled)
+      .map((b: any) => b.providerId)
   } catch {
     // Non-blocking: binding data load failure doesn't prevent editing basic info
   }
@@ -461,6 +537,7 @@ async function saveAgent() {
       await Promise.all([
         agentBindingApi.setSkills(agentId, selectedSkillIds.value),
         agentBindingApi.setTools(agentId, selectedToolNames.value),
+        agentBindingApi.setProviderPreferences(agentId, selectedProviderIds.value),
       ])
     }
 
@@ -717,6 +794,36 @@ async function toggleAgent(agent: Agent) {
   font-size: 10px; padding: 2px 6px; border-radius: 4px; flex-shrink: 0;
   background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); text-transform: uppercase;
 }
+
+/* Provider preference list (RFC-009 PR-3) */
+.provider-pref-list { display: flex; flex-direction: column; gap: 6px; }
+.provider-pref-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border: 1px solid var(--mc-border-light); border-radius: 8px; background: var(--mc-bg-elevated);
+}
+.provider-pref-rank {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--mc-primary); color: white; font-size: 11px; font-weight: 700; flex-shrink: 0;
+}
+.provider-pref-name { font-size: 14px; color: var(--mc-text-primary); flex: 1; }
+.provider-pref-id { font-size: 12px; color: var(--mc-text-tertiary); font-family: ui-monospace, monospace; }
+.provider-pref-btn {
+  border: 1px solid var(--mc-border-light); background: var(--mc-bg);
+  width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
+  font-size: 12px; color: var(--mc-text-secondary);
+}
+.provider-pref-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.provider-pref-btn:not(:disabled):hover { border-color: var(--mc-primary); color: var(--mc-primary); }
+.provider-pref-btn.danger:not(:disabled):hover { border-color: var(--mc-danger); color: var(--mc-danger); }
+.provider-pref-pool { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.provider-pref-pool .binding-hint { width: 100%; }
+.provider-pref-add-btn {
+  border: 1px dashed var(--mc-border); background: transparent;
+  padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  color: var(--mc-text-secondary);
+}
+.provider-pref-add-btn:hover { border-color: var(--mc-primary); color: var(--mc-primary); border-style: solid; }
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .form-group { display: flex; flex-direction: column; gap: 6px; }

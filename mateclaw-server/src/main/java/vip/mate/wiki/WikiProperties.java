@@ -110,4 +110,21 @@ public class WikiProperties {
 
     /** 混合搜索默认模式：keyword / semantic / hybrid */
     private String searchDefaultMode = "hybrid";
+
+    // ==================== RFC-031: Light processing tiers ====================
+
+    /** Whether to auto-dispatch a LIGHT_ENRICH job after heavy ingest completes */
+    private boolean lightEnrichEnabled = true;
+
+    /** Delay before light enrichment starts (ms) */
+    private long lightEnrichDelayMs = 2000;
+
+    /**
+     * Minimum ratio of enriched content length to original content length.
+     * If the LLM returns text shorter than this ratio, the enrichment is rejected.
+     */
+    private double wikilinkMinContentRatio = 0.5;
+
+    /** Maximum characters for local repair single-page regeneration */
+    private int localRepairMaxChars = 8000;
 }

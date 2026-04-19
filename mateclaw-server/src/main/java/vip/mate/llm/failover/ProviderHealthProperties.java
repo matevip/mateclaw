@@ -3,7 +3,7 @@ package vip.mate.llm.failover;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * thresholds for the per-provider health tracker.
+ * RFC-009 P3.3: thresholds for the per-provider health tracker.
  *
  * <pre>
  * mateclaw:

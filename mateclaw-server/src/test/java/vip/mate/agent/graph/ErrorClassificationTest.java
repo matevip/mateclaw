@@ -8,7 +8,7 @@ import java.lang.reflect.Method;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * classification tests for the new error types
+ * RFC-009 P3.2: classification tests for the new error types
  * ({@link NodeStreamingChatHelper.ErrorType#BILLING},
  * {@link NodeStreamingChatHelper.ErrorType#MODEL_NOT_FOUND}).
  *

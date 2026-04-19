@@ -282,6 +282,33 @@ export const modelApi = {
     http.post('/models/embedding/default', { modelId }),
 }
 
+// ==================== Provider Pool (RFC-009 Phase 4) ====================
+export interface ProviderPoolEntry {
+  providerId: string
+  providerName: string
+  inPool: boolean
+  removalSource: string | null
+  removalMessage: string | null
+  removedAtMs: number | null
+  inCooldown: boolean
+  cooldownRemainingMs: number
+  consecutiveFailures: number
+}
+
+export interface ReprobeResult {
+  providerId: string
+  success: boolean
+  latencyMs: number
+  errorMessage: string | null
+  inPool: boolean
+}
+
+export const providerPoolApi = {
+  snapshot: () => http.get<ProviderPoolEntry[]>('/llm/provider-pool'),
+  reprobe: (providerId: string) =>
+    http.post<ReprobeResult>(`/llm/provider-pool/${encodeURIComponent(providerId)}/reprobe`),
+}
+
 // ==================== OAuth ====================
 export const oauthApi = {
   authorize: () => http.get('/oauth/openai/authorize'),
@@ -407,6 +434,30 @@ export const wikiApi = {
   // Processing
   processKB: (kbId: number) => http.post(`/wiki/knowledge-bases/${kbId}/process`),
   getProcessingStatus: (kbId: number) => http.get(`/wiki/knowledge-bases/${kbId}/processing-status`),
+
+  // RFC-029: Relations
+  getRelatedPages: (kbId: number, slug: string, topK = 5) =>
+    http.get(`/wiki/kb/${kbId}/pages/${encodeURIComponent(slug)}/related`, { params: { topK } }),
+  explainRelation: (kbId: number, slugA: string, slugB: string) =>
+    http.get(`/wiki/kb/${kbId}/pages/${encodeURIComponent(slugA)}/relation/${encodeURIComponent(slugB)}`),
+  getPageCitations: (kbId: number, pageId: number) =>
+    http.get(`/wiki/kb/${kbId}/pages/${pageId}/citations`),
+
+  // RFC-030: Jobs
+  getWikiJobs: (kbId: number, rawId: number) =>
+    http.get(`/wiki/kb/${kbId}/jobs`, { params: { rawId } }),
+  getKBStats: (kbId: number) =>
+    http.get(`/wiki/kb/${kbId}/stats`),
+
+  // RFC-031: Enrichment & Repair
+  enrichPage: (kbId: number, slug: string) =>
+    http.post(`/wiki/kb/${kbId}/pages/${encodeURIComponent(slug)}/enrich`),
+  repairPage: (kbId: number, slug: string) =>
+    http.post(`/wiki/kb/${kbId}/pages/${encodeURIComponent(slug)}/repair`),
+
+  // RFC-032: Search preview
+  searchPreview: (kbId: number, data: { query: string; mode?: string; topK?: number }) =>
+    http.post(`/wiki/kb/${kbId}/search-preview`, data),
 }
 
 // ==================== Workspace (Team) ====================
@@ -433,6 +484,11 @@ export const agentBindingApi = {
   unbindSkill: (agentId: string | number, skillId: number) => http.delete(`/agents/${agentId}/skills/${skillId}`),
   listTools: (agentId: string | number) => http.get(`/agents/${agentId}/tools`),
   setTools: (agentId: string | number, toolNames: string[]) => http.put(`/agents/${agentId}/tools`, toolNames),
+  // RFC-009 PR-3: per-agent provider preference order. Empty list = use global chain order.
+  listProviderPreferences: (agentId: string | number) =>
+    http.get(`/agents/${agentId}/provider-preferences`),
+  setProviderPreferences: (agentId: string | number, providerIds: string[]) =>
+    http.put(`/agents/${agentId}/provider-preferences`, providerIds),
 }
 
 // ==================== Dashboard ====================

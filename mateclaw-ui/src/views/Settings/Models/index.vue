@@ -24,6 +24,8 @@
             :provider="provider"
             :connection-testing-id="connectionTestingId"
             :connection-results="connectionResults"
+            :pool-entry="providerPool[provider.id] || null"
+            :reprobing="reprobingId === provider.id"
             :is-provider-active="isProviderActive"
             :provider-status="providerStatus"
             :get-provider-icon="getProviderIcon"
@@ -32,6 +34,7 @@
             @provider-settings="openProviderConfigModal"
             @test-connection="handleTestConnection"
             @delete-provider="onDeleteProvider"
+            @reprobe="reprobeProvider"
           />
         </div>
       </div>
@@ -51,6 +54,8 @@
             :provider="provider"
             :connection-testing-id="connectionTestingId"
             :connection-results="connectionResults"
+            :pool-entry="providerPool[provider.id] || null"
+            :reprobing="reprobingId === provider.id"
             :is-provider-active="isProviderActive"
             :provider-status="providerStatus"
             :get-provider-icon="getProviderIcon"
@@ -59,6 +64,7 @@
             @provider-settings="openProviderConfigModal"
             @test-connection="handleTestConnection"
             @delete-provider="onDeleteProvider"
+            @reprobe="reprobeProvider"
           />
         </div>
       </div>
@@ -151,6 +157,10 @@ const {
   providerBaseUrlPlaceholder,
   providerBaseUrlHint,
   providerApiKeyPlaceholder,
+  providerPool,
+  reprobingId,
+  loadProviderPool,
+  reprobeProvider,
   loadProviders,
   loadActiveModel,
   openCreateProviderModal,
@@ -182,7 +192,7 @@ const localProviders = computed(() => providers.value.filter(p => p.isLocal))
 const cloudProviders = computed(() => providers.value.filter(p => !p.isLocal))
 
 onMounted(async () => {
-  await Promise.all([loadProviders(), loadActiveModel()])
+  await Promise.all([loadProviders(), loadActiveModel(), loadProviderPool()])
 })
 
 async function onSaveProvider() {

@@ -169,6 +169,17 @@ public class WikiPageService {
     }
 
     /**
+     * Direct update by entity (used by enrichment service).
+     */
+    @Transactional
+    public void updateById(WikiPageEntity entity) {
+        pageMapper.updateById(entity);
+        if (entity.getKbId() != null) {
+            evictSummaryCache(entity.getKbId());
+        }
+    }
+
+    /**
      * 创建新 Wiki 页面
      */
     @Transactional

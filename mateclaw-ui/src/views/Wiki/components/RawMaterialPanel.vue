@@ -91,7 +91,23 @@
             </button>
           </div>
         </div>
-        <div v-if="raw.processingStatus === 'processing'" class="raw-progress">
+        <!-- RFC-033: Job stage bar (when job data available) -->
+        <JobStageBar
+          v-if="rawJobs[raw.id]"
+          :stage="rawJobs[raw.id].stage"
+          :status="rawJobs[raw.id].status"
+          :current-model="rawJobs[raw.id].currentModelName ?? (rawJobs[raw.id].currentModelId ? `Model #${rawJobs[raw.id].currentModelId}` : undefined)"
+          :is-fallback-active="rawJobs[raw.id].currentModelId != null && rawJobs[raw.id].currentModelId !== rawJobs[raw.id].primaryModelId"
+          :error-code="rawJobs[raw.id].errorCode ?? undefined"
+          :error-message="rawJobs[raw.id].errorMessage ?? undefined"
+          :done="rawJobs[raw.id].done ?? raw.progressDone"
+          :total="rawJobs[raw.id].total ?? raw.progressTotal"
+          :started-at="rawJobs[raw.id].startedAt ?? undefined"
+          @reprocess="reprocess(raw.id)"
+          @repair="handleLocalRepair(raw.id)"
+        />
+        <!-- Fallback: legacy progress bar when no job data -->
+        <div v-else-if="raw.processingStatus === 'processing'" class="raw-progress">
           <div class="raw-progress-track">
             <div
               class="raw-progress-fill"
@@ -143,10 +159,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWikiStore } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
+import JobStageBar from './JobStageBar.vue'
+import type { WikiProcessingJob } from '@/composables/useWikiJobPoller'
 
 const { t } = useI18n()
 const store = useWikiStore()
@@ -262,6 +280,38 @@ onBeforeUnmount(() => {
     fallbackTimer = null
   }
 })
+
+// RFC-033: Job polling per raw material
+const rawJobs = reactive<Record<number, WikiProcessingJob>>({})
+let jobPoller: ReturnType<typeof setTimeout> | null = null
+
+async function pollJobs() {
+  if (!store.currentKB) return
+  const processingRaws = store.rawMaterials.filter(
+    r => r.processingStatus === 'processing' || r.processingStatus === 'pending'
+  )
+  for (const raw of processingRaws) {
+    try {
+      const res: any = await wikiApi.getWikiJobs(store.currentKB.id, raw.id)
+      const list = res.data || res || []
+      if (list.length > 0) rawJobs[raw.id] = list[0]
+    } catch { /* ignore */ }
+  }
+  if (processingRaws.length > 0) {
+    jobPoller = setTimeout(pollJobs, 3000)
+  }
+}
+
+watch(hasProcessing, (active) => {
+  if (active) pollJobs()
+  else if (jobPoller) { clearTimeout(jobPoller); jobPoller = null }
+}, { immediate: true })
+
+async function handleLocalRepair(rawId: number) {
+  if (!store.currentKB) return
+  // For local repair, we'd need a page slug. For now, reprocess the raw material.
+  await reprocess(rawId)
+}
 
 const showAddText = ref(false)
 const textTitle = ref('')

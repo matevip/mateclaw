@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * per-provider failure-count + cooldown logic.
+ * RFC-009 P3.3: per-provider failure-count + cooldown logic.
  */
 class ProviderHealthTrackerTest {
 

@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import vip.mate.agent.binding.model.AgentProviderPreference;
 import vip.mate.agent.binding.model.AgentSkillBinding;
 import vip.mate.agent.binding.model.AgentToolBinding;
+import vip.mate.agent.binding.repository.AgentProviderPreferenceMapper;
 import vip.mate.agent.binding.repository.AgentSkillBindingMapper;
 import vip.mate.agent.binding.repository.AgentToolBindingMapper;
 
@@ -30,6 +32,7 @@ public class AgentBindingService {
 
     private final AgentSkillBindingMapper skillBindingMapper;
     private final AgentToolBindingMapper toolBindingMapper;
+    private final AgentProviderPreferenceMapper providerPreferenceMapper;
 
     // ==================== Skill Bindings ====================
 
@@ -165,6 +168,54 @@ public class AgentBindingService {
                 binding.setEnabled(true);
                 toolBindingMapper.insert(binding);
             }
+        }
+    }
+
+    // ==================== Provider Preferences (RFC-009 PR-3) ====================
+
+    /** Raw rows for the agent edit form. Sorted by sort_order ascending. */
+    public List<AgentProviderPreference> listProviderPreferences(Long agentId) {
+        return providerPreferenceMapper.selectList(
+                new LambdaQueryWrapper<AgentProviderPreference>()
+                        .eq(AgentProviderPreference::getAgentId, agentId)
+                        .orderByAsc(AgentProviderPreference::getSortOrder));
+    }
+
+    /**
+     * Ordered list of provider ids the agent prefers, lowest sort_order
+     * first. Disabled rows are filtered out. Empty list means "no
+     * preference — fall back to the global chain order".
+     *
+     * <p>Used by {@code AgentGraphBuilder.buildFallbackChain} to bias the
+     * fallback chain order per agent.</p>
+     */
+    public List<String> getPreferredProviderIds(Long agentId) {
+        if (agentId == null) return Collections.emptyList();
+        return listProviderPreferences(agentId).stream()
+                .filter(p -> Boolean.TRUE.equals(p.getEnabled()))
+                .map(AgentProviderPreference::getProviderId)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Replace the full preference list for an agent. {@code providerIds}
+     * is the new ordered preference (index 0 = highest preference).
+     * Empty / null list clears all preferences for the agent.
+     */
+    public void setProviderPreferences(Long agentId, List<String> providerIds) {
+        providerPreferenceMapper.delete(
+                new LambdaQueryWrapper<AgentProviderPreference>()
+                        .eq(AgentProviderPreference::getAgentId, agentId));
+        if (providerIds == null) return;
+        int order = 0;
+        for (String providerId : providerIds) {
+            if (providerId == null || providerId.isBlank()) continue;
+            AgentProviderPreference row = new AgentProviderPreference();
+            row.setAgentId(agentId);
+            row.setProviderId(providerId.trim());
+            row.setSortOrder(order++);
+            row.setEnabled(true);
+            providerPreferenceMapper.insert(row);
         }
     }
 }

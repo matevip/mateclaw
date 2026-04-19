@@ -132,6 +132,7 @@ public class AgentGraphBuilder {
     private final vip.mate.i18n.I18nService i18nService;
     private final vip.mate.llm.failover.ProviderHealthTracker providerHealthTracker;
     private final vip.mate.llm.chatmodel.ProviderChatModelFactory chatModelFactory;
+    private final vip.mate.llm.failover.AvailableProviderPool providerPool;
 
     /**
      * 根据 AgentEntity 构建完整的 Agent 实例
@@ -189,12 +190,12 @@ public class AgentGraphBuilder {
         BaseAgent agent;
         boolean toolCallingEnabled;
         if ("plan_execute".equals(entity.getAgentType())) {
-            agent = buildPlanExecuteAgent(toolSet, runtimeModel, maxIter);
+            agent = buildPlanExecuteAgent(toolSet, runtimeModel, maxIter, entity.getId());
             toolCallingEnabled = true;
             log.info("Built StateGraph Plan-Execute agent: {} (maxIterations={}, tools={}, protocol={})",
                     entity.getName(), maxIter, toolSet.size(), protocol.getId());
         } else {
-            agent = buildReActAgent(toolSet, runtimeModel, maxIter);
+            agent = buildReActAgent(toolSet, runtimeModel, maxIter, entity.getId());
             // StateGraph 路径下工具调用由 ActionNode 控制，始终启用
             toolCallingEnabled = true;
             log.info("Built StateGraph ReAct agent: {} (maxIterations={}, tools={}, protocol={})",
@@ -236,34 +237,51 @@ public class AgentGraphBuilder {
     // ==================== Agent 构建方法 ====================
 
     StateGraphReActAgent buildReActAgent(AgentToolSet toolSet, ModelConfigEntity runtimeModel, int maxIter) {
+        return buildReActAgent(toolSet, runtimeModel, maxIter, null);
+    }
+
+    StateGraphReActAgent buildReActAgent(AgentToolSet toolSet, ModelConfigEntity runtimeModel,
+                                         int maxIter, Long agentId) {
         ChatModel chatModel = buildRuntimeChatModel(runtimeModel);
         ChatClient chatClient = ChatClient.create(chatModel);
         String reasoningEffort = resolveReasoningEffortForModel(runtimeModel);
-        CompiledGraph compiledGraph = buildReActGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel);
+        CompiledGraph compiledGraph = buildReActGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel, agentId);
         return new StateGraphReActAgent(chatClient, conversationService, compiledGraph,
                 chatModel, conversationWindowManager);
     }
 
     StateGraphPlanExecuteAgent buildPlanExecuteAgent(AgentToolSet toolSet, ModelConfigEntity runtimeModel, int maxIter) {
+        return buildPlanExecuteAgent(toolSet, runtimeModel, maxIter, null);
+    }
+
+    StateGraphPlanExecuteAgent buildPlanExecuteAgent(AgentToolSet toolSet, ModelConfigEntity runtimeModel,
+                                                     int maxIter, Long agentId) {
         ChatModel chatModel = buildRuntimeChatModel(runtimeModel);
         ChatClient chatClient = ChatClient.create(chatModel);
         String reasoningEffort = resolveReasoningEffortForModel(runtimeModel);
-        CompiledGraph graph = buildPlanExecuteGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel);
+        CompiledGraph graph = buildPlanExecuteGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel, agentId);
         return new StateGraphPlanExecuteAgent(chatClient, conversationService, graph, planningService,
                 chatModel, conversationWindowManager);
     }
 
     CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations, String reasoningEffort) {
-        return buildPlanExecuteGraph(toolSet, chatModel, maxIterations, reasoningEffort, null);
+        return buildPlanExecuteGraph(toolSet, chatModel, maxIterations, reasoningEffort, null, null);
     }
 
     CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations,
                                          String reasoningEffort, ModelConfigEntity primaryModelConfig) {
+        return buildPlanExecuteGraph(toolSet, chatModel, maxIterations, reasoningEffort, primaryModelConfig, null);
+    }
+
+    CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations,
+                                         String reasoningEffort, ModelConfigEntity primaryModelConfig,
+                                         Long agentId) {
         try {
-            List<vip.mate.llm.failover.FallbackEntry> fallbackChain = buildFallbackChain(primaryModelConfig);
+            List<vip.mate.llm.failover.FallbackEntry> fallbackChain = buildFallbackChain(primaryModelConfig, agentId);
             NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(
                     streamTracker, fallbackChain, llmCacheMetricsAggregator, providerHealthTracker,
-                    primaryModelConfig != null ? primaryModelConfig.getProvider() : null);
+                    primaryModelConfig != null ? primaryModelConfig.getProvider() : null,
+                    providerPool);
             ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
             PlanGenerationNode planGenerationNode = new PlanGenerationNode(chatModel, planningService, streamingHelper, conversationWindowManager, toolSet);
             StepExecutionNode stepExecutionNode = new StepExecutionNode(chatModel, toolSet, executor, planningService, streamTracker, reasoningEffort, streamingHelper, conversationWindowManager);
@@ -355,16 +373,23 @@ public class AgentGraphBuilder {
     }
 
     CompiledGraph buildReActGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations, String reasoningEffort) {
-        return buildReActGraph(toolSet, chatModel, maxIterations, reasoningEffort, null);
+        return buildReActGraph(toolSet, chatModel, maxIterations, reasoningEffort, null, null);
     }
 
     CompiledGraph buildReActGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations,
                                    String reasoningEffort, ModelConfigEntity primaryModelConfig) {
+        return buildReActGraph(toolSet, chatModel, maxIterations, reasoningEffort, primaryModelConfig, null);
+    }
+
+    CompiledGraph buildReActGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations,
+                                   String reasoningEffort, ModelConfigEntity primaryModelConfig,
+                                   Long agentId) {
         try {
-            List<vip.mate.llm.failover.FallbackEntry> fallbackChain = buildFallbackChain(primaryModelConfig);
+            List<vip.mate.llm.failover.FallbackEntry> fallbackChain = buildFallbackChain(primaryModelConfig, agentId);
             NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(
                     streamTracker, fallbackChain, llmCacheMetricsAggregator, providerHealthTracker,
-                    primaryModelConfig != null ? primaryModelConfig.getProvider() : null);
+                    primaryModelConfig != null ? primaryModelConfig.getProvider() : null,
+                    providerPool);
             ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
             ReasoningNode reasoningNode = new ReasoningNode(chatModel, toolSet, reasoningEffort, streamingHelper, conversationWindowManager, streamTracker, 0, wikiContextService);
             ActionNode actionNode = new ActionNode(executor, streamTracker);
@@ -512,7 +537,7 @@ public class AgentGraphBuilder {
     }
 
     /**
-     * build the full multi-provider failover chain for a primary
+     * RFC-009: build the full multi-provider failover chain for a primary
      * model. Providers are read from {@code mate_model_provider} ordered by
      * {@code fallback_priority ASC} (positive values only), each resolved to
      * its default {@link ModelConfigEntity} and turned into a {@link ChatModel}
@@ -526,13 +551,27 @@ public class AgentGraphBuilder {
      * <p>The primary model is excluded from the chain when its provider +
      * model name matches a chain entry. Previously only reference equality
      * was checked, which meant a DashScope-primary deployment ended up with
-     * {@code null} fallback — the case this design targets.</p>
+     * {@code null} fallback — exactly the case RFC-009 targets.</p>
      *
      * @param primaryModelConfig the {@code ModelConfigEntity} used to build
      *     the primary model; used to identity-filter the chain
      * @return ordered, possibly-empty list of fallback {@link ChatModel}s
      */
     List<vip.mate.llm.failover.FallbackEntry> buildFallbackChain(ModelConfigEntity primaryModelConfig) {
+        return buildFallbackChain(primaryModelConfig, null);
+    }
+
+    /**
+     * RFC-009 PR-3 overload: when {@code agentId} is non-null, the agent's
+     * {@code mate_agent_provider_preference} rows bias the chain order — listed
+     * providers come first in their declared {@code sort_order}, then the
+     * remaining providers fall in by global {@code fallback_priority} ascending,
+     * tie-broken by provider id alphabetically. {@code null} agentId keeps the
+     * pre-PR-3 ordering (pure global priority) — that's the path for legacy
+     * callers and tests.
+     */
+    List<vip.mate.llm.failover.FallbackEntry> buildFallbackChain(ModelConfigEntity primaryModelConfig,
+                                                                  Long agentId) {
         List<ModelProviderEntity> providers;
         try {
             providers = modelProviderService.listFallbackChain();
@@ -547,8 +586,29 @@ public class AgentGraphBuilder {
         String primaryProviderId = primaryModelConfig != null ? primaryModelConfig.getProvider() : null;
         String primaryModelName = primaryModelConfig != null ? primaryModelConfig.getModelName() : null;
 
+        // RFC-009 PR-3: bias by agent preferences (if any). Listed providers win
+        // their declared order; everything else keeps the global priority order.
+        List<String> preferred = agentId == null
+                ? java.util.Collections.emptyList()
+                : agentBindingService.getPreferredProviderIds(agentId);
+        if (!preferred.isEmpty()) {
+            providers = reorderByPreferences(providers, preferred);
+            log.debug("[LlmFailover] agent={} preferences={} -> chain head reordered", agentId, preferred);
+        }
+
         List<vip.mate.llm.failover.FallbackEntry> chain = new ArrayList<>();
         for (ModelProviderEntity p : providers) {
+            // RFC-009 Phase 4: skip providers known-bad at build time. This is
+            // a perf optimization (one fewer ChatModel to construct + one
+            // fewer round-trip on the chain walk); the runtime walker in
+            // NodeStreamingChatHelper re-checks pool membership per request,
+            // so a provider that re-enters the pool later still gets used
+            // (the graph is rebuilt on ModelConfigChangedEvent).
+            if (providerPool != null && !providerPool.contains(p.getProviderId())) {
+                log.debug("[LlmFailover] skipping provider {} — not in available pool",
+                        p.getProviderId());
+                continue;
+            }
             ModelConfigEntity fallbackConfig;
             try {
                 fallbackConfig = modelConfigService.getDefaultModelByProvider(p.getProviderId());
@@ -582,6 +642,36 @@ public class AgentGraphBuilder {
             }
         }
         return chain;
+    }
+
+    /**
+     * Reorder a provider list by an agent's preference list. Listed provider
+     * ids come first in their preference order; any provider not in the
+     * preference list keeps its original position relative to other unlisted
+     * providers (stable partition). Preference entries that don't match any
+     * actual provider are silently dropped.
+     */
+    /** Package-private for unit testing — see {@code AgentGraphBuilderPreferenceTest}. */
+    static List<ModelProviderEntity> reorderByPreferences(List<ModelProviderEntity> providers,
+                                                          List<String> preferredOrder) {
+        Map<String, ModelProviderEntity> byId = new java.util.LinkedHashMap<>();
+        for (ModelProviderEntity p : providers) {
+            byId.put(p.getProviderId(), p);
+        }
+        List<ModelProviderEntity> reordered = new ArrayList<>(providers.size());
+        Set<String> placed = new java.util.HashSet<>();
+        for (String prefId : preferredOrder) {
+            ModelProviderEntity p = byId.get(prefId);
+            if (p != null && placed.add(prefId)) {
+                reordered.add(p);
+            }
+        }
+        for (ModelProviderEntity p : providers) {
+            if (placed.add(p.getProviderId())) {
+                reordered.add(p);
+            }
+        }
+        return reordered;
     }
 
     /**

@@ -1,7 +1,8 @@
 import { computed, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
-import { modelApi, oauthApi } from '@/api'
+import { modelApi, oauthApi, providerPoolApi } from '@/api'
+import type { ProviderPoolEntry } from '@/api'
 import type { ActiveModelsInfo, DiscoverResult, ProviderInfo, ProviderModelInfo, TestResult } from '@/types'
 
 export function useProviders() {
@@ -9,6 +10,10 @@ export function useProviders() {
 
   const providers = ref<ProviderInfo[]>([])
   const activeModels = ref<ActiveModelsInfo | null>(null)
+  // RFC-009 Phase 4: pool snapshot, indexed by providerId for O(1) lookup in templates.
+  const providerPool = ref<Record<string, ProviderPoolEntry>>({})
+  // RFC-009 Phase 4 PR-1e: providerId currently being manually reprobed.
+  const reprobingId = ref<string | null>(null)
   const editingProvider = ref<ProviderInfo | null>(null)
   const currentProvider = ref<ProviderInfo | null>(null)
   const showProviderModal = ref(false)
@@ -62,6 +67,51 @@ export function useProviders() {
   async function loadActiveModel() {
     const res: any = await modelApi.getActive()
     activeModels.value = res.data || null
+  }
+
+  /**
+   * RFC-009 Phase 4: fetch the pool snapshot. Best-effort — if it 404s
+   * (older backend) or errors, the badges just don't render. Don't block
+   * the rest of the model settings page on it.
+   */
+  async function loadProviderPool() {
+    try {
+      const res: any = await providerPoolApi.snapshot()
+      const list: ProviderPoolEntry[] = res.data || []
+      providerPool.value = list.reduce((acc, entry) => {
+        acc[entry.providerId] = entry
+        return acc
+      }, {} as Record<string, ProviderPoolEntry>)
+    } catch (err) {
+      console.warn('[ProviderPool] snapshot failed (badges will be hidden)', err)
+      providerPool.value = {}
+    }
+  }
+
+  /**
+   * RFC-009 Phase 4 PR-1e: synchronously re-probe one provider, then
+   * refresh the pool snapshot so the badge updates. Returns the result
+   * so callers can show a toast.
+   */
+  async function reprobeProvider(provider: ProviderInfo) {
+    reprobingId.value = provider.id
+    try {
+      const res: any = await providerPoolApi.reprobe(provider.id)
+      const data = res.data || {}
+      await loadProviderPool()
+      if (data.success) {
+        ElMessage.success(t('settings.model.poolReprobeOk'))
+      } else {
+        ElMessage.warning(t('settings.model.poolReprobeFail', { error: data.errorMessage || '—' }))
+      }
+      return data
+    } catch (err) {
+      ElMessage.error(t('settings.model.poolReprobeFail', {
+        error: err instanceof Error ? err.message : String(err)
+      }))
+    } finally {
+      reprobingId.value = null
+    }
   }
 
   async function refreshCurrentProvider(providerId: string) {
@@ -477,6 +527,11 @@ export function useProviders() {
     providerBaseUrlPlaceholder,
     providerBaseUrlHint,
     providerApiKeyPlaceholder,
+    // RFC-009 Phase 4
+    providerPool,
+    reprobingId,
+    loadProviderPool,
+    reprobeProvider,
     // Methods
     loadProviders,
     loadActiveModel,

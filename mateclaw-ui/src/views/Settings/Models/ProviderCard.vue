@@ -27,6 +27,37 @@
           >
             {{ t('settings.model.fallbackBadge', { priority: provider.fallbackPriority }) }}
           </span>
+          <!-- RFC-009 Phase 4: pool status. Three mutually-exclusive states:
+               removed > cooldown > in-pool. Hidden when no pool data is loaded yet
+               or when the provider isn't configured (pool would never have probed it). -->
+          <template v-if="poolEntry && provider.configured">
+            <span
+              v-if="!poolEntry.inPool"
+              class="provider-badge pool-removed"
+              :title="t('settings.model.poolBadgeRemovedTitle', {
+                source: poolSourceLabel(poolEntry.removalSource),
+                message: poolEntry.removalMessage || '—'
+              })"
+            >
+              {{ t('settings.model.poolBadgeRemoved') }}
+            </span>
+            <span
+              v-else-if="poolEntry.inCooldown"
+              class="provider-badge pool-cooldown"
+              :title="t('settings.model.poolBadgeCooldownTitle', {
+                seconds: Math.ceil(poolEntry.cooldownRemainingMs / 1000)
+              })"
+            >
+              {{ t('settings.model.poolBadgeCooldown') }}
+            </span>
+            <span
+              v-else
+              class="provider-badge pool-in"
+              :title="t('settings.model.poolBadgeInPoolTitle')"
+            >
+              {{ t('settings.model.poolBadgeInPool') }}
+            </span>
+          </template>
         </div>
         <p class="provider-id">{{ provider.id }}</p>
       </div>
@@ -84,6 +115,17 @@
       >
         {{ t('common.delete') }}
       </button>
+      <!-- RFC-009 Phase 4: manual reprobe — visible when the provider has been
+           HARD-removed from the pool, lets the user recover without restart. -->
+      <button
+        v-if="poolEntry && !poolEntry.inPool && provider.configured"
+        class="card-btn"
+        :class="{ testing: reprobing }"
+        :disabled="reprobing"
+        @click="$emit('reprobe', provider)"
+      >
+        {{ reprobing ? t('settings.model.poolReprobing') : t('settings.model.poolReprobe') }}
+      </button>
     </div>
 
     <div v-if="connectionResults[provider.id]" class="connection-result" :class="connectionResults[provider.id].success ? 'success' : 'error'">
@@ -100,11 +142,16 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import type { ProviderInfo } from '@/types'
+import type { ProviderPoolEntry } from '@/api'
 
 defineProps<{
   provider: ProviderInfo
   connectionTestingId: string | null
   connectionResults: Record<string, any>
+  // RFC-009 Phase 4: pool status for this provider; null when pool API hasn't loaded yet.
+  poolEntry?: ProviderPoolEntry | null
+  // RFC-009 Phase 4: true while a manual reprobe is in flight for this provider.
+  reprobing?: boolean
   isProviderActive: (provider: ProviderInfo) => boolean
   providerStatus: (provider: ProviderInfo) => { type: string; label: string }
   getProviderIcon: (id: string) => string
@@ -116,9 +163,22 @@ defineEmits<{
   'provider-settings': [provider: ProviderInfo]
   'test-connection': [provider: ProviderInfo]
   'delete-provider': [provider: ProviderInfo]
+  'reprobe': [provider: ProviderInfo]
 }>()
 
 const { t } = useI18n()
+
+/** Translate the backend RemovalSource enum into a human-readable label. */
+function poolSourceLabel(source: string | null): string {
+  switch (source) {
+    case 'AUTH_ERROR': return t('settings.model.poolSourceAuthError')
+    case 'BILLING': return t('settings.model.poolSourceBilling')
+    case 'MODEL_NOT_FOUND': return t('settings.model.poolSourceModelNotFound')
+    case 'INIT_PROBE': return t('settings.model.poolSourceInitProbe')
+    case 'MANUAL': return t('settings.model.poolSourceManual')
+    default: return source || '—'
+  }
+}
 </script>
 
 <style scoped>
@@ -166,6 +226,10 @@ const { t } = useI18n()
 .provider-badge.custom { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }
 .provider-badge.active { background: rgba(217, 119, 87, 0.12); color: var(--mc-primary-light); }
 .provider-badge.fallback { background: rgba(99, 102, 241, 0.12); color: #6366f1; cursor: help; }
+/* RFC-009 Phase 4: pool status. Green = healthy, amber = cooldown, red = removed. */
+.provider-badge.pool-in { background: rgba(34, 197, 94, 0.12); color: #16a34a; cursor: help; }
+.provider-badge.pool-cooldown { background: rgba(245, 158, 11, 0.14); color: #b45309; cursor: help; }
+.provider-badge.pool-removed { background: rgba(239, 68, 68, 0.14); color: #dc2626; cursor: help; }
 .provider-status { flex-shrink: 0; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .provider-status.configured { background: var(--mc-primary-bg); color: var(--mc-primary); }
 .provider-status.partial { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }

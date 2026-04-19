@@ -53,8 +53,13 @@ public class WikiProcessingService {
     private final AgentGraphBuilder agentGraphBuilder;
     private final ObjectMapper objectMapper;
     private final WikiProgressBus progressBus;
+    private final WikiCitationService citationService;
 
-    /** 并行 chunk / 材料处理执行器（JDK 21 虚拟线程）；Listener 跨包需要引用，故 public */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private vip.mate.wiki.job.WikiProcessingJobService wikiJobService;
+
+    /** Parallel chunk / material processing executor (JDK 21 virtual threads) */
     public static final ExecutorService WIKI_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
     /**
@@ -131,6 +136,15 @@ public class WikiProcessingService {
         }
 
         kbService.updateStatus(kb.getId(), "processing");
+
+        // RFC-030 §9.1: create a processing job record before starting
+        if (wikiJobService != null) {
+            try {
+                wikiJobService.createHeavyIngest(kb.getId(), rawId);
+            } catch (Exception e) {
+                log.warn("[Wiki] Failed to create heavy ingest job record for raw={}: {}", rawId, e.getMessage());
+            }
+        }
 
         // RFC-012 M2 v2 UI v2：为本次 raw 处理创建共享进度计数器（多 chunk 共享，避免 race）
         progressCounters.put(rawId, new ProgressCounter());
@@ -777,8 +791,10 @@ public class WikiProcessingService {
         }
         String sourceRawIds = "[" + rawId + "]";
         try {
-            pageService.createPage(kbId, slug, title, content, pageSummary, sourceRawIds);
+            WikiPageEntity created = pageService.createPage(kbId, slug, title, content, pageSummary, sourceRawIds);
             log.info("[Wiki] Phase B create page slug='{}' done (created)", slug);
+            // RFC-029: async citation build
+            citationService.buildCitationsAsync(created.getId(), kbId);
             return true;
         } catch (org.springframework.dao.DuplicateKeyException e) {
             // 兜底 2：select-then-create 在并发下不是原子操作。当 N 个 chunk 同时
@@ -846,8 +862,12 @@ public class WikiProcessingService {
             log.warn("[Wiki] Phase B merge page slug='{}' returned blank content, skipping", slug);
             return false;
         }
-        pageService.updatePageByAi(kbId, slug, content, summary, rawId);
+        WikiPageEntity updated = pageService.updatePageByAi(kbId, slug, content, summary, rawId);
         log.info("[Wiki] Phase B merge page slug='{}' done", slug);
+        // RFC-029: async citation rebuild
+        if (updated != null) {
+            citationService.buildCitationsAsync(updated.getId(), kbId);
+        }
         return true;
     }
 
@@ -1129,9 +1149,127 @@ public class WikiProcessingService {
         return cls + ": " + trimmed;
     }
 
-    /** 瞬时错误的内部标记异常，确保空响应也能走重试路径 */
+    /** Transient error marker to route empty responses through the retry path */
     private static class TransientLlmException extends RuntimeException {
         TransientLlmException(String msg) { super(msg); }
+    }
+
+    // ==================== RFC-030: Error classification ====================
+
+    /**
+     * Classify an exception into an error code aligned with RFC-009 ErrorType.
+     *
+     * @return error code string: AUTH_ERROR, BILLING, MODEL_NOT_FOUND,
+     *         RATE_LIMIT, SERVER_ERROR, TIMEOUT, CONTENT_FILTER, UNKNOWN
+     */
+    public String classifyErrorCode(Throwable t) {
+        Throwable cur = t;
+        int depth = 0;
+        while (cur != null && depth < 8) {
+            String className = cur.getClass().getSimpleName();
+            if ("UnknownHostException".equals(className)
+                    || "SSLHandshakeException".equals(className)) {
+                return "AUTH_ERROR";
+            }
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String m = msg.toLowerCase();
+                if (m.contains("401") || m.contains("unauthorized") || m.contains("403")
+                        || m.contains("forbidden") || m.contains("invalid api key")
+                        || m.contains("invalid_api_key") || m.contains("authentication")) {
+                    return "AUTH_ERROR";
+                }
+                if (m.contains("quota") || m.contains("insufficient_quota") || m.contains("billing")) {
+                    return "BILLING";
+                }
+                if (m.contains("model not found") || m.contains("model_not_found")) {
+                    return "MODEL_NOT_FOUND";
+                }
+                if (m.contains("429") || m.contains("rate_limit") || m.contains("too many requests")) {
+                    return "RATE_LIMIT";
+                }
+                if (m.contains("content_filter") || m.contains("content filter")
+                        || m.contains("data_inspection_failed")) {
+                    return "CONTENT_FILTER";
+                }
+                if (m.contains("timeout") || m.contains("timed out")) {
+                    return "TIMEOUT";
+                }
+                if (m.contains("500") || m.contains("502") || m.contains("503") || m.contains("504")) {
+                    return "SERVER_ERROR";
+                }
+            }
+            cur = cur.getCause();
+            depth++;
+        }
+        return "UNKNOWN";
+    }
+
+    // ==================== RFC-031: Methods for template delegation ====================
+
+    /**
+     * Repair a single page by regenerating its content.
+     * Used by LocalRepairTemplate.
+     */
+    public void repairSinglePage(Long targetPageId, Long modelId) {
+        WikiPageEntity page = pageService.getById(targetPageId);
+        if (page == null) {
+            log.warn("[Wiki] repairSinglePage: page not found: {}", targetPageId);
+            return;
+        }
+
+        WikiKnowledgeBaseEntity kb = kbService.getById(page.getKbId());
+        if (kb == null) return;
+
+        // Find source raw material
+        List<Long> rawIds = parseSourceRawIds(page.getSourceRawIds());
+        if (rawIds.isEmpty()) {
+            log.warn("[Wiki] repairSinglePage: no source raw IDs for page {}", targetPageId);
+            return;
+        }
+
+        WikiRawMaterialEntity raw = rawService.getById(rawIds.get(0));
+        if (raw == null) return;
+
+        String textContent = rawService.getTextContent(raw);
+        if (textContent == null || textContent.isBlank()) return;
+
+        // Use existing two-phase single-page create logic
+        String existingPagesIndex = buildExistingPagesIndex(kb.getId());
+        String configContent = kb.getConfigContent() != null ? kb.getConfigContent() : "";
+        String createSystem = PromptLoader.loadPrompt("wiki/create-page-system");
+        String createUserTemplate = PromptLoader.loadPrompt("wiki/create-page-user");
+        String createUser = createUserTemplate
+                .replace("{config}", configContent)
+                .replace("{existing_pages}", existingPagesIndex)
+                .replace("{page_slug}", page.getSlug())
+                .replace("{page_title}", page.getTitle())
+                .replace("{page_summary}", page.getSummary() != null ? page.getSummary() : "")
+                .replace("{raw_title}", raw.getTitle())
+                .replace("{raw_content}", textContent);
+        Prompt prompt = new Prompt(List.of(
+                new SystemMessage(createSystem),
+                new UserMessage(createUser)
+        ));
+        String response = callLlmWithResilientRetry(prompt, "repair page=" + page.getSlug());
+        com.fasterxml.jackson.databind.JsonNode pageJson = parseJsonResponse(response);
+        if (pageJson == null) return;
+
+        String content = pageJson.path("content").asText("");
+        String summary = pageJson.path("summary").asText("");
+        if (!content.isBlank()) {
+            pageService.updatePageByAi(kb.getId(), page.getSlug(), content, summary, rawIds.get(0));
+            log.info("[Wiki] Repaired page: {} (kbId={})", page.getSlug(), kb.getId());
+        }
+    }
+
+    private List<Long> parseSourceRawIds(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            return objectMapper.readValue(json, new com.fasterxml.jackson.core.type.TypeReference<List<Long>>() {});
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 
     private JsonNode parseJsonResponse(String response) {

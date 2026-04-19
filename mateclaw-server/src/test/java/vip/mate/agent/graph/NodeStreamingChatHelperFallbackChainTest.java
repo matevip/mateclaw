@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 
 /**
- * smoke tests for the multi-model fallback chain wiring on
+ * RFC-009: smoke tests for the multi-model fallback chain wiring on
  * {@link NodeStreamingChatHelper}.
  *
  * <p>Full streaming-flow integration (ChatModel.stream / Flux mocking) is left
@@ -88,7 +88,7 @@ class NodeStreamingChatHelperFallbackChainTest {
     }
 
     @Test
-    @DisplayName("EMPTY_RESPONSE / BILLING / MODEL_NOT_FOUND error types exist ")
+    @DisplayName("EMPTY_RESPONSE / BILLING / MODEL_NOT_FOUND error types exist (RFC-009 fallback triggers)")
     void fallbackTriggerErrorTypesExist() {
         // Compile-time safety net: these enum constants the streaming pipeline relies on
         // must not be renamed or removed without breaking the fallback contract.
@@ -98,7 +98,7 @@ class NodeStreamingChatHelperFallbackChainTest {
     }
 
     @Test
-    @DisplayName("primary providerId is stored when supplied via the full constructor")
+    @DisplayName("RFC-009 P3.1: primary providerId is stored when supplied via the full constructor")
     void primaryProviderIdStored() throws Exception {
         NodeStreamingChatHelper helper = new NodeStreamingChatHelper(
                 streamTracker, List.of(), null, null, "openai");
@@ -110,7 +110,7 @@ class NodeStreamingChatHelperFallbackChainTest {
     }
 
     @Test
-    @DisplayName("legacy constructors leave primaryProviderId null (tracking disabled)")
+    @DisplayName("RFC-009 P3.1: legacy constructors leave primaryProviderId null (tracking disabled)")
     void primaryProviderIdNullForLegacyConstructors() throws Exception {
         NodeStreamingChatHelper helper = new NodeStreamingChatHelper(streamTracker);
         Field f = NodeStreamingChatHelper.class.getDeclaredField("primaryProviderId");

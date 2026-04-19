@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * per-provider health tracker for the multi-model failover chain.
+ * RFC-009 P3.3: per-provider health tracker for the multi-model failover chain.
  *
  * <p>Tracks consecutive failure counts per provider id. When a provider hits
  * {@link ProviderHealthProperties#getFailureThreshold} consecutive failures,

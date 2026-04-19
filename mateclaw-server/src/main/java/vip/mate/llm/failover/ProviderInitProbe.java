@@ -3,8 +3,10 @@ package vip.mate.llm.failover;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
+import vip.mate.llm.event.ModelConfigChangedEvent;
 import vip.mate.llm.model.ModelProtocol;
 import vip.mate.llm.model.ModelProviderEntity;
 import vip.mate.llm.repository.ModelProviderMapper;
@@ -70,6 +72,24 @@ public class ProviderInitProbe {
 
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
+        probeAllConfigured();
+    }
+
+    /**
+     * RFC-009 Phase 4: when the user edits a provider's API key / Base URL
+     * (or any other field that {@link ModelProviderService} considers
+     * material), re-probe the whole configured set. The event has no
+     * providerId payload, so we re-probe everything — cheap because most
+     * probes use free {@code /v1/models} endpoints.
+     *
+     * <p>Async so the user's "save provider config" call returns
+     * immediately; the probe runs in the background and badges update on
+     * the next poll.</p>
+     */
+    @Async
+    @EventListener(ModelConfigChangedEvent.class)
+    public void onModelConfigChanged(ModelConfigChangedEvent event) {
+        log.info("[ProviderInitProbe] re-probing after ModelConfigChangedEvent (reason={})", event.reason());
         probeAllConfigured();
     }
 

@@ -36,6 +36,15 @@
                 <span>{{ t('wiki.pageCount', { count: kb.pageCount }) }}</span>
                 <span>{{ t('wiki.sourceCount', { count: kb.rawCount }) }}</span>
               </div>
+              <!-- RFC-033: KB health stats -->
+              <div v-if="kbStats[kb.id]" class="kb-health">
+                <span v-if="kbStats[kb.id].enrichedPageCount != null" class="health-enriched">
+                  ✦ {{ t('wiki.stats.enrichedRatio', { enriched: kbStats[kb.id].enrichedPageCount, total: kbStats[kb.id].pageCount }) }}
+                </span>
+                <span v-if="kbStats[kb.id].failedJobCount > 0" class="health-failed">
+                  ⚠ {{ t('wiki.stats.failedJobs', { count: kbStats[kb.id].failedJobCount }) }}
+                </span>
+              </div>
               <span class="kb-status" :class="kb.status">{{ t(`wiki.status.${kb.status}`) }}</span>
             </div>
           </div>
@@ -166,7 +175,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWikiStore } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
@@ -176,6 +185,27 @@ import WikiConfig from './components/WikiConfig.vue'
 
 const { t } = useI18n()
 const store = useWikiStore()
+
+// RFC-033: KB health stats
+interface KBStats {
+  pageCount: number
+  enrichedPageCount: number
+  rawCount: number
+  failedJobCount: number
+  runningJobCount: number
+}
+const kbStats = reactive<Record<number, KBStats>>({})
+
+async function fetchKBStats() {
+  for (const kb of store.knowledgeBases) {
+    try {
+      const res: any = await wikiApi.getKBStats(kb.id)
+      kbStats[kb.id] = res.data || res
+    } catch { /* ignore */ }
+  }
+}
+
+watch(() => store.knowledgeBases.length, () => { if (store.knowledgeBases.length > 0) fetchKBStats() })
 
 const showCreateKB = ref(false)
 const newKBName = ref('')
@@ -323,6 +353,10 @@ onMounted(() => {
 .batch-delete-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .page-checkbox { flex-shrink: 0; cursor: pointer; margin-right: 8px; }
 .page-item { display: flex; align-items: center; }
+
+.kb-health { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.health-enriched { font-size: 11px; color: #22c55e; }
+.health-failed { font-size: 11px; color: var(--mc-danger); }
 
 .kb-status { position: absolute; right: 8px; top: 8px; font-size: 10px; padding: 2px 6px; border-radius: 9999px; text-transform: uppercase; font-weight: 500; }
 .kb-status.active { background: rgba(90, 138, 90, 0.15); color: var(--mc-success); }

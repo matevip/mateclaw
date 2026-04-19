@@ -1,30 +1,11 @@
 <template>
   <div class="page-viewer" v-if="store.currentPage">
-    <!-- Header -->
-    <div class="page-viewer-header">
-      <div class="page-viewer-copy">
-        <div class="page-viewer-kicker">
-          <span class="kicker-dot" :class="store.currentPage.lastUpdatedBy === 'manual' ? 'manual' : 'ai'"></span>
-          {{ store.currentPage.lastUpdatedBy === 'ai' ? t('wiki.generatedByAi') : t('wiki.editedManually') }}
-        </div>
-        <h2 class="page-viewer-title">{{ store.currentPage.title }}</h2>
-        <div class="page-viewer-meta">
-          <span class="meta-badge">v{{ store.currentPage.version }}</span>
-          <span class="meta-slug">{{ store.currentPage.slug }}</span>
-        </div>
-      </div>
-      <div class="page-viewer-actions">
-        <button class="btn-secondary btn-sm" @click="editing = !editing">
-          {{ editing ? t('common.cancel') : t('common.edit') }}
-        </button>
-        <button v-if="editing" class="btn-primary btn-sm" @click="saveEdit">
-          {{ t('common.save') }}
-        </button>
-        <button v-if="!editing" class="btn-secondary btn-sm btn-delete" @click="handleDelete">
-          {{ t('common.delete') }}
-        </button>
-      </div>
-    </div>
+    <!-- RFC-033: Enhanced header with page_type, enrichment status, citations -->
+    <PageHeader
+      :page="store.currentPage"
+      @view-citations="citationDrawerOpen = true"
+      @enrich="handleEnrich"
+    />
 
     <!-- Summary Card -->
     <div v-if="store.currentPage.summary && !editing" class="page-summary">
@@ -32,12 +13,41 @@
       <p class="summary-text">{{ store.currentPage.summary }}</p>
     </div>
 
+    <!-- Actions bar -->
+    <div class="page-actions-bar">
+      <button class="btn-secondary btn-sm" @click="editing = !editing">
+        {{ editing ? t('common.cancel') : t('common.edit') }}
+      </button>
+      <button v-if="editing" class="btn-primary btn-sm" @click="saveEdit">
+        {{ t('common.save') }}
+      </button>
+      <button v-if="!editing" class="btn-secondary btn-sm btn-action" @click="handleEnrich">
+        <el-icon><Link /></el-icon>
+        {{ t('wiki.page.enrich') }}
+      </button>
+      <button v-if="!editing" class="btn-secondary btn-sm btn-action" @click="handleRepair">
+        <el-icon><SetUp /></el-icon>
+        {{ t('wiki.page.repair') }}
+      </button>
+      <button v-if="!editing" class="btn-secondary btn-sm btn-delete" @click="handleDelete">
+        {{ t('common.delete') }}
+      </button>
+    </div>
+
     <!-- Content -->
     <article v-if="!editing" class="page-content markdown-body" v-html="renderedContent"></article>
     <textarea v-else v-model="editContent" class="page-editor" rows="30"></textarea>
 
-    <!-- Backlinks -->
-    <div v-if="backlinks.length > 0" class="backlinks-section">
+    <!-- RFC-033: Related Pages Panel (replaces backlinks) -->
+    <RelatedPagesPanel
+      v-if="!editing && store.currentKB"
+      :kb-id="store.currentKB.id"
+      :slug="store.currentPage.slug"
+      @navigate="openPage"
+    />
+
+    <!-- Legacy backlinks (kept as fallback) -->
+    <div v-if="!editing && backlinks.length > 0" class="backlinks-section">
       <h4 class="backlinks-title">{{ t('wiki.backlinks') }} ({{ backlinks.length }})</h4>
       <div class="backlinks-list">
         <span
@@ -49,6 +59,20 @@
         </span>
       </div>
     </div>
+
+    <!-- RFC-033: Citation drawer -->
+    <CitationDrawer
+      v-if="store.currentKB"
+      v-model="citationDrawerOpen"
+      :page-id="store.currentPage.id"
+      :kb-id="store.currentKB.id"
+    />
+
+    <!-- Enrich toast -->
+    <div v-if="enrichToast" class="enrich-toast">
+      ✦ {{ enrichToast }}
+      <button class="toast-dismiss" @click="enrichToast = ''">✕</button>
+    </div>
   </div>
 </template>
 
@@ -58,6 +82,10 @@ import { useI18n } from 'vue-i18n'
 import { useWikiStore, type WikiPage } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
+import { Link, SetUp } from '@element-plus/icons-vue'
+import PageHeader from './PageHeader.vue'
+import RelatedPagesPanel from './RelatedPagesPanel.vue'
+import CitationDrawer from './CitationDrawer.vue'
 
 const { t } = useI18n()
 const store = useWikiStore()
@@ -66,10 +94,11 @@ const { renderMarkdown } = useMarkdownRenderer()
 const editing = ref(false)
 const editContent = ref('')
 const backlinks = ref<WikiPage[]>([])
+const citationDrawerOpen = ref(false)
+const enrichToast = ref('')
 
 const renderedContent = computed(() => {
   if (!store.currentPage?.content) return ''
-  // Pre-process wiki links [[title]] before markdown rendering
   const content = store.currentPage.content.replace(/\[\[([^\]]+)\]\]/g, (_match, title) => {
     const slug = title.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff\s-]/g, '').replace(/\s+/g, '-')
     return `<a class="wiki-link" data-slug="${slug}" onclick="return false">${title}</a>`
@@ -81,7 +110,6 @@ watch(() => store.currentPage, async (page) => {
   if (page && store.currentKB) {
     editing.value = false
     editContent.value = page.content || ''
-    // Fetch backlinks
     try {
       const res: any = await wikiApi.getBacklinks(store.currentKB.id, page.slug)
       backlinks.value = res.data || []
@@ -111,12 +139,38 @@ async function handleDelete() {
   }
 }
 
+async function handleEnrich() {
+  if (!store.currentKB || !store.currentPage) return
+  try {
+    await wikiApi.enrichPage(store.currentKB.id, store.currentPage.slug)
+    enrichToast.value = t('wiki.page.enrich') + '…'
+    setTimeout(() => { enrichToast.value = '' }, 5000)
+  } catch (e: any) {
+    console.error('[WikiViewer] Enrich failed:', e)
+  }
+}
+
+async function handleRepair() {
+  if (!store.currentKB || !store.currentPage) return
+  try {
+    await wikiApi.repairPage(store.currentKB.id, store.currentPage.slug)
+    enrichToast.value = t('wiki.page.repair') + '…'
+    setTimeout(async () => {
+      enrichToast.value = ''
+      if (store.currentKB && store.currentPage) {
+        await store.loadPage(store.currentKB.id, store.currentPage.slug)
+      }
+    }, 5000)
+  } catch (e: any) {
+    console.error('[WikiViewer] Repair failed:', e)
+  }
+}
+
 async function openPage(slug: string) {
   if (!store.currentKB) return
   await store.loadPage(store.currentKB.id, slug)
 }
 
-// Handle wiki link clicks via event delegation
 onMounted(() => {
   document.addEventListener('click', (e) => {
     const target = e.target as HTMLElement
@@ -129,7 +183,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* Buttons */
 .page-viewer {
   display: flex;
   flex-direction: column;
@@ -138,26 +191,15 @@ onMounted(() => {
 
 .btn-primary { display: flex; align-items: center; gap: 6px; padding: 8px 16px; background: var(--mc-primary); color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 500; cursor: pointer; }
 .btn-primary:hover { background: var(--mc-primary-hover); }
-.btn-primary:disabled { background: var(--mc-border); cursor: not-allowed; }
 .btn-primary.btn-sm { padding: 6px 14px; font-size: 13px; }
 .btn-secondary { padding: 8px 16px; background: var(--mc-bg-elevated); color: var(--mc-text-primary); border: 1px solid var(--mc-border); border-radius: 10px; font-size: 14px; cursor: pointer; }
 .btn-secondary:hover { background: var(--mc-bg-sunken); }
 .btn-secondary.btn-sm { padding: 6px 14px; font-size: 13px; }
 .btn-secondary.btn-delete { color: var(--el-color-danger, #f56c6c); }
 .btn-secondary.btn-delete:hover { background: var(--el-color-danger-light-9, #fef0f0); border-color: var(--el-color-danger-light-5, #fab6b6); }
+.btn-secondary.btn-action { color: var(--mc-primary); }
 
-/* Header */
-.page-viewer-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--mc-border-light); }
-.page-viewer-copy { min-width: 0; }
-.page-viewer-kicker { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mc-text-secondary); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
-.kicker-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-.kicker-dot.ai { background: var(--el-color-primary, #409eff); }
-.kicker-dot.manual { background: var(--el-color-success, #67c23a); }
-.page-viewer-title { font-size: clamp(24px, 3vw, 32px); line-height: 1.1; letter-spacing: -0.03em; font-weight: 700; color: var(--mc-text-primary); margin: 0; }
-.page-viewer-meta { font-size: 12px; color: var(--mc-text-secondary); display: flex; gap: 10px; margin-top: 10px; align-items: center; }
-.meta-badge { padding: 2px 8px; background: var(--mc-bg-sunken); border-radius: 6px; font-weight: 600; font-size: 11px; }
-.meta-slug { font-family: 'JetBrains Mono', monospace; font-size: 11px; opacity: 0.7; }
-.page-viewer-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.page-actions-bar { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* Summary */
 .page-summary { padding: 16px 20px; background: var(--mc-bg-muted); border-radius: 12px; border-left: 3px solid var(--mc-primary); }
@@ -190,30 +232,43 @@ onMounted(() => {
 .backlinks-section { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--mc-border); }
 .backlinks-title { font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--mc-text-secondary); margin-bottom: 8px; letter-spacing: 0.05em; }
 .backlinks-list { display: flex; flex-wrap: wrap; gap: 6px; }
-.backlink-tag { padding: 5px 10px; background: var(--mc-bg-sunken); border-radius: 9999px; font-size: 12px; cursor: pointer; color: var(--mc-primary); transition: background 0.15s, transform 0.15s; }
+.backlink-tag { padding: 5px 10px; background: var(--mc-bg-sunken); border-radius: 9999px; font-size: 12px; cursor: pointer; color: var(--mc-primary); transition: background 0.15s; }
 .backlink-tag:hover { background: var(--mc-primary-bg); }
 
+/* Enrich toast */
+.enrich-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  padding: 10px 16px;
+  background: var(--mc-bg-elevated);
+  border: 1px solid var(--mc-primary);
+  border-radius: 12px;
+  font-size: 13px;
+  color: var(--mc-primary);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 999;
+  animation: toast-in 0.3s ease;
+}
+@keyframes toast-in {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.toast-dismiss {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--mc-text-tertiary);
+  font-size: 14px;
+}
+
 @media (max-width: 768px) {
-  .page-viewer-header {
-    flex-direction: column;
-  }
-
-  .page-viewer-actions {
-    width: 100%;
-  }
-
-  .btn-primary.btn-sm,
-  .btn-secondary.btn-sm {
-    flex: 1;
-    justify-content: center;
-  }
-
-  .page-viewer-title {
-    font-size: 24px;
-  }
-
-  .page-editor {
-    min-height: 46vh;
-  }
+  .page-actions-bar { flex-direction: column; }
+  .page-actions-bar .btn-secondary,
+  .page-actions-bar .btn-primary { width: 100%; justify-content: center; }
+  .page-editor { min-height: 46vh; }
 }
 </style>

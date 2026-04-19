@@ -1,4 +1,4 @@
--- ordered multi-provider fallback chain
+-- RFC-009 Phase 1: ordered multi-provider fallback chain
 --
 -- `fallback_priority` defines the order in which a provider is tried after the
 -- primary model exhausts retries:

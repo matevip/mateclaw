@@ -42,7 +42,13 @@ public class WikiPageEntity {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String sourceRawIds;
 
-    /** 版本号（每次 AI 更新递增） */
+    /** Page type: entity / concept / source / synthesis */
+    private String pageType;
+
+    /** Purpose hint for LLM ingest routing */
+    private String purposeHint;
+
+    /** Version number (incremented on each AI update) */
     private Integer version;
 
     /** 最后更新者：ai / manual */

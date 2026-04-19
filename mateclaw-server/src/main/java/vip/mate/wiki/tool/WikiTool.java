@@ -5,47 +5,79 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+import vip.mate.wiki.dto.*;
+import vip.mate.wiki.job.WikiProcessingJobService;
+import vip.mate.wiki.job.event.WikiJobCreatedEvent;
+import vip.mate.wiki.job.model.WikiProcessingJobEntity;
 import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.model.WikiRawMaterialEntity;
-import vip.mate.wiki.service.HybridRetriever;
-import vip.mate.wiki.service.WikiKnowledgeBaseService;
-import vip.mate.wiki.service.WikiPageService;
-import vip.mate.wiki.service.WikiRawMaterialService;
+import vip.mate.wiki.repository.WikiRawMaterialMapper;
+import vip.mate.wiki.service.*;
 
-import java.util.List;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
- * Wiki 知识库工具
+ * Wiki knowledge base tools for agent conversations.
  * <p>
- * 供 Agent 在对话中按需读取 Wiki 页面内容。
- * kbId 通过 agentId 自动解析，LLM 无需传递。
+ * All tools auto-resolve kbId from agentId; LLM never needs to pass it directly.
  *
  * @author MateClaw Team
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class WikiTool {
 
     private final WikiPageService pageService;
     private final WikiKnowledgeBaseService kbService;
     private final WikiRawMaterialService rawService;
     private final HybridRetriever hybridRetriever;
+    private final ObjectMapper objectMapper;
+
+    @Autowired(required = false)
+    private WikiRelationService relationService;
+
+    @Autowired(required = false)
+    private WikiProcessingJobService jobService;
+
+    @Autowired(required = false)
+    private ApplicationEventPublisher eventPublisher;
+
+    @Autowired(required = false)
+    private WikiRawMaterialMapper rawMaterialMapper;
+
+    public WikiTool(WikiPageService pageService,
+                     WikiKnowledgeBaseService kbService,
+                     WikiRawMaterialService rawService,
+                     HybridRetriever hybridRetriever,
+                     ObjectMapper objectMapper) {
+        this.pageService = pageService;
+        this.kbService = kbService;
+        this.rawService = rawService;
+        this.hybridRetriever = hybridRetriever;
+        this.objectMapper = objectMapper;
+    }
+
+    // ==================== RFC-032: Enhanced wiki_read_page ====================
 
     @Tool(description = """
-            读取 Wiki 知识库中指定页面的完整内容。
-            当系统提示词中的 Wiki 页面摘要不够详细时，使用此工具获取完整内容。
-            返回 Markdown 格式的页面内容，包含 [[双向链接]] 和来源原始文件信息。
+            Read a wiki page. Use maxChars to limit size (recommended: 3000-6000 for most tasks).
+            Use sectionHeading to read only one section by its heading text.
             """)
     public String wiki_read_page(
-            @ToolParam(description = "当前 Agent 的 ID") Long agentId,
-            @ToolParam(description = "页面标识符 (slug)") String slug) {
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Page slug") String slug,
+            @ToolParam(description = "Max characters to return (null = full page)", required = false) Integer maxChars,
+            @ToolParam(description = "Section heading to extract (null = all sections)", required = false) String sectionHeading) {
 
         if (slug == null || slug.isBlank()) {
             return error("slug is required");
@@ -61,38 +93,66 @@ public class WikiTool {
             return error("Page not found: " + slug);
         }
 
-        // Agent 引用追踪
         pageService.trackReference(kbId, slug);
+
+        String content = page.getContent();
+
+        if (sectionHeading != null && !sectionHeading.isBlank()) {
+            content = extractSection(content, sectionHeading);
+        }
+        if (maxChars != null && maxChars > 0) {
+            content = applyMaxChars(content, maxChars);
+        }
 
         JSONObject result = JSONUtil.createObj()
                 .set("title", page.getTitle())
                 .set("slug", page.getSlug())
                 .set("version", page.getVersion())
                 .set("lastUpdatedBy", page.getLastUpdatedBy())
-                .set("content", page.getContent())
+                .set("content", content)
                 .set("sourceFiles", resolveSourceFiles(page.getSourceRawIds()));
         return result.toString();
     }
 
+    // ==================== RFC-032: Enhanced wiki_list_pages ====================
+
     @Tool(description = """
-            列出 Wiki 知识库中的所有页面。
-            返回页面列表，包含标题、slug 和摘要。
+            List wiki pages. Add query to filter by title keyword (max 30 results).
+            Without query returns all pages (use only for small KBs).
             """)
     public String wiki_list_pages(
-            @ToolParam(description = "当前 Agent 的 ID") Long agentId) {
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Title keyword filter (optional)", required = false) String query) {
 
         Long kbId = resolveKbId(agentId);
         if (kbId == null) {
             return error("No wiki knowledge base found for this agent");
         }
 
-        List<WikiPageEntity> pages = pageService.listSummaries(kbId);
+        List<WikiPageLite> pages;
+        if (query != null && !query.isBlank()) {
+            List<Long> ids = pageService.searchPages(kbId, query).stream()
+                    .map(WikiPageEntity::getId).limit(30).toList();
+            if (ids.isEmpty()) {
+                pages = List.of();
+            } else {
+                pages = pageService.listSummaries(kbId).stream()
+                        .filter(p -> ids.stream().anyMatch(id -> Objects.equals(id, p.getId())))
+                        .map(p -> new WikiPageLite(p.getId(), p.getSlug(), p.getTitle(), p.getSummary()))
+                        .toList();
+            }
+        } else {
+            pages = pageService.listSummaries(kbId).stream()
+                    .map(p -> new WikiPageLite(p.getId(), p.getSlug(), p.getTitle(), p.getSummary()))
+                    .toList();
+        }
+
         JSONArray arr = new JSONArray();
-        for (WikiPageEntity page : pages) {
+        for (WikiPageLite page : pages) {
             arr.add(JSONUtil.createObj()
-                    .set("title", page.getTitle())
-                    .set("slug", page.getSlug())
-                    .set("summary", page.getSummary()));
+                    .set("slug", page.slug())
+                    .set("title", page.title())
+                    .set("summary", page.summary()));
         }
 
         return JSONUtil.createObj()
@@ -102,15 +162,17 @@ public class WikiTool {
                 .toString();
     }
 
+    // ==================== RFC-032: Enhanced wiki_search_pages ====================
+
     @Tool(description = """
-            在 Wiki 知识库中搜索页面。
-            支持三种模式：keyword（关键词匹配）、semantic（语义向量相似度）、hybrid（两者融合，默认）。
-            返回匹配的页面列表及其来源文件。
+            Search wiki pages. Returns snippet so you can judge relevance without reading the full page.
+            Default topK=5 is sufficient for most queries.
             """)
     public String wiki_search_pages(
-            @ToolParam(description = "当前 Agent 的 ID") Long agentId,
-            @ToolParam(description = "搜索关键词或自然语言问题") String query,
-            @ToolParam(description = "搜索模式：keyword | semantic | hybrid（默认 hybrid）", required = false) String mode) {
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Search query") String query,
+            @ToolParam(description = "Mode: keyword|semantic|hybrid (default: hybrid)", required = false) String mode,
+            @ToolParam(description = "Max results (default 5, max 20)", required = false) Integer topK) {
 
         if (query == null || query.isBlank()) {
             return error("query is required");
@@ -121,41 +183,44 @@ public class WikiTool {
             return error("No wiki knowledge base found for this agent");
         }
 
-        // RFC-011：走混合检索
-        List<HybridRetriever.PageHit> hits = hybridRetriever.searchPages(kbId, query, mode, 20);
+        int k = (topK != null && topK > 0) ? Math.min(topK, 20) : 5;
+        List<PageSearchResult> results = hybridRetriever.search(kbId, query, mode, k);
 
-        // Agent 引用追踪
-        for (HybridRetriever.PageHit h : hits) {
-            pageService.trackReference(kbId, h.slug());
+        for (PageSearchResult r : results) {
+            pageService.trackReference(kbId, r.slug());
         }
 
         JSONArray arr = new JSONArray();
-        for (HybridRetriever.PageHit hit : hits) {
+        for (PageSearchResult r : results) {
             arr.add(JSONUtil.createObj()
-                    .set("title", hit.title())
-                    .set("slug", hit.slug())
-                    .set("summary", hit.summary())
-                    .set("score", String.format("%.4f", hit.score())));
+                    .set("slug", r.slug())
+                    .set("title", r.title())
+                    .set("snippet", r.snippet() != null ? r.snippet() : r.summary())
+                    .set("matchedBy", r.matchedBy())
+                    .set("reason", r.reason() != null ? r.reason() : "")
+                    .set("score", String.format("%.4f", r.score())));
         }
 
         return JSONUtil.createObj()
                 .set("kbId", kbId)
                 .set("query", query)
                 .set("mode", mode != null ? mode : "hybrid")
-                .set("matchCount", hits.size())
+                .set("matchCount", results.size())
                 .set("pages", arr)
                 .toString();
     }
 
+    // ==================== RFC-032: N+1 fixed wiki_semantic_search ====================
+
     @Tool(description = """
-            在 Wiki 知识库中进行 chunk 级语义搜索。
-            返回与查询语义最接近的原始文本片段（chunk），包含相似度分数。
-            当 wiki_search_pages 返回的页面摘要不够具体时，使用此工具获取精确的源文本证据。
+            Chunk-level semantic search in the wiki knowledge base.
+            Returns raw text fragments closest to the query with similarity scores.
+            Use when wiki_search_pages results are not specific enough.
             """)
     public String wiki_semantic_search(
-            @ToolParam(description = "当前 Agent 的 ID") Long agentId,
-            @ToolParam(description = "自然语言查询") String query,
-            @ToolParam(description = "返回条数（默认 5）", required = false) Integer topK) {
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Natural language query") String query,
+            @ToolParam(description = "Max results (default 5)", required = false) Integer topK) {
 
         if (query == null || query.isBlank()) {
             return error("query is required");
@@ -178,13 +243,21 @@ public class WikiTool {
                     .toString();
         }
 
+        // RFC-032: Batch-fetch raw titles (N+1 fix)
+        Set<Long> rawIds = hits.stream().map(HybridRetriever.ChunkHit::rawId).collect(Collectors.toSet());
+        Map<Long, String> rawTitles;
+        if (rawMaterialMapper != null && !rawIds.isEmpty()) {
+            rawTitles = rawMaterialMapper.selectBatchTitles(rawIds)
+                    .stream().collect(Collectors.toMap(RawTitleRef::id, RawTitleRef::title));
+        } else {
+            rawTitles = Map.of();
+        }
+
         JSONArray arr = new JSONArray();
         for (HybridRetriever.ChunkHit hit : hits) {
-            // 解析 raw material 标题
-            WikiRawMaterialEntity raw = rawService.getById(hit.rawId());
             arr.add(JSONUtil.createObj()
                     .set("chunkId", hit.chunkId())
-                    .set("rawTitle", raw != null ? raw.getTitle() : "unknown")
+                    .set("rawTitle", rawTitles.getOrDefault(hit.rawId(), "unknown"))
                     .set("snippet", hit.snippet())
                     .set("score", String.format("%.4f", hit.score())));
         }
@@ -198,13 +271,12 @@ public class WikiTool {
     }
 
     @Tool(description = """
-            追溯 Wiki 页面的来源原始文件。
-            查询指定页面是由哪些原始文档生成的，返回文件名、类型、路径等信息。
-            用于回答"这个内容出自哪篇文档"类的问题。
+            Trace the source raw materials for a wiki page.
+            Returns file names, types, and paths of the original documents.
             """)
     public String wiki_trace_source(
-            @ToolParam(description = "当前 Agent 的 ID") Long agentId,
-            @ToolParam(description = "页面标识符 (slug)") String slug) {
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Page slug") String slug) {
 
         if (slug == null || slug.isBlank()) {
             return error("slug is required");
@@ -228,14 +300,13 @@ public class WikiTool {
     }
 
     @Tool(description = """
-            在 Wiki 知识库中创建新页面。
-            用于保存任务执行结果、分析报告、会议纪要等有价值的信息。
-            内容使用 Markdown 格式。页面标识符 (slug) 会从标题自动生成。
+            Create a new wiki page. Used to save task results, analysis reports, etc.
+            Content should be Markdown. Slug is auto-generated from title.
             """)
     public String wiki_create_page(
-            @ToolParam(description = "当前 Agent 的 ID") Long agentId,
-            @ToolParam(description = "页面标题") String title,
-            @ToolParam(description = "页面内容 (Markdown 格式)") String content) {
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Page title") String title,
+            @ToolParam(description = "Page content (Markdown)") String content) {
 
         if (title == null || title.isBlank()) {
             return error("title is required");
@@ -249,7 +320,6 @@ public class WikiTool {
             return error("No wiki knowledge base found for this agent. Create one first.");
         }
 
-        // 从标题生成 slug
         String slug = title.toLowerCase()
                 .replaceAll("[^a-z0-9\\u4e00-\\u9fff]+", "-")
                 .replaceAll("^-|-$", "");
@@ -257,17 +327,13 @@ public class WikiTool {
             slug = "page-" + System.currentTimeMillis();
         }
 
-        // 检查 slug 是否已存在
         WikiPageEntity existing = pageService.getBySlug(kbId, slug);
         if (existing != null) {
             slug = slug + "-" + System.currentTimeMillis() % 10000;
         }
 
-        // 生成摘要（取前 200 字符）
         String summary = content.length() > 200 ? content.substring(0, 200) + "..." : content;
-
         WikiPageEntity page = pageService.createPage(kbId, slug, title, content, summary, null);
-
         log.info("[WikiTool] Created page: {} (slug={}, kbId={})", title, slug, kbId);
 
         return JSONUtil.createObj()
@@ -280,12 +346,11 @@ public class WikiTool {
     }
 
     @Tool(description = """
-            删除一个 AI 生成的 Wiki 页面。无法删除人工维护的页面（lastUpdatedBy = 'manual'）。
-            用于清理过时、冗余或不准确的 Wiki 页面。
+            Delete an AI-generated wiki page. Cannot delete manually curated pages.
             """)
     public String wiki_delete_page(
-            @ToolParam(description = "当前 Agent 的 ID") Long agentId,
-            @ToolParam(description = "要删除的页面 slug") String slug) {
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Page slug to delete") String slug) {
 
         if (slug == null || slug.isBlank()) {
             return error("slug is required");
@@ -301,7 +366,6 @@ public class WikiTool {
             return error("Page not found: " + slug);
         }
 
-        // 安全保护：禁止删除人工维护的页面
         if ("manual".equals(page.getLastUpdatedBy())) {
             return error("Cannot delete manually curated page: " + page.getTitle() + ". Please manage via admin UI.");
         }
@@ -317,24 +381,104 @@ public class WikiTool {
                 .toString();
     }
 
-    /**
-     * 通过 agentId 自动解析关联的知识库 ID
-     * <p>
-     * 查找逻辑：Agent 专属 KB + 公共 KB（agent_id IS NULL），取第一个。
-     */
+    // ==================== RFC-029: Relation tools ====================
+
+    @Tool(description = """
+            Find pages structurally related to a given page (shared sources, links,
+            semantic similarity). More reliable than keyword search for discovering connected knowledge.
+            """)
+    public String wiki_related_pages(
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Page slug") String slug,
+            @ToolParam(description = "Max results (default 5, max 10)", required = false) Integer topK) {
+
+        Long kbId = resolveKbId(agentId);
+        if (kbId == null) return error("No wiki knowledge base found for this agent");
+        if (relationService == null) return error("Relation service not available");
+
+        int k = (topK != null && topK > 0) ? Math.min(topK, 10) : 5;
+        List<RelatedPageResult> results = relationService.relatedPages(kbId, slug, k);
+
+        JSONArray arr = new JSONArray();
+        for (RelatedPageResult r : results) {
+            arr.add(JSONUtil.createObj()
+                    .set("slug", r.slug())
+                    .set("title", r.title())
+                    .set("score", String.format("%.2f", r.score()))
+                    .set("signals", r.signals()));
+        }
+
+        return JSONUtil.createObj()
+                .set("slug", slug)
+                .set("relatedCount", results.size())
+                .set("pages", arr)
+                .toString();
+    }
+
+    @Tool(description = """
+            Explain why two wiki pages are related. Returns signal breakdown with scores.
+            """)
+    public String wiki_explain_relation(
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "First page slug") String slugA,
+            @ToolParam(description = "Second page slug") String slugB) {
+
+        Long kbId = resolveKbId(agentId);
+        if (kbId == null) return error("No wiki knowledge base found for this agent");
+        if (relationService == null) return error("Relation service not available");
+
+        RelationExplanation ex = relationService.explain(kbId, slugA, slugB);
+        if (ex.breakdown().isEmpty()) return slugA + " and " + slugB + " have no detected relation.";
+
+        StringBuilder sb = new StringBuilder("Relation score: ")
+                .append(String.format("%.2f", ex.totalScore())).append("\n");
+        ex.breakdown().forEach(s -> sb.append("  ").append(s.signal())
+                .append(": ").append(String.format("%.2f", s.score())).append("\n"));
+        return sb.toString();
+    }
+
+    // ==================== RFC-031: Enrichment tool ====================
+
+    @Tool(description = """
+            Trigger lightweight wikilink enrichment for a specific page.
+            Does NOT regenerate content — only adds [[wikilink]] cross-references.
+            """)
+    public String wiki_enrich_page(
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Page slug") String slug) {
+
+        Long kbId = resolveKbId(agentId);
+        if (kbId == null) return error("No wiki knowledge base found for this agent");
+        if (jobService == null || eventPublisher == null) return error("Job service not available");
+
+        WikiPageEntity page = pageService.getBySlug(kbId, slug);
+        if (page == null) return error("Page not found: " + slug);
+
+        Long rawId = 0L;
+        try {
+            List<Long> rawIds = objectMapper.readValue(
+                    page.getSourceRawIds() != null ? page.getSourceRawIds() : "[]",
+                    new TypeReference<List<Long>>() {});
+            if (!rawIds.isEmpty()) rawId = rawIds.get(0);
+        } catch (Exception ignored) {}
+
+        WikiProcessingJobEntity job = jobService.createLightEnrich(kbId, rawId);
+        eventPublisher.publishEvent(new WikiJobCreatedEvent(job.getId()));
+        return "Wikilink enrichment queued for: " + slug;
+    }
+
+    // ==================== Helpers ====================
+
     private Long resolveKbId(Long agentId) {
         List<WikiKnowledgeBaseEntity> kbs = kbService.listByAgentId(agentId);
         return kbs.isEmpty() ? null : kbs.get(0).getId();
     }
 
-    /**
-     * 将 sourceRawIds JSON 数组解析为原始文件信息列表
-     */
     private JSONArray resolveSourceFiles(String sourceRawIdsJson) {
         JSONArray result = new JSONArray();
         if (sourceRawIdsJson == null || sourceRawIdsJson.isBlank()) return result;
         try {
-            List<Long> rawIds = new ObjectMapper().readValue(sourceRawIdsJson, new TypeReference<List<Long>>() {});
+            List<Long> rawIds = objectMapper.readValue(sourceRawIdsJson, new TypeReference<List<Long>>() {});
             for (Long rawId : rawIds) {
                 WikiRawMaterialEntity raw = rawService.getById(rawId);
                 if (raw != null) {
@@ -349,6 +493,30 @@ public class WikiTool {
             log.warn("[WikiTool] Failed to resolve source files: {}", e.getMessage());
         }
         return result;
+    }
+
+    /**
+     * RFC-032: Extract a section from markdown content by heading text.
+     */
+    private String extractSection(String content, String heading) {
+        if (content == null) return "";
+        String escaped = Pattern.quote(heading.trim());
+        Pattern p = Pattern.compile(
+            "(?m)^(#{1,3})\\s+" + escaped + "\\b.*?(?=^#{1,3}\\s|\\Z)",
+            Pattern.DOTALL | Pattern.MULTILINE
+        );
+        Matcher m = p.matcher(content);
+        return m.find() ? m.group().strip() : content;
+    }
+
+    /**
+     * RFC-032: Truncate content with a helpful message.
+     */
+    private String applyMaxChars(String text, int maxChars) {
+        if (text == null || text.length() <= maxChars) return text;
+        return text.substring(0, maxChars)
+            + "\n\n[Content truncated at " + maxChars + " chars. "
+            + "Use sectionHeading param to read a specific section.]";
     }
 
     private String error(String message) {

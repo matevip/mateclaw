@@ -47,7 +47,7 @@ public class NodeStreamingChatHelper {
     /**
      * Ordered fallback chain tried after the primary model exhausts retries.
      * Each entry is attempted once (no retry); the first successful response
-     * wins. Empty list disables fallover entirely.
+     * wins. Empty list disables fallover entirely. See RFC-009.
      *
      * <p>Stored as {@link vip.mate.llm.failover.FallbackEntry} (providerId +
      * ChatModel) so the chain walker can consult {@link vip.mate.llm.failover.ProviderHealthTracker}
@@ -71,17 +71,26 @@ public class NodeStreamingChatHelper {
      */
     private final String primaryProviderId;
 
+    /**
+     * RFC-009 Phase 4: membership gate for usable providers. A provider is
+     * removed from the pool on HARD errors (AUTH_ERROR / BILLING /
+     * MODEL_NOT_FOUND) so subsequent requests skip it entirely without
+     * burning a round-trip. {@code null} disables the gate (legacy callers,
+     * tests) — every provider then counts as in-pool (fail-open).
+     */
+    private final vip.mate.llm.failover.AvailableProviderPool providerPool;
+
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker) {
-        this(streamTracker, List.of(), null, null, null);
+        this(streamTracker, List.of(), null, null, null, null);
     }
 
     /**
      * @deprecated use the full constructor — a single fallback cannot
-     *     express the ordered multi-provider chain
+     *     express the ordered multi-provider chain from RFC-009.
      */
     @Deprecated
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker, ChatModel fallbackModel) {
-        this(streamTracker, wrap(fallbackModel), null, null, null);
+        this(streamTracker, wrap(fallbackModel), null, null, null, null);
     }
 
     /**
@@ -90,7 +99,7 @@ public class NodeStreamingChatHelper {
     @Deprecated
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker, ChatModel fallbackModel,
                                    vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics) {
-        this(streamTracker, wrap(fallbackModel), cacheMetrics, null, null);
+        this(streamTracker, wrap(fallbackModel), cacheMetrics, null, null, null);
     }
 
     /**
@@ -100,7 +109,7 @@ public class NodeStreamingChatHelper {
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker,
                                    List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
                                    vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics) {
-        this(streamTracker, fallbackChain, cacheMetrics, null, null);
+        this(streamTracker, fallbackChain, cacheMetrics, null, null, null);
     }
 
     /**
@@ -112,19 +121,41 @@ public class NodeStreamingChatHelper {
                                    List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
                                    vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics,
                                    vip.mate.llm.failover.ProviderHealthTracker healthTracker) {
-        this(streamTracker, fallbackChain, cacheMetrics, healthTracker, null);
+        this(streamTracker, fallbackChain, cacheMetrics, healthTracker, null, null);
     }
 
+    /**
+     * Constructor that wires health tracker + primary provider id but leaves
+     * the {@link vip.mate.llm.failover.AvailableProviderPool} disabled. Kept
+     * so existing tests (e.g. {@code NodeStreamingChatHelperFailoverTest})
+     * compile unchanged — they don't exercise the pool gate.
+     */
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker,
                                    List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
                                    vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics,
                                    vip.mate.llm.failover.ProviderHealthTracker healthTracker,
                                    String primaryProviderId) {
+        this(streamTracker, fallbackChain, cacheMetrics, healthTracker, primaryProviderId, null);
+    }
+
+    /**
+     * Full constructor — preferred for production wiring. The
+     * {@link vip.mate.llm.failover.AvailableProviderPool} hookup gates both
+     * the primary short-circuit and the fallback walker; passing {@code null}
+     * runs in fail-open mode (every provider counted as in-pool).
+     */
+    public NodeStreamingChatHelper(ChatStreamTracker streamTracker,
+                                   List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
+                                   vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics,
+                                   vip.mate.llm.failover.ProviderHealthTracker healthTracker,
+                                   String primaryProviderId,
+                                   vip.mate.llm.failover.AvailableProviderPool providerPool) {
         this.streamTracker = streamTracker;
         this.fallbackChain = fallbackChain == null ? List.of() : List.copyOf(fallbackChain);
         this.cacheMetrics = cacheMetrics;
         this.healthTracker = healthTracker;
         this.primaryProviderId = primaryProviderId;
+        this.providerPool = providerPool;
     }
 
     private static List<vip.mate.llm.failover.FallbackEntry> wrap(ChatModel m) {
@@ -142,6 +173,47 @@ public class NodeStreamingChatHelper {
         if (healthTracker == null || primaryProviderId == null) return;
         if (success) healthTracker.recordSuccess(primaryProviderId);
         else healthTracker.recordFailure(primaryProviderId);
+    }
+
+    /**
+     * RFC-009 Phase 4 — map an {@link ErrorType} to the matching pool
+     * {@link vip.mate.llm.failover.AvailableProviderPool.RemovalSource} for
+     * HARD failures (AUTH / BILLING / MODEL_NOT_FOUND). Returns {@code null}
+     * for SOFT errors and benign types — those keep the provider in-pool and
+     * are handled by {@link vip.mate.llm.failover.ProviderHealthTracker}'s
+     * cooldown instead.
+     */
+    private static vip.mate.llm.failover.AvailableProviderPool.RemovalSource hardRemovalSource(ErrorType type) {
+        if (type == null) return null;
+        return switch (type) {
+            case AUTH_ERROR -> vip.mate.llm.failover.AvailableProviderPool.RemovalSource.AUTH_ERROR;
+            case BILLING -> vip.mate.llm.failover.AvailableProviderPool.RemovalSource.BILLING;
+            case MODEL_NOT_FOUND -> vip.mate.llm.failover.AvailableProviderPool.RemovalSource.MODEL_NOT_FOUND;
+            default -> null;
+        };
+    }
+
+    /** Convenience: pool-aware membership check. Null pool means fail-open (everyone in). */
+    private boolean inPool(String providerId) {
+        return providerPool == null || providerId == null || providerPool.contains(providerId);
+    }
+
+    /**
+     * Remove the given provider from the pool if {@code errorType} is HARD
+     * (AUTH_ERROR / BILLING / MODEL_NOT_FOUND). No-op when the pool is
+     * disabled, the provider id is unknown, or the error is SOFT.
+     */
+    private void removeFromPool(String providerId, ErrorType errorType, String message) {
+        if (providerPool == null || providerId == null) return;
+        var source = hardRemovalSource(errorType);
+        if (source == null) return;
+        providerPool.remove(providerId, source, message != null ? message : errorType.name());
+    }
+
+    /** Defensively re-affirm pool membership after a successful call. Idempotent + cheap. */
+    private void addToPool(String providerId) {
+        if (providerPool == null || providerId == null) return;
+        providerPool.add(providerId);
     }
 
     /**
@@ -235,7 +307,7 @@ public class NodeStreamingChatHelper {
                 || msg.contains("thinking block")) {
             return ErrorType.THINKING_BLOCK_ERROR;
         }
-        // BILLING — payment / quota exhausted. Distinct from AUTH because
+        // RFC-009 P3.2: BILLING — payment / quota exhausted. Distinct from AUTH because
         // a different provider may have credits, so we should fall back instead of
         // terminating the call. Both OpenAI ("insufficient_quota") and Anthropic
         // ("credit balance is too low") use these phrases in 402-class responses.
@@ -246,7 +318,7 @@ public class NodeStreamingChatHelper {
                 || msg.contains("quota exceeded") || msg.contains("Quota exceeded")) {
             return ErrorType.BILLING;
         }
-        // MODEL_NOT_FOUND — provider rejects the requested model id.
+        // RFC-009 P3.2: MODEL_NOT_FOUND — provider rejects the requested model id.
         // Includes DashScope's "[InvalidParameter] url error, please check url"
         // (https://help.aliyun.com/zh/model-studio/error-code#error-url) which despite
         // the wording is the provider rejecting an unknown/unsupported model id on
@@ -300,20 +372,23 @@ public class NodeStreamingChatHelper {
             throw new CancellationException("Stream stopped by user");
         }
 
-        // if the primary's provider is in cooldown (3+ recent
-        // consecutive failures within the cooldown window), skip the 5-retry
-        // primary loop entirely and head straight to the fallback chain.
-        // Without this short-circuit a degraded primary forces every LLM
-        // call in the conversation to wait through the full backoff.
-        boolean primarySkipped = primaryProviderId != null
+        // RFC-009 P3.1 + Phase 4: short-circuit the primary retry loop in two cases.
+        //   (a) primary is in cooldown (P3.3) — soft, transient
+        //   (b) primary was HARD-removed from the pool (Phase 4) — auth/billing/missing model
+        // Either way, retrying the same model wastes seconds; head straight to fallback.
+        boolean primaryInCooldown = primaryProviderId != null
                 && healthTracker != null
                 && healthTracker.isInCooldown(primaryProviderId);
+        boolean primaryOutOfPool = primaryProviderId != null && !inPool(primaryProviderId);
+        boolean primarySkipped = primaryInCooldown || primaryOutOfPool;
         if (primarySkipped) {
-            log.warn("[{}] Primary provider={} is in cooldown — skipping straight to fallback chain",
-                    phase, primaryProviderId);
+            String reason = primaryOutOfPool ? "removed from pool" : "in cooldown";
+            log.warn("[{}] Primary provider={} {} — skipping straight to fallback chain",
+                    phase, primaryProviderId, reason);
             if (broadcast) {
                 broadcastDelta(conversationId, "warning",
-                        buildDeltaJson("主模型暂时不可用（冷却中），直接尝试备选模型..."));
+                        buildDeltaJson("主模型暂时不可用（" + (primaryOutOfPool ? "已下线" : "冷却中")
+                                + "），直接尝试备选模型..."));
             }
         }
 
@@ -334,9 +409,10 @@ public class NodeStreamingChatHelper {
                 if (lastResult.errorType() == ErrorType.AUTH_ERROR) {
                     log.warn("[{}] Primary auth failed — skipping same-model retries, handing off to fallback chain", phase);
                     recordPrimary(false);
+                    removeFromPool(primaryProviderId, ErrorType.AUTH_ERROR, lastResult.errorMessage());
                     break;
                 }
-                // BILLING / MODEL_NOT_FOUND — provider-side hard failures
+                // RFC-009 P3.2: BILLING / MODEL_NOT_FOUND — provider-side hard failures
                 // that won't change on retry. Skip to fallback chain (a different
                 // provider may have credits, or the model name may be valid there).
                 if (lastResult.errorType() == ErrorType.BILLING
@@ -344,6 +420,7 @@ public class NodeStreamingChatHelper {
                     log.warn("[{}] Primary error={} — skipping same-model retries, handing off to fallback chain",
                             phase, lastResult.errorType());
                     recordPrimary(false);
+                    removeFromPool(primaryProviderId, lastResult.errorType(), lastResult.errorMessage());
                     break;
                 }
                 // CLIENT_ERROR (400 Bad Request): 不重试（参数/格式错误重试也不会变）
@@ -359,7 +436,7 @@ public class NodeStreamingChatHelper {
                 if (lastResult.errorType() == ErrorType.THINKING_BLOCK_ERROR) {
                     return lastResult; // 已经重试过了
                 }
-                // EMPTY_RESPONSE — break the primary-retry loop and fall through to
+                // RFC-009: EMPTY_RESPONSE — break the primary-retry loop and fall through to
                 // the fallback chain. Retrying the same model that returned nothing is rarely
                 // productive; a different provider has a better chance of succeeding.
                 if (lastResult.errorType() == ErrorType.EMPTY_RESPONSE) {
@@ -370,6 +447,7 @@ public class NodeStreamingChatHelper {
                 // 成功
                 if (lastResult.errorMessage() == null || lastResult.errorType() == ErrorType.NONE) {
                     recordPrimary(true);
+                    addToPool(primaryProviderId);
                     return lastResult;
                 }
                 // Any other non-null errored result with a classified type that doStreamCall
@@ -390,12 +468,21 @@ public class NodeStreamingChatHelper {
         // Each fallback gets a single shot (no retry); first successful result wins.
         // Same-instance entries (e.g., primary accidentally included in the chain)
         // are skipped so we don't re-try the exact model that just failed.
-        // Providers in cooldown  are also skipped so a known-bad
+        // Providers in cooldown (RFC-009 P3.3) are also skipped so a known-bad
         // provider doesn't add latency to every conversation turn.
         for (int i = 0; i < fallbackChain.size(); i++) {
             vip.mate.llm.failover.FallbackEntry entry = fallbackChain.get(i);
             ChatModel fallback = entry.chatModel();
             if (fallback == chatModel) continue;
+            // RFC-009 Phase 4 — pool gate (the real runtime fence). A provider
+            // HARD-removed earlier (or by another conversation) must not even
+            // be attempted here. Build-time filtering is best-effort; this is
+            // the one that matters when pool state changes mid-conversation.
+            if (!inPool(entry.providerId())) {
+                log.info("[{}] Skipping fallback {}/{} provider={} — not in pool",
+                        phase, i + 1, fallbackChain.size(), entry.providerId());
+                continue;
+            }
             if (healthTracker != null && healthTracker.isInCooldown(entry.providerId())) {
                 log.info("[{}] Skipping fallback {}/{} provider={} — in cooldown",
                         phase, i + 1, fallbackChain.size(), entry.providerId());
@@ -417,10 +504,15 @@ public class NodeStreamingChatHelper {
                     && fallbackResult.errorType() == ErrorType.NONE
                     && fallbackResult.errorMessage() == null) {
                 if (healthTracker != null) healthTracker.recordSuccess(entry.providerId());
+                addToPool(entry.providerId());
                 return fallbackResult;
             }
             if (healthTracker != null) healthTracker.recordFailure(entry.providerId());
             if (fallbackResult != null) {
+                // RFC-009 Phase 4: HARD errors evict from the pool so later
+                // walks skip this provider outright. SOFT errors keep it
+                // in-pool and let the tracker's cooldown absorb the blip.
+                removeFromPool(entry.providerId(), fallbackResult.errorType(), fallbackResult.errorMessage());
                 lastResult = fallbackResult; // remember most recent to report if the whole chain fails
             }
         }
@@ -438,7 +530,7 @@ public class NodeStreamingChatHelper {
                                        boolean broadcast, int attempt) {
         if (attempt > 0) {
             long delay = Math.min(BACKOFF_BASE_MS * (1L << (attempt - 1)), BACKOFF_CAP_MS);
-            // 加入 jitter 防止雷群效应（a comparable reference runtime 风格）
+            // 加入 jitter 防止雷群效应（Hermes 风格）
             delay += ThreadLocalRandom.current().nextLong(0, Math.max(1, delay / 2));
             delay = Math.min(delay, BACKOFF_CAP_MS);
             log.warn("[{}] Retry attempt {}/{} after {}ms for conversation {}",
@@ -661,7 +753,7 @@ public class NodeStreamingChatHelper {
             // warning 已在 dispose 时广播，无需重复
         }
 
-        // guard against silent empty responses. Some providers return
+        // RFC-009: guard against silent empty responses. Some providers return
         // HTTP 200 with an empty body under soft-failure conditions (rate-limit
         // capacity, context filter, upstream overload). Treat this as a failure
         // signal so streamCallInternal can hand off to the fallback chain.
@@ -931,14 +1023,14 @@ public class NodeStreamingChatHelper {
         /** Thinking 块错误（旧消息中的 thinking block 不可修改）— 可剥离后单次重试 */
         THINKING_BLOCK_ERROR,
         /**
-         * LLM returned no content, no thinking, and no tool calls.
+         * RFC-009: LLM returned no content, no thinking, and no tool calls.
          * Treated as a soft failure — skip same-model retries and hand off to
          * the fallback chain directly. Typical cause: upstream rate-limit
          * rejection that comes back as HTTP 200 with empty body.
          */
         EMPTY_RESPONSE,
         /**
-         * payment / billing failure (HTTP 402, "insufficient_quota",
+         * RFC-009 P3.2: payment / billing failure (HTTP 402, "insufficient_quota",
          * "credit balance is too low", etc.). Distinct from {@link #AUTH_ERROR}
          * because the right response is to <i>switch provider</i> (a different
          * provider may have credits) rather than just terminate. Skips same-model
@@ -946,7 +1038,7 @@ public class NodeStreamingChatHelper {
          */
         BILLING,
         /**
-         * requested model id not recognized by the provider
+         * RFC-009 P3.2: requested model id not recognized by the provider
          * (HTTP 404, "Model not exist", "model_not_found", DashScope's
          * "url error"). Same handling as {@link #BILLING} — heads straight
          * to the fallback chain instead of looping retries against a model

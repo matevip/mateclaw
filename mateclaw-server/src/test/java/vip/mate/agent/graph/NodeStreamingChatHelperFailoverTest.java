@@ -153,7 +153,7 @@ class NodeStreamingChatHelperFailoverTest {
     // ============================================================
 
     @Test
-    @DisplayName("C4 (regression): primary BILLING still triggers fallback (unchanged P3.2)")
+    @DisplayName("C4 (regression): primary BILLING still triggers fallback (unchanged from RFC-009 P3.2)")
     void billingStillFallsBack() {
         ChatModel primary = errorModel(new RuntimeException("402 Payment Required: insufficient_quota"));
         ChatModel fallback = successModel("recovered via fallback");

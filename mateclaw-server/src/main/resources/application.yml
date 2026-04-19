@@ -133,7 +133,7 @@ mateclaw:
         enabled: true              # 自适应降级（连续 miss 后短路到 NoOp，冷却后恢复）
         miss-threshold: 5
         cool-down-ms: 60000
-    # per-provider health tracker for the multi-model failover chain.
+    # RFC-009 P3.3: per-provider health tracker for the multi-model failover chain.
     # When a provider hits failure-threshold consecutive failures it enters a cooldown
     # window during which the chain walker skips it, avoiding repeated 5-retry stalls
     # against a known-broken provider on every conversation turn.
@@ -160,7 +160,7 @@ mate:
         per-category:
           shell: 120
           web: 30
-    # RFC-008 tool-result three-layer budget (per-result spill + per-turn aggregate budget).
+    # RFC-008 Phase 3: tool-result three-layer budget (per-result spill + per-turn aggregate budget).
     # Layer 1 (per-tool cap) lives inside individual tools; Layer 2 spills oversized
     # single results to disk; Layer 3 enforces an aggregate cap on the combined
     # response size of one tool turn. The full output is preserved on disk and

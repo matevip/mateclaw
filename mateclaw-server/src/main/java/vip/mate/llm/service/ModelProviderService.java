@@ -72,7 +72,7 @@ public class ModelProviderService {
         provider.setBaseUrl(request.getBaseUrl());
         provider.setChatModel(ModelProtocol.resolveChatModel(request.getProtocol(), request.getChatModel()));
         provider.setGenerateKwargs(writeJson(request.getGenerateKwargs()));
-        // only update fallback priority when the caller explicitly
+        // RFC-009 P3.5: only update fallback priority when the caller explicitly
         // sends a value. null leaves it untouched (existing chain unchanged).
         if (request.getFallbackPriority() != null) {
             int p = Math.max(0, request.getFallbackPriority());
@@ -150,7 +150,7 @@ public class ModelProviderService {
     }
 
     /**
-     * ordered list of providers that participate in the multi-model
+     * RFC-009: ordered list of providers that participate in the multi-model
      * failover chain. Filters by {@code fallback_priority > 0} and sorts
      * ascending, so priority 1 is tried first after the primary model
      * exhausts retries. An empty list disables fallover entirely.
