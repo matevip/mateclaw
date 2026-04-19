@@ -1,10 +1,6 @@
 package vip.mate.agent;
 
-import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
-import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatModel;
-import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
-import com.alibaba.cloud.ai.dashscope.spec.DashScopeApiSpec;
-import com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeConnectionProperties;
+// PR-0b: DashScope imports moved with the construction code into AgentDashScopeChatModelBuilder.
 import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.CompileConfig;
 import com.alibaba.cloud.ai.graph.KeyStrategy;
@@ -16,9 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.anthropic.AnthropicChatModel;
-import org.springframework.ai.anthropic.AnthropicChatOptions;
-import org.springframework.ai.anthropic.api.AnthropicApi;
+// PR-0b: Anthropic imports moved with the construction code into AgentAnthropicChatModelBuilder.
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.model.SimpleApiKey;
@@ -110,8 +104,7 @@ public class AgentGraphBuilder {
     private final ApprovalWorkflowService approvalService;
     private final ChatStreamTracker streamTracker;
     private final SystemSettingService systemSettingService;
-    private final DashScopeChatModel dashScopeChatModel;
-    private final DashScopeConnectionProperties dashScopeConnectionProperties;
+    // PR-0b: dashScopeChatModel + dashScopeConnectionProperties live on AgentDashScopeChatModelBuilder now.
     private final RetryTemplate retryTemplate;
     private final ObjectProvider<ObservationRegistry> observationRegistryProvider;
     private final ObjectProvider<RestClient.Builder> restClientBuilderProvider;
@@ -133,6 +126,8 @@ public class AgentGraphBuilder {
     private final vip.mate.llm.failover.ProviderHealthTracker providerHealthTracker;
     private final vip.mate.llm.chatmodel.ProviderChatModelFactory chatModelFactory;
     private final vip.mate.llm.failover.AvailableProviderPool providerPool;
+    /** PR-0b: DashScope-specific construction lives here now; we only call into it for the search-on log. */
+    private final vip.mate.agent.chatmodel.AgentDashScopeChatModelBuilder dashScopeBuilder;
 
     /**
      * 根据 AgentEntity 构建完整的 Agent 实例
@@ -168,7 +163,7 @@ public class AgentGraphBuilder {
         boolean builtinSearchEnabled = false;
         Map<String, Object> providerKwargs = modelProviderService.readProviderGenerateKwargs(provider);
         if (protocol == ModelProtocol.DASHSCOPE_NATIVE) {
-            builtinSearchEnabled = isDashScopeSearchEnabled(runtimeModel, provider);
+            builtinSearchEnabled = dashScopeBuilder.isBuiltinSearchEnabled(runtimeModel, provider);
         } else if (isKimiProvider(provider) && Boolean.TRUE.equals(providerKwargs.get("enableSearch"))) {
             builtinSearchEnabled = true;
         }
@@ -674,48 +669,8 @@ public class AgentGraphBuilder {
         return reordered;
     }
 
-    /**
-     * @deprecated use {@link #buildFallbackChain(ModelConfigEntity)} — the
-     *     single-fallback variant cannot represent an ordered chain and only
-     *     worked when the primary was a non-DashScope provider.
-     */
-    @Deprecated
-    ChatModel buildFallbackModel(ChatModel primaryModel) {
-        try {
-            ModelProviderEntity dashScopeProvider = modelProviderService.getProviderConfig("dashscope");
-            DashScopeApi api = buildDashScopeApi(dashScopeProvider);
-            ModelConfigEntity fallbackModelConfig = modelConfigService.getDefaultModelByProvider("dashscope");
-            DashScopeChatOptions options = buildDashScopeOptions(
-                    fallbackModelConfig != null ? fallbackModelConfig : modelConfigService.getDefaultModel(), dashScopeProvider);
-            ChatModel fallback = dashScopeChatModel.mutate()
-                    .dashScopeApi(api)
-                    .defaultOptions(options)
-                    .build();
-            return (fallback != primaryModel) ? fallback : null;
-        } catch (Exception e) {
-            log.warn("无法构建 DashScope fallback 模型（UI 配置和环境变量均无可用 key），将跳过 fallback: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * 判断 DashScope 内置搜索是否开启：默认开启，仅当显式设为 false 时关闭
-     */
-    private boolean isDashScopeSearchEnabled(ModelConfigEntity runtimeModel, ModelProviderEntity provider) {
-        Map<String, Object> kwargs = modelProviderService.readProviderGenerateKwargs(provider);
-        // provider generateKwargs 中的 enableSearch 优先级最高（UI 开关直接控制）
-        Object kwargsSearch = kwargs.get("enableSearch");
-        if (kwargsSearch != null) {
-            return Boolean.TRUE.equals(kwargsSearch);
-        }
-        // model 级别字段：null 视为未设置（DashScope 默认开启），false 视为显式关闭
-        if (Boolean.FALSE.equals(runtimeModel.getEnableSearch())) {
-            // DB DEFAULT FALSE 导致已有行为 false，此时如果是 DashScope 仍默认开启
-            // 只有用户手动设置过才会有明确含义，但目前无法区分，所以 DashScope 默认开启
-            return true;
-        }
-        return true; // DashScope 默认开启
-    }
+    // PR-0b: legacy single-fallback buildFallbackModel deleted (already @Deprecated, no callers).
+    // PR-0b: isDashScopeSearchEnabled moved to AgentDashScopeChatModelBuilder.
 
     // ==================== Prompt 构建 ====================
 
@@ -844,42 +799,9 @@ public class AgentGraphBuilder {
 
     // ==================== 模型选项构建 ====================
 
-    /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
-    public DashScopeChatOptions buildDashScopeOptions(ModelConfigEntity runtimeModel, ModelProviderEntity provider) {
-        DashScopeChatOptions.DashScopeChatOptionsBuilder builder = DashScopeChatOptions.builder();
-        Map<String, Object> kwargs = modelProviderService.readProviderGenerateKwargs(provider);
+    // PR-0b: buildDashScopeOptions moved to AgentDashScopeChatModelBuilder
 
-        if (StringUtils.hasText(runtimeModel.getModelName())) {
-            builder.withModel(runtimeModel.getModelName());
-        }
-        if (runtimeModel.getTemperature() != null) {
-            builder.withTemperature(runtimeModel.getTemperature());
-        }
-        if (runtimeModel.getMaxTokens() != null) {
-            builder.withMaxToken(runtimeModel.getMaxTokens());
-        }
-        if (runtimeModel.getTopP() != null) {
-            builder.withTopP(runtimeModel.getTopP());
-        }
-        // 内置搜索：复用统一判断方法
-        if (isDashScopeSearchEnabled(runtimeModel, provider)) {
-            builder.withEnableSearch(true);
-            String strategy = runtimeModel.getSearchStrategy();
-            if (!StringUtils.hasText(strategy)) {
-                strategy = (String) kwargs.get("searchStrategy");
-            }
-            if (StringUtils.hasText(strategy)) {
-                builder.withSearchOptions(DashScopeApiSpec.SearchOptions.builder()
-                        .searchStrategy(strategy)
-                        .enableSource(true)
-                        .enableCitation(true)
-                        .build());
-            }
-        }
-        return builder.build();
-    }
-
-    /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
+    /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0c (OpenAI). */
     public OpenAiChatOptions buildOpenAiOptions(ModelConfigEntity runtimeModel, ModelProviderEntity provider) {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder();
         Map<String, Object> kwargs = modelProviderService.readProviderGenerateKwargs(provider);
@@ -1055,119 +977,11 @@ public class AgentGraphBuilder {
 
     // ==================== DashScope API 构建 ====================
 
-    /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
-    public DashScopeApi buildDashScopeApi(ModelProviderEntity provider) {
-        DashScopeApi.Builder builder = DashScopeApi.builder();
-
-        // API Key 回落链：provider UI 配置 → 环境变量/application.yml → 默认 bean 反射
-        String apiKey = provider != null ? provider.getApiKey() : null;
-        if (!StringUtils.hasText(apiKey) || !modelProviderService.hasUsableApiKey(apiKey)) {
-            apiKey = dashScopeConnectionProperties.getApiKey();
-        }
-        if (!StringUtils.hasText(apiKey) || !modelProviderService.hasUsableApiKey(apiKey)) {
-            apiKey = readApiKeyFromDefaultChatModel();
-        }
-        if (!modelProviderService.hasUsableApiKey(apiKey)) {
-            throw new MateClawException("err.agent.dashscope_key_missing", "DashScope API Key 未配置，请在模型设置中填写 dashscope 的 API Key，或设置 DASHSCOPE_API_KEY 环境变量");
-        }
-        builder.apiKey(apiKey.trim());
-
-        // Base URL 回落链：provider UI 配置 → 环境变量/application.yml → 默认 bean 反射
-        String baseUrl = provider != null ? provider.getBaseUrl() : null;
-        if (!StringUtils.hasText(baseUrl)) {
-            baseUrl = dashScopeConnectionProperties.getBaseUrl();
-        }
-        if (!StringUtils.hasText(baseUrl)) {
-            baseUrl = readBaseUrlFromDefaultChatModel();
-        }
-        String normalizedBaseUrl = normalizeDashScopeBaseUrl(baseUrl);
-        if (StringUtils.hasText(normalizedBaseUrl)) {
-            builder.baseUrl(normalizedBaseUrl);
-        }
-        return builder.build();
-    }
+    // PR-0b: buildDashScopeApi moved to AgentDashScopeChatModelBuilder
 
     // ==================== Anthropic API 构建 ====================
 
-    /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
-    public AnthropicApi buildAnthropicApi(ModelProviderEntity provider) {
-        if (provider == null || !modelProviderService.isProviderConfigured(provider.getProviderId())) {
-            throw new MateClawException("err.agent.anthropic_not_configured", "Anthropic Provider 未完成配置，请在模型设置中填写有效的 API Key 和 Base URL");
-        }
-        String apiKey = provider.getApiKey();
-        if (!modelProviderService.hasUsableApiKey(apiKey)) {
-            throw new MateClawException("err.agent.anthropic_key_invalid", "Anthropic API Key 未配置或无效: " + provider.getProviderId());
-        }
-        String baseUrl = provider.getBaseUrl();
-        RestClient.Builder restClientBuilder = applyHttpTimeouts(
-                restClientBuilderProvider.getIfAvailable(RestClient::builder));
-        WebClient.Builder webClientBuilder = webClientBuilderProvider.getIfAvailable(WebClient::builder);
-
-        AnthropicApi.Builder builder = AnthropicApi.builder()
-                .apiKey(apiKey.trim())
-                .restClientBuilder(restClientBuilder)
-                .webClientBuilder(webClientBuilder);
-        if (StringUtils.hasText(baseUrl)) {
-            builder.baseUrl(baseUrl.trim());
-        }
-        return builder.build();
-    }
-
-    /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
-    public AnthropicChatOptions buildAnthropicOptions(ModelConfigEntity runtimeModel) {
-        AnthropicChatOptions.Builder builder = AnthropicChatOptions.builder();
-        if (StringUtils.hasText(runtimeModel.getModelName())) {
-            builder.model(runtimeModel.getModelName());
-        }
-
-        // Extended thinking: 通过 ThinkingLevelHolder 获取请求级思考深度
-        String thinkingLevel = ThinkingLevelHolder.get();
-        boolean thinkingEnabled = thinkingLevel != null && !"off".equalsIgnoreCase(thinkingLevel);
-
-        if (thinkingEnabled) {
-            // Anthropic thinking 模式下：temperature 必须为 1，不能设 top_p
-            // budget_tokens 根据级别映射
-            int budgetTokens = switch (thinkingLevel.toLowerCase()) {
-                case "low" -> 4096;
-                case "medium" -> 8192;
-                case "high" -> 16384;
-                case "max" -> 32768;
-                default -> 16384;
-            };
-            builder.thinking(org.springframework.ai.anthropic.api.AnthropicApi.ThinkingType.ENABLED, budgetTokens);
-            // Thinking 模式要求 max_tokens 足够大（含 thinking tokens）
-            builder.maxTokens(Math.max(budgetTokens + 4096,
-                    runtimeModel.getMaxTokens() != null ? runtimeModel.getMaxTokens() : 8192));
-            // Anthropic thinking 模式要求 temperature=1
-            builder.temperature(1.0);
-        } else {
-            // 非 thinking 模式：正常设置参数
-            // Anthropic API does not allow temperature and top_p to be specified simultaneously.
-            if (runtimeModel.getTemperature() != null) {
-                builder.temperature(runtimeModel.getTemperature());
-            } else if (runtimeModel.getTopP() != null) {
-                builder.topP(runtimeModel.getTopP());
-            }
-            // RFC-025 Change 5: 非正值 maxTokens 会被 Anthropic API 直接拒绝；本地提前拦截
-            // 并 fallback 到 4096，避免错误信息在运行时才暴露、也防止坏配置透传
-            Integer configuredMax = runtimeModel.getMaxTokens();
-            if (configuredMax != null && configuredMax > 0) {
-                builder.maxTokens(configuredMax);
-            } else {
-                if (configuredMax != null) {
-                    log.warn("Ignoring non-positive Anthropic maxTokens={} for model {}; falling back to 4096",
-                            configuredMax, runtimeModel.getModelName());
-                }
-                builder.maxTokens(4096);
-            }
-        }
-        // RFC-014: 接入 Anthropic prompt caching（spring-ai 1.1.4 一等支持）
-        // 通过 cacheOptions 配置 system / tools / conversation history 自动打 cache_control，
-        // 多轮对话场景可节省 50–75% 输入 token 成本。
-        builder.cacheOptions(anthropicCacheOptionsFactory.build());
-
-        return builder.internalToolExecutionEnabled(false).build();
-    }
+    // PR-0b: buildAnthropicApi + buildAnthropicOptions moved to AgentAnthropicChatModelBuilder
 
     // ==================== 参数解析辅助方法 ====================
 
@@ -1283,25 +1097,7 @@ public class AgentGraphBuilder {
 
     // ==================== URL 规范化 ====================
 
-    private String normalizeDashScopeBaseUrl(String baseUrl) {
-        if (baseUrl == null || baseUrl.isBlank()) {
-            return null;
-        }
-        String normalized = baseUrl.trim();
-        // 去掉 OpenAI 兼容模式路径（用户可能从兼容模式 URL 迁移过来）
-        int compatibleIndex = normalized.indexOf("/compatible-mode/");
-        if (compatibleIndex >= 0) {
-            normalized = normalized.substring(0, compatibleIndex);
-        }
-        if (normalized.endsWith("/")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        // 如果结果是 DashScope 默认地址，返回 null 让 SDK 使用内置默认值，避免路径拼接问题
-        if ("https://dashscope.aliyuncs.com".equals(normalized)) {
-            return null;
-        }
-        return normalized;
-    }
+    // PR-0b: normalizeDashScopeBaseUrl moved to AgentDashScopeChatModelBuilder
 
     private String normalizeOpenAiBaseUrl(String baseUrl) {
         if (!StringUtils.hasText(baseUrl)) {
@@ -1406,48 +1202,8 @@ public class AgentGraphBuilder {
         );
     }
 
-    // ==================== 反射读取默认模型配置 ====================
-
-    private String readApiKeyFromDefaultChatModel() {
-        try {
-            DashScopeApi api = readDashScopeApiFromDefaultChatModel();
-            if (api == null) {
-                return null;
-            }
-            Field apiKeyField = DashScopeApi.class.getDeclaredField("apiKey");
-            apiKeyField.setAccessible(true);
-            Object apiKey = apiKeyField.get(api);
-            if (apiKey instanceof org.springframework.ai.model.ApiKey key) {
-                return key.getValue();
-            }
-        } catch (Exception e) {
-            log.warn("Failed to read API key from default DashScopeChatModel: {}", e.getMessage());
-        }
-        return null;
-    }
-
-    private String readBaseUrlFromDefaultChatModel() {
-        try {
-            DashScopeApi api = readDashScopeApiFromDefaultChatModel();
-            if (api == null) {
-                return null;
-            }
-            Field baseUrlField = DashScopeApi.class.getDeclaredField("baseUrl");
-            baseUrlField.setAccessible(true);
-            Object baseUrl = baseUrlField.get(api);
-            return baseUrl instanceof String value ? value : null;
-        } catch (Exception e) {
-            log.warn("Failed to read baseUrl from default DashScopeChatModel: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    private DashScopeApi readDashScopeApiFromDefaultChatModel() throws NoSuchFieldException, IllegalAccessException {
-        Field apiField = DashScopeChatModel.class.getDeclaredField("dashscopeApi");
-        apiField.setAccessible(true);
-        Object api = apiField.get(dashScopeChatModel);
-        return api instanceof DashScopeApi dashScopeApi ? dashScopeApi : null;
-    }
+    // PR-0b: reflection helpers (readApiKey/BaseUrl/DashScopeApiFromDefaultChatModel)
+    //         moved to AgentDashScopeChatModelBuilder
 
     // ==================== 日志辅助 ====================
 
