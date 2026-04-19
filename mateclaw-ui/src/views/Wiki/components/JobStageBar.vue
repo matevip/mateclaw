@@ -15,7 +15,7 @@
       </div>
     </div>
     <div class="stage-labels">
-      <span v-for="stage in stages" :key="stage.key" class="stage-label" :class="{ active: stage.key === currentStage }">
+      <span v-for="stage in stages" :key="stage.key" class="stage-label" :class="{ active: stage.key === currentStage && !isTerminal, done: stage.key === currentStage && isTerminal }">
         {{ t(`wiki.jobStage.${stage.key}`) }}
       </span>
     </div>
@@ -96,7 +96,12 @@ const currentStage = computed(() => {
   return stageMapping[raw] ?? raw
 })
 
-// True when backend status indicates a terminal failure (dots should not pulse)
+// True when the job has reached any terminal state (dots should not pulse)
+const isTerminal = computed(() =>
+  props.status === 'completed' || props.status === 'failed' || props.status === 'partial' || props.status === 'cancelled'
+)
+
+// True specifically for failure terminals (dots show red instead of done)
 const isTerminalFailure = computed(() =>
   props.status === 'failed' || props.status === 'partial' || props.status === 'cancelled'
 )
@@ -117,9 +122,14 @@ function dotClass(key: string) {
   const target = stageIndex(key)
   if (cur < 0) return 'pending' // unknown stage → all pending
   if (isTerminalFailure.value) {
-    // Terminal failure: all dots before the failure point are done, the failure point is failed
+    // Terminal failure: dots before failure point are done, failure point is red
     if (target < cur) return 'done'
     if (target === cur) return 'failed'
+    return 'pending'
+  }
+  if (isTerminal.value) {
+    // Successful terminal (completed): all dots up to and including current are done (no pulse)
+    if (target <= cur) return 'done'
     return 'pending'
   }
   if (target < cur) return 'done'
@@ -202,6 +212,7 @@ const elapsed = computed(() => {
   flex: 1;
 }
 .stage-label.active { color: var(--mc-primary); font-weight: 600; }
+.stage-label.done { color: var(--mc-success, #5a8a5a); font-weight: 600; }
 
 .stage-info {
   display: flex;

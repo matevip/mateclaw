@@ -91,9 +91,9 @@
             </button>
           </div>
         </div>
-        <!-- RFC-033: Job stage bar — only show when job has progressed past 'queued' -->
+        <!-- RFC-033: Job stage bar — show when job has progressed past 'queued' or reached terminal -->
         <JobStageBar
-          v-if="rawJobs[raw.id] && rawJobs[raw.id].stage !== 'queued'"
+          v-if="rawJobs[raw.id] && (rawJobs[raw.id].stage !== 'queued' || rawJobs[raw.id].status !== 'queued')"
           :stage="rawJobs[raw.id].stage"
           :status="rawJobs[raw.id].status"
           :current-model="rawJobs[raw.id].currentModelName ?? (rawJobs[raw.id].currentModelId ? `Model #${rawJobs[raw.id].currentModelId}` : undefined)"
@@ -288,19 +288,37 @@ onBeforeUnmount(() => {
 const rawJobs = reactive<Record<number, WikiProcessingJob>>({})
 let jobPoller: ReturnType<typeof setTimeout> | null = null
 
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'partial', 'cancelled'])
+
 async function pollJobs() {
   if (!store.currentKB) return
+  const kbId = store.currentKB.id
   const processingRaws = store.rawMaterials.filter(
     r => r.processingStatus === 'processing' || r.processingStatus === 'pending'
   )
+  let anyTerminal = false
   for (const raw of processingRaws) {
     try {
-      const res: any = await wikiApi.getWikiJobs(store.currentKB.id, raw.id)
+      const res: any = await wikiApi.getWikiJobs(kbId, raw.id)
       const list = res.data || res || []
-      if (list.length > 0) rawJobs[raw.id] = list[0]
+      if (list.length > 0) {
+        const job = list[0]
+        rawJobs[raw.id] = job
+        if (TERMINAL_STATUSES.has(job.status)) {
+          anyTerminal = true
+        }
+      }
     } catch { /* ignore */ }
   }
-  if (processingRaws.length > 0) {
+  // When any job reaches terminal, refresh raw materials to sync status badges
+  if (anyTerminal) {
+    await store.fetchRawMaterials(kbId)
+  }
+  // Continue polling while there are still processing/pending raws
+  const stillActive = store.rawMaterials.some(
+    r => r.processingStatus === 'processing' || r.processingStatus === 'pending'
+  )
+  if (stillActive) {
     jobPoller = setTimeout(pollJobs, 3000)
   }
 }
