@@ -1294,6 +1294,10 @@ export default {
       repair: '修复页面',
       citations: '来源 {count} 个 chunk',
       noCitations: '未找到来源引用',
+      citationUnknownSource: '未知来源',
+      citationChunkN: '第 {n} 段',
+      citationChunkUnknown: '段落未知',
+      citationOffset: '偏移 {start}–{end}',
     },
     relation: {
       shared_chunk: '共享片段',

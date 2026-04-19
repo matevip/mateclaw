@@ -12,11 +12,11 @@
         </div>
         <div v-else class="citation-list">
           <div v-for="cit in citations" :key="cit.id" class="citation-item">
-            <div class="citation-raw-title">{{ cit.rawTitle || 'Source' }}</div>
+            <div class="citation-raw-title">{{ cit.rawTitle || t('wiki.page.citationUnknownSource') }}</div>
             <div class="citation-chunk-info">
-              Chunk {{ cit.chunkOrdinal ?? '?' }}
+              {{ cit.chunkOrdinal != null ? t('wiki.page.citationChunkN', { n: cit.chunkOrdinal }) : t('wiki.page.citationChunkUnknown') }}
               <span v-if="cit.startOffset != null" class="citation-offset">
-                (offset {{ cit.startOffset }}–{{ cit.endOffset }})
+                ({{ t('wiki.page.citationOffset', { start: cit.startOffset, end: cit.endOffset }) }})
               </span>
             </div>
             <div v-if="cit.snippet" class="citation-snippet">"{{ cit.snippet }}"</div>

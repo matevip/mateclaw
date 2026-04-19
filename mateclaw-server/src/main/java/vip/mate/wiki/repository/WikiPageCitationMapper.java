@@ -15,9 +15,15 @@ import java.util.List;
 @Mapper
 public interface WikiPageCitationMapper extends BaseMapper<WikiPageCitationEntity> {
 
-    @Select("SELECT c.id, c.page_id, c.chunk_id, wc.raw_id, c.paragraph_idx, c.anchor_text, c.confidence " +
+    @Select("SELECT c.id, c.page_id, c.chunk_id, wc.raw_id, " +
+            "c.paragraph_idx, c.anchor_text, c.confidence, " +
+            "rm.title AS raw_title, " +
+            "wc.ordinal AS chunk_ordinal, " +
+            "wc.start_offset, wc.end_offset, " +
+            "SUBSTRING(wc.content, 1, 200) AS snippet " +
             "FROM mate_wiki_page_citation c " +
             "JOIN mate_wiki_chunk wc ON c.chunk_id = wc.id " +
+            "LEFT JOIN mate_wiki_raw_material rm ON wc.raw_id = rm.id " +
             "WHERE c.page_id = #{pageId} AND c.deleted = 0")
     List<PageCitationWithRaw> listWithRawByPageId(@Param("pageId") Long pageId);
 

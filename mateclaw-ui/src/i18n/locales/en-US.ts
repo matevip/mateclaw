@@ -1284,6 +1284,10 @@ export default {
       repair: 'Repair page',
       citations: '{count} source chunks',
       noCitations: 'No source citations found',
+      citationUnknownSource: 'Unknown source',
+      citationChunkN: 'Chunk {n}',
+      citationChunkUnknown: 'Chunk unknown',
+      citationOffset: 'offset {start}–{end}',
     },
     relation: {
       shared_chunk: 'Shared chunk',
