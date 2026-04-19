@@ -73,6 +73,11 @@ export default {
         description: '您的登录凭证已失效，需要重新登录。',
         action: '页面将自动跳转到登录页。',
       },
+      provider_auth_error: {
+        title: '模型认证失败',
+        description: '当前模型的 API Key 无效或已失效，与你的登录状态无关。',
+        action: '请到「设置 → 模型」中检查并更新该模型的 API Key。',
+      },
       forbidden: {
         title: '没有权限',
         description: '您没有执行此操作的权限。',

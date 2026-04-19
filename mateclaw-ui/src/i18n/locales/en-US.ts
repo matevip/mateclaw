@@ -73,6 +73,11 @@ export default {
         description: 'Your login session has expired and you need to sign in again.',
         action: 'You will be redirected to the login page.',
       },
+      provider_auth_error: {
+        title: 'Model authentication failed',
+        description: 'The current model\'s API key is invalid or has expired. This is unrelated to your login session.',
+        action: 'Open Settings → Models to check and update the API key.',
+      },
       forbidden: {
         title: 'Access denied',
         description: 'You don\'t have permission to perform this action.',

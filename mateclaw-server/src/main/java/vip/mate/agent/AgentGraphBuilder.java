@@ -131,6 +131,7 @@ public class AgentGraphBuilder {
     private final vip.mate.tool.ToolConcurrencyRegistry toolConcurrencyRegistry;
     private final vip.mate.i18n.I18nService i18nService;
     private final vip.mate.llm.failover.ProviderHealthTracker providerHealthTracker;
+    private final vip.mate.llm.chatmodel.ProviderChatModelFactory chatModelFactory;
 
     /**
      * 根据 AgentEntity 构建完整的 Agent 实例
@@ -501,47 +502,13 @@ public class AgentGraphBuilder {
      * 本参数对它们无效（它们各自有内部重试或直通）。
      */
     public ChatModel buildRuntimeChatModel(ModelConfigEntity runtimeModel, RetryTemplate retryOverride) {
-        ModelProviderEntity provider = modelProviderService.getProviderConfig(runtimeModel.getProvider());
-        ModelProtocol protocol = ModelProtocol.fromChatModel(provider.getChatModel());
-
-        if (protocol == ModelProtocol.DASHSCOPE_NATIVE) {
-            DashScopeApi api = buildDashScopeApi(provider);
-            DashScopeChatOptions options = buildDashScopeOptions(runtimeModel, provider);
-            return dashScopeChatModel.mutate()
-                    .dashScopeApi(api)
-                    .defaultOptions(options)
-                    .build();
-        }
-
-        if (protocol == ModelProtocol.OPENAI_CHATGPT) {
-            Double temp = runtimeModel.getTemperature() != null ? runtimeModel.getTemperature() : 0.7;
-            return new vip.mate.llm.chatgpt.ChatGPTChatModel(
-                    chatGPTResponsesClient, runtimeModel.getModelName(), temp);
-        }
-
-        if (protocol == ModelProtocol.OPENAI_COMPATIBLE) {
-            OpenAiApi api = buildOpenAiApi(provider);
-            OpenAiChatOptions options = buildOpenAiOptions(runtimeModel, provider);
-            return OpenAiChatModel.builder()
-                    .openAiApi(api)
-                    .defaultOptions(options)
-                    .retryTemplate(retryOverride)
-                    .observationRegistry(observationRegistryProvider.getIfAvailable(() -> ObservationRegistry.NOOP))
-                    .build();
-        }
-
-        if (protocol == ModelProtocol.ANTHROPIC_MESSAGES) {
-            AnthropicApi api = buildAnthropicApi(provider);
-            AnthropicChatOptions options = buildAnthropicOptions(runtimeModel);
-            return AnthropicChatModel.builder()
-                    .anthropicApi(api)
-                    .defaultOptions(options)
-                    .retryTemplate(retryOverride)
-                    .observationRegistry(observationRegistryProvider.getIfAvailable(() -> ObservationRegistry.NOOP))
-                    .build();
-        }
-
-        throw new MateClawException("err.agent.protocol_limited", "StateGraph 当前仅支持 DashScope 原生协议、OpenAI-compatible 协议和 Anthropic Messages 协议: " + protocol.getId());
+        // PR-0 (RFC-009 Phase 4 prelude): protocol switch extracted to
+        // ProviderChatModelFactory + per-protocol ChatModelBuilder strategies.
+        // Per-protocol builders (DashScope / OpenAI-compatible / Anthropic /
+        // ChatGPT-Responses) live in vip.mate.agent.chatmodel + vip.mate.llm.chatmodel.
+        // See RFC-009 Phase 4 plan for the rationale (circular-dep break for
+        // ProviderInitProbe + AgentGraphBuilder slimming).
+        return chatModelFactory.buildFor(runtimeModel, retryOverride);
     }
 
     /**
@@ -787,7 +754,8 @@ public class AgentGraphBuilder {
 
     // ==================== 模型选项构建 ====================
 
-    private DashScopeChatOptions buildDashScopeOptions(ModelConfigEntity runtimeModel, ModelProviderEntity provider) {
+    /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
+    public DashScopeChatOptions buildDashScopeOptions(ModelConfigEntity runtimeModel, ModelProviderEntity provider) {
         DashScopeChatOptions.DashScopeChatOptionsBuilder builder = DashScopeChatOptions.builder();
         Map<String, Object> kwargs = modelProviderService.readProviderGenerateKwargs(provider);
 
@@ -821,7 +789,8 @@ public class AgentGraphBuilder {
         return builder.build();
     }
 
-    private OpenAiChatOptions buildOpenAiOptions(ModelConfigEntity runtimeModel, ModelProviderEntity provider) {
+    /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
+    public OpenAiChatOptions buildOpenAiOptions(ModelConfigEntity runtimeModel, ModelProviderEntity provider) {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder();
         Map<String, Object> kwargs = modelProviderService.readProviderGenerateKwargs(provider);
         String modelName = runtimeModel.getModelName();
@@ -903,7 +872,8 @@ public class AgentGraphBuilder {
 
     // ==================== OpenAI API 构建 ====================
 
-    OpenAiApi buildOpenAiApi(ModelProviderEntity provider) {
+    /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
+    public OpenAiApi buildOpenAiApi(ModelProviderEntity provider) {
         if (provider == null || !modelProviderService.isProviderConfigured(provider.getProviderId())) {
             throw new MateClawException("err.agent.provider_not_configured", "Provider 未完成配置，请在模型设置中填写有效的 API Key 和 Base URL");
         }
@@ -995,7 +965,8 @@ public class AgentGraphBuilder {
 
     // ==================== DashScope API 构建 ====================
 
-    private DashScopeApi buildDashScopeApi(ModelProviderEntity provider) {
+    /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
+    public DashScopeApi buildDashScopeApi(ModelProviderEntity provider) {
         DashScopeApi.Builder builder = DashScopeApi.builder();
 
         // API Key 回落链：provider UI 配置 → 环境变量/application.yml → 默认 bean 反射
@@ -1028,7 +999,8 @@ public class AgentGraphBuilder {
 
     // ==================== Anthropic API 构建 ====================
 
-    private AnthropicApi buildAnthropicApi(ModelProviderEntity provider) {
+    /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
+    public AnthropicApi buildAnthropicApi(ModelProviderEntity provider) {
         if (provider == null || !modelProviderService.isProviderConfigured(provider.getProviderId())) {
             throw new MateClawException("err.agent.anthropic_not_configured", "Anthropic Provider 未完成配置，请在模型设置中填写有效的 API Key 和 Base URL");
         }
@@ -1051,7 +1023,8 @@ public class AgentGraphBuilder {
         return builder.build();
     }
 
-    private AnthropicChatOptions buildAnthropicOptions(ModelConfigEntity runtimeModel) {
+    /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
+    public AnthropicChatOptions buildAnthropicOptions(ModelConfigEntity runtimeModel) {
         AnthropicChatOptions.Builder builder = AnthropicChatOptions.builder();
         if (StringUtils.hasText(runtimeModel.getModelName())) {
             builder.model(runtimeModel.getModelName());

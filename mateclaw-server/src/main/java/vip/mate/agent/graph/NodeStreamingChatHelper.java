@@ -326,10 +326,15 @@ public class NodeStreamingChatHelper {
                 if (lastResult.errorType() == ErrorType.PROMPT_TOO_LONG) {
                     return lastResult;
                 }
-                // AUTH: 不重试 — 但要记账（auth 不会自愈，连续 N 次后冷却避免每轮都撞）
+                // AUTH: primary key 失效不会自愈，跳过同模型重试，交给 fallback chain
+                // — 其它 provider 的 key 可能仍然可用（与 BILLING / MODEL_NOT_FOUND 同策略）。
+                // recordPrimary(false) 仍记一次失败用于 healthTracker 冷却累计。
+                // 若 fallback chain 全部 401，walker 末尾会把最后一次 AUTH_ERROR 透出，
+                // 不会静默吞错。
                 if (lastResult.errorType() == ErrorType.AUTH_ERROR) {
+                    log.warn("[{}] Primary auth failed — skipping same-model retries, handing off to fallback chain", phase);
                     recordPrimary(false);
-                    return lastResult;
+                    break;
                 }
                 // BILLING / MODEL_NOT_FOUND — provider-side hard failures
                 // that won't change on retry. Skip to fallback chain (a different
