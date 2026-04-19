@@ -91,9 +91,9 @@
             </button>
           </div>
         </div>
-        <!-- RFC-033: Job stage bar (when job data available) -->
+        <!-- RFC-033: Job stage bar — only show when job has progressed past 'queued' -->
         <JobStageBar
-          v-if="rawJobs[raw.id]"
+          v-if="rawJobs[raw.id] && rawJobs[raw.id].stage !== 'queued'"
           :stage="rawJobs[raw.id].stage"
           :status="rawJobs[raw.id].status"
           :current-model="rawJobs[raw.id].currentModelName ?? (rawJobs[raw.id].currentModelId ? `Model #${rawJobs[raw.id].currentModelId}` : undefined)"
@@ -106,7 +106,7 @@
           @reprocess="reprocess(raw.id)"
           @repair="handleLocalRepair(raw.id)"
         />
-        <!-- Fallback: legacy progress bar when no job data -->
+        <!-- Original progress bar: shown during processing when job data is not active -->
         <div v-else-if="raw.processingStatus === 'processing'" class="raw-progress">
           <div class="raw-progress-track">
             <div
@@ -178,7 +178,7 @@ let fallbackTimer: number | null = null
 let activeKbId: number | null = null
 
 const hasProcessing = computed(() =>
-  store.rawMaterials.some(r => r.processingStatus === 'processing')
+  store.rawMaterials.some(r => r.processingStatus === 'processing' || r.processingStatus === 'pending')
 )
 
 function applyProgressEvent(payload: any) {
@@ -224,7 +224,8 @@ function openSse(kbId: number) {
           raw.progressTotal = data.totalPages
         }
       }
-      // 完成事件后，再做一次轻量 list 拉取确保其他字段（pageCount 等）同步
+      // Clear stale job entry so JobStageBar hides
+      delete rawJobs[data.rawId]
       if (store.currentKB) store.fetchRawMaterials(store.currentKB.id)
     } catch { /* ignore */ }
   })
@@ -233,6 +234,8 @@ function openSse(kbId: number) {
       const data = JSON.parse(ev.data)
       const raw = store.rawMaterials.find(r => r.id === data.rawId)
       if (raw) raw.processingStatus = 'failed'
+      // Clear stale job entry
+      delete rawJobs[data.rawId]
       if (store.currentKB) store.fetchRawMaterials(store.currentKB.id)
     } catch { /* ignore */ }
   })
@@ -350,8 +353,21 @@ async function handleAddText() {
 
 async function reprocess(rawId: number) {
   if (!store.currentKB) return
-  await wikiApi.reprocessRaw(store.currentKB.id, rawId)
-  await store.fetchRawMaterials(store.currentKB.id)
+  const kbId = store.currentKB.id
+  await wikiApi.reprocessRaw(kbId, rawId)
+  // Immediately mark local state as processing so SSE connects and progress bar shows
+  const raw = store.rawMaterials.find(r => r.id === rawId)
+  if (raw) {
+    raw.processingStatus = 'processing'
+    raw.progressDone = 0
+    raw.progressTotal = 0
+  }
+  // Clear stale job entry
+  delete rawJobs[rawId]
+  await store.fetchRawMaterials(kbId)
+  // Delayed re-fetch to catch final status if processing finishes before SSE connects
+  setTimeout(() => { store.fetchRawMaterials(kbId) }, 5000)
+  setTimeout(() => { store.fetchRawMaterials(kbId) }, 15000)
 }
 
 async function deleteRaw(rawId: number) {
@@ -362,8 +378,14 @@ async function deleteRaw(rawId: number) {
 
 async function processAll() {
   if (!store.currentKB) return
-  await wikiApi.processKB(store.currentKB.id)
-  await store.fetchRawMaterials(store.currentKB.id)
+  const kbId = store.currentKB.id
+  await wikiApi.processKB(kbId)
+  // Mark all pending materials as processing so SSE connects
+  store.rawMaterials
+    .filter(r => r.processingStatus === 'pending')
+    .forEach(r => { r.processingStatus = 'processing'; r.progressDone = 0; r.progressTotal = 0 })
+  await store.fetchRawMaterials(kbId)
+  setTimeout(() => { store.fetchRawMaterials(kbId) }, 5000)
 }
 
 async function handleScanDir() {
