@@ -44,17 +44,25 @@ public class NodeStreamingChatHelper {
 
     private final ChatStreamTracker streamTracker;
 
-    /** 备选模型（主模型连续失败后使用） */
+    /** Fallback model, used after consecutive failures of the primary model. */
     private final ChatModel fallbackModel;
 
+    /** Optional cache-metrics aggregator; {@code null} in tests or when the bean is absent. */
+    private final vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics;
+
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker) {
-        this.streamTracker = streamTracker;
-        this.fallbackModel = null;
+        this(streamTracker, null, null);
     }
 
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker, ChatModel fallbackModel) {
+        this(streamTracker, fallbackModel, null);
+    }
+
+    public NodeStreamingChatHelper(ChatStreamTracker streamTracker, ChatModel fallbackModel,
+                                   vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics) {
         this.streamTracker = streamTracker;
         this.fallbackModel = fallbackModel;
+        this.cacheMetrics = cacheMetrics;
     }
 
     /**
@@ -516,6 +524,7 @@ public class NodeStreamingChatHelper {
                 ? AssistantMessage.builder().content(fullContent).toolCalls(finalToolCalls).build()
                 : new AssistantMessage(fullContent);
 
+        recordCacheMetrics(phase, promptTok, completionTok, cacheReadTok, cacheWriteTok);
         return new StreamResult(fullContent, fullThinking, assembledMessage,
                 finalToolCalls, !finalToolCalls.isEmpty(), promptTok, completionTok,
                 true, null, ErrorType.NONE, true, cacheReadTok, cacheWriteTok);
@@ -552,9 +561,26 @@ public class NodeStreamingChatHelper {
             assembledMessage = new AssistantMessage(fullContent);
         }
 
+        recordCacheMetrics(phase, promptTok, completionTok, cacheReadTok, cacheWriteTok);
         return new StreamResult(fullContent, fullThinking, assembledMessage,
                 finalToolCalls, !finalToolCalls.isEmpty(), promptTok, completionTok,
                 partial, errorMsg, ErrorType.NONE, false, cacheReadTok, cacheWriteTok);
+    }
+
+    /**
+     * Record token / cache usage to the optional metrics aggregator.
+     * Called only from successful assembly paths ({@link #assembleResult}
+     * and {@link #assembleStoppedResult}) — error paths are excluded because
+     * their token counts are typically zero and would skew the ratio.
+     */
+    private void recordCacheMetrics(String phase, int promptTok, int completionTok,
+                                    int cacheReadTok, int cacheWriteTok) {
+        if (cacheMetrics == null) return;
+        // Skip empty-usage records (pure error responses or broken chunks).
+        if (promptTok == 0 && completionTok == 0 && cacheReadTok == 0 && cacheWriteTok == 0) {
+            return;
+        }
+        cacheMetrics.record(phase, promptTok, completionTok, cacheReadTok, cacheWriteTok);
     }
 
     /** 构建纯错误 StreamResult（无任何内容） */

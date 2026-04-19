@@ -43,6 +43,7 @@ public class ShellExecuteTool {
     private static final boolean IS_WINDOWS = System.getProperty("os.name", "")
             .toLowerCase(Locale.ROOT).contains("win");
 
+    @vip.mate.tool.ConcurrencyUnsafe("shell command execution can mutate global state in ways the executor can't reason about")
     @Tool(description = "Execute a shell command on the local server. For running system commands, viewing files, running scripts. "
             + "Uses cmd.exe on Windows, /bin/sh on Linux/macOS. "
             + "Dangerous operations trigger security approval. Returns structured result with exitCode, stdout, stderr, timedOut.")

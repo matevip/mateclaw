@@ -151,6 +151,17 @@ mate:
         per-category:
           shell: 120
           web: 30
+    # RFC-008 Phase 3: tool-result three-layer budget (per-result spill + per-turn aggregate budget).
+    # Layer 1 (per-tool cap) lives inside individual tools; Layer 2 spills oversized
+    # single results to disk; Layer 3 enforces an aggregate cap on the combined
+    # response size of one tool turn. The full output is preserved on disk and
+    # the in-context preview points the agent at the spill file (read_file tool).
+    tool-result:
+      enabled: true
+      per-result-threshold-chars: 4000
+      per-turn-budget-chars: 16000
+      preview-head-chars: 800
+      storage-base-dir: ""
     conversation:
       window:
         # 测试时临时调低：2000 token ≈ 2000 中文字，3 轮对话即可触发压缩

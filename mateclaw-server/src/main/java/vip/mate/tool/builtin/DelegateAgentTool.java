@@ -61,6 +61,7 @@ public class DelegateAgentTool {
 
     // ==================== 单任务委派 ====================
 
+    @vip.mate.tool.ConcurrencyUnsafe("spawns a child agent session and writes to mate_conversation; serialize to keep session graph deterministic")
     @Tool(description = """
             Delegate a task to another Agent for multi-agent collaboration. \
             Target Agent executes in an independent session and returns its final reply. \
@@ -117,6 +118,7 @@ public class DelegateAgentTool {
 
     // ==================== 并行委派 ====================
 
+    @vip.mate.tool.ConcurrencyUnsafe("internally fans out to its own thread pool; outer executor must not double-parallelize")
     @Tool(description = """
             Delegate multiple tasks to different Agents in parallel (max 3). \
             Each task runs concurrently in an independent child session. \

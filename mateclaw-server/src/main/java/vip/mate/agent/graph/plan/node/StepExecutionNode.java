@@ -181,7 +181,7 @@ public class StepExecutionNode implements NodeAction {
                             String storedArguments = extractArgumentsFromPayload(preApprovedPayload);
                             events.add(GraphEventPublisher.toolStart(toolCall.name(), toolCall.arguments()));
                             ToolResponseMessage.ToolResponse response = executor.executePreApproved(
-                                    toolCall, storedArguments, events);
+                                    toolCall, storedArguments, events, conversationId, workspaceBasePath);
                             toolResponses.add(response);
                             preApprovedPayload = ""; // 只消费一次
                         } else {
@@ -267,10 +267,22 @@ public class StepExecutionNode implements NodeAction {
                 stepIndex + 1, steps.size(),
                 finalResult.length() > 100 ? finalResult.substring(0, 100) + "..." : finalResult);
 
-        // 更新 working context：将最新完成的步骤结果纳入摘要
-        List<String> allCompleted = new ArrayList<>(accessor.completedResults());
-        allCompleted.add(formatStepResult(stepIndex, finalResult));
-        String updatedWorkingContext = rebuildWorkingContext(accessor, allCompleted);
+        // RFC-008 P4.2: incremental working-context update.
+        // Previous behavior rebuilt the entire context from history + every
+        // completed result on every step (O(N) per step). On long plans this
+        // re-walks the same conversation history each iteration. Now we take
+        // the previous context as-is (which already encodes earlier history
+        // and earlier completed steps) and append just the freshly-completed
+        // step, then trim from the head if the running total exceeds the cap.
+        // For first-step calls where prior context is empty, fall through to
+        // the original rebuild path so the conversation history seed is still
+        // captured.
+        String prevWorkingContext = accessor.workingContext();
+        String formattedNewStep = formatStepResult(stepIndex, finalResult);
+        String updatedWorkingContext = prevWorkingContext.isEmpty()
+                ? rebuildWorkingContext(accessor,
+                    appendOne(accessor.completedResults(), formattedNewStep))
+                : appendStepIncremental(prevWorkingContext, formattedNewStep);
 
         return PlanStateAccessor.output()
                 .currentStepResult(finalResult)
@@ -414,9 +426,51 @@ public class StepExecutionNode implements NodeAction {
         }
     }
 
+    /** Append helper used by the incremental working-context fast path. */
+    private static List<String> appendOne(List<String> previous, String item) {
+        List<String> out = new ArrayList<>(previous);
+        out.add(item);
+        return out;
+    }
+
     /**
-     * 根据当前 accessor 中的会话历史消息和更新后的已完成步骤结果，
-     * 重建 working context。复用与 StateGraphPlanExecuteAgent.buildWorkingContext 相同的逻辑。
+     * Incrementally extend the previous working context with one new step
+     * result. Cheap O(1) path used for steps 2..N: avoids walking the full
+     * conversation history again. The result is trimmed from the head if it
+     * exceeds the same overall cap that {@link #rebuildWorkingContext}
+     * enforces, so the budget invariant is preserved.
+     *
+     * <p>Per-step truncation: a single step result longer than 800 chars is
+     * abbreviated before append, mirroring the per-step caps in
+     * {@code rebuildWorkingContext}.</p>
+     */
+    private static String appendStepIncremental(String previousContext, String formattedStepResult) {
+        final int OVERALL_CAP = 6000;
+        final int PER_STEP_CAP = 800;
+        String stepLine = formattedStepResult.length() > PER_STEP_CAP
+                ? formattedStepResult.substring(0, PER_STEP_CAP) + "…"
+                : formattedStepResult;
+        String combined = previousContext + "\n" + stepLine + "\n";
+        if (combined.length() <= OVERALL_CAP) {
+            return combined;
+        }
+        // Drop oldest content from the head until we fit. Cut on a newline
+        // boundary so we don't truncate mid-line.
+        int overshoot = combined.length() - OVERALL_CAP;
+        int cutFrom = combined.indexOf('\n', overshoot);
+        if (cutFrom < 0 || cutFrom >= combined.length() - 1) {
+            cutFrom = overshoot;
+        } else {
+            cutFrom += 1; // skip the newline itself
+        }
+        return "…(earlier context truncated)\n" + combined.substring(cutFrom);
+    }
+
+    /**
+     * Full rebuild of working context from conversation history plus all
+     * completed step results. Reused on the cold path (first step, or when
+     * the incremental path can't be applied). Mirrors
+     * {@code StateGraphPlanExecuteAgent.buildWorkingContext}.
      */
     private static String rebuildWorkingContext(PlanStateAccessor accessor, List<String> allCompletedResults) {
         List<Message> messages = accessor.messages();

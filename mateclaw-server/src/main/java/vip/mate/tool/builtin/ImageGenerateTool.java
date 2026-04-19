@@ -29,6 +29,7 @@ public class ImageGenerateTool {
     private final SystemSettingService systemSettingService;
     private final AsyncTaskService asyncTaskService;
 
+    @vip.mate.tool.ConcurrencyUnsafe("creates async tasks and persists generated artifacts; provider rate limits also forbid parallel calls")
     @Tool(description = "Image generation tool. Supports actions: generate (default), list (show available providers), "
             + "status (check task status). Some providers are async (30s-2min), results auto-displayed in conversation.")
     public String image_generate(

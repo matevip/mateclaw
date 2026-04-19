@@ -46,7 +46,13 @@ public class ToolExecutionExecutor {
                 return t;
             });
 
-    /** 默认不安全工具列表（写操作、浏览器交互等） */
+    /**
+     * Legacy hardcoded unsafe set, kept as a fallback when no
+     * {@link vip.mate.tool.ToolConcurrencyRegistry} is wired in (legacy tests,
+     * backwards-compatible constructors). New code should annotate the tool
+     * method with {@link vip.mate.tool.ConcurrencyUnsafe} instead of editing
+     * this list.
+     */
     private static final Set<String> DEFAULT_UNSAFE_TOOLS = Set.of(
             "browser_use", "BrowserUseTool", "write_file", "edit_file"
     );
@@ -88,16 +94,35 @@ public class ToolExecutionExecutor {
     private final ApprovalWorkflowService approvalService;
     private final ChatStreamTracker streamTracker;
     private final vip.mate.config.ToolTimeoutProperties toolTimeoutProperties;
+    /** RFC-008 Phase 3 spill store; nullable so legacy constructors keep working. */
+    private final ToolResultStorage resultStorage;
+    /** RFC-008 Phase 4 metadata-driven concurrency classifier; nullable for legacy constructors. */
+    private final vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry;
 
     public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
                                   ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker) {
-        this(toolSet, toolGuardService, null, approvalService, streamTracker, null);
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, null, null, null);
     }
 
     public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
                                   ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
                                   vip.mate.config.ToolTimeoutProperties toolTimeoutProperties) {
-        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties);
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, null, null);
+    }
+
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                  ToolResultStorage resultStorage) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, resultStorage, null);
+    }
+
+    public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
+                                  ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker,
+                                  vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                  ToolResultStorage resultStorage,
+                                  vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry) {
+        this(toolSet, toolGuardService, null, approvalService, streamTracker, toolTimeoutProperties, resultStorage, concurrencyRegistry);
     }
 
     public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuard toolGuard,
@@ -108,18 +133,24 @@ public class ToolExecutionExecutor {
         this.approvalService = approvalService;
         this.streamTracker = streamTracker;
         this.toolTimeoutProperties = null;
+        this.resultStorage = null;
+        this.concurrencyRegistry = null;
     }
 
     private ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
                                    ToolGuard toolGuard, ApprovalWorkflowService approvalService,
                                    ChatStreamTracker streamTracker,
-                                   vip.mate.config.ToolTimeoutProperties toolTimeoutProperties) {
+                                   vip.mate.config.ToolTimeoutProperties toolTimeoutProperties,
+                                   ToolResultStorage resultStorage,
+                                   vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry) {
         this.toolCallbackMap = toolSet.callbackByName();
         this.toolGuardService = toolGuardService;
         this.toolGuard = toolGuard;
         this.approvalService = approvalService;
         this.streamTracker = streamTracker;
         this.toolTimeoutProperties = toolTimeoutProperties;
+        this.resultStorage = resultStorage;
+        this.concurrencyRegistry = concurrencyRegistry;
     }
 
     private long getToolTimeoutMs(String toolName) {
@@ -262,8 +293,16 @@ public class ToolExecutionExecutor {
             executePreparedCalls(preparedCalls, allResponses, events);
         }
 
-        // 清除 null 占位（不应该有，但防御性处理）
+        // Defensive: drop null placeholders (should never appear in practice).
         allResponses.removeIf(Objects::isNull);
+
+        // RFC-008 Phase 3 Layer 3: enforce per-turn aggregate budget across all
+        // tool responses for this assistant turn. Spills the largest non-spilled
+        // response in turn until the cumulative size fits the budget.
+        if (resultStorage != null && !allResponses.isEmpty()) {
+            allResponses = new ArrayList<>(resultStorage.enforceTurnBudget(
+                    allResponses, conversationId, currentWorkspaceBasePath));
+        }
 
         boolean hasApprovalPending = barrier != null;
         return new ToolExecutionResult(allResponses, events, hasApprovalPending,
@@ -272,11 +311,18 @@ public class ToolExecutionExecutor {
     }
 
     /**
-     * 执行预批准的工具调用（用于 StepExecutionNode 的 replay 路径）
+     * Execute a pre-approved tool call (used by StepExecutionNode's replay path
+     * after a user approves a previously-blocked invocation).
+     *
+     * @param conversationId required for per-conversation spill scoping; when
+     *     blank, spill files would land in a shared {@code unknown/} directory
+     *     and break per-conversation cleanup.
+     * @param workspaceBasePath optional; when blank, spill falls back to tmp.
      */
     public ToolResponseMessage.ToolResponse executePreApproved(
             AssistantMessage.ToolCall toolCall, String storedArguments,
-            List<GraphEventPublisher.GraphEvent> events) {
+            List<GraphEventPublisher.GraphEvent> events,
+            String conversationId, String workspaceBasePath) {
         String toolName = toolCall.name();
         String callArguments = storedArguments != null ? storedArguments : toolCall.arguments();
 
@@ -291,9 +337,17 @@ public class ToolExecutionExecutor {
             log.info("[ToolExecutor] Executing pre-approved tool: {}", toolName);
             String result = callback.call(callArguments);
             int rawLen = result != null ? result.length() : 0;
+            // Phase 3 Layer 2: spill before truncation when storage is wired.
+            // Use the caller-supplied conversationId so spill files inherit the
+            // same per-conversation directory layout as the non-replay path.
+            if (resultStorage != null && result != null) {
+                String spillConv = conversationId != null && !conversationId.isEmpty() ? conversationId : "unknown";
+                result = resultStorage.persistIfOversized(
+                        result, toolName, toolCall.id(), spillConv, workspaceBasePath);
+            }
             result = truncateToolResult(result, MAX_TOOL_RESULT_CHARS);
             log.info("[ToolExecutor] Pre-approved tool {} returned {} chars{}", toolName, rawLen,
-                    result != null && result.length() < rawLen ? " (truncated to " + result.length() + ")" : "");
+                    result != null && result.length() < rawLen ? " (now " + result.length() + " after spill/truncate)" : "");
             events.add(GraphEventPublisher.toolComplete(toolName, result, true));
             return new ToolResponseMessage.ToolResponse(
                     toolCall.id(), toolName, result != null ? result : "");
@@ -303,6 +357,21 @@ public class ToolExecutionExecutor {
             return new ToolResponseMessage.ToolResponse(
                     toolCall.id(), toolName, "Tool execution failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * Backwards-compatible overload — replay spills land in a synthetic
+     * {@code unknown/} conversation bucket. New callers must use the
+     * {@link #executePreApproved(AssistantMessage.ToolCall, String, List, String, String)}
+     * variant so spill files are correctly scoped per conversation.
+     *
+     * @deprecated use the 5-arg overload with explicit {@code conversationId}
+     */
+    @Deprecated
+    public ToolResponseMessage.ToolResponse executePreApproved(
+            AssistantMessage.ToolCall toolCall, String storedArguments,
+            List<GraphEventPublisher.GraphEvent> events) {
+        return executePreApproved(toolCall, storedArguments, events, null, currentWorkspaceBasePath);
     }
 
     // ==================== Phase 2: 并发执行 ====================
@@ -426,9 +495,17 @@ public class ToolExecutionExecutor {
             }
 
             int rawLen = result != null ? result.length() : 0;
+            // RFC-008 Phase 3 Layer 2: spill oversized results to disk and replace
+            // with preview + path. Falls back to truncation when spilling is
+            // disabled or fails. Spill preserves the full output (read_file can
+            // retrieve it); truncation discards the tail.
+            if (resultStorage != null && result != null) {
+                result = resultStorage.persistIfOversized(
+                        result, toolName, pc.toolCall.id(), pc.conversationId, pc.workspaceBasePath);
+            }
             result = truncateToolResult(result, MAX_TOOL_RESULT_CHARS);
             log.info("[ToolExecutor] Tool {} returned {} chars{}", toolName, rawLen,
-                    result != null && result.length() < rawLen ? " (truncated to " + result.length() + ")" : "");
+                    result != null && result.length() < rawLen ? " (now " + result.length() + " after spill/truncate)" : "");
             events.add(GraphEventPublisher.toolComplete(toolName, result, true));
             if (streamTracker != null) {
                 streamTracker.broadcastObject(pc.conversationId, GraphEventPublisher.EVENT_TOOL_COMPLETE,
@@ -504,9 +581,15 @@ public class ToolExecutionExecutor {
     // ==================== 辅助方法 ====================
 
     /**
-     * 判断工具是否并发安全
+     * Returns true when the tool can run in parallel with other safe tools.
+     * Consults the registry first (annotation-driven, populated at startup);
+     * falls back to the legacy hardcoded set for callers built without a
+     * registry (legacy constructor / unit tests).
      */
     private boolean isConcurrencySafe(String toolName) {
+        if (concurrencyRegistry != null && concurrencyRegistry.isUnsafe(toolName)) {
+            return false;
+        }
         return !DEFAULT_UNSAFE_TOOLS.contains(toolName);
     }
 

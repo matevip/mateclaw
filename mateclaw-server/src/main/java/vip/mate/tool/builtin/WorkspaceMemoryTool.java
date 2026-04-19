@@ -100,6 +100,7 @@ public class WorkspaceMemoryTool {
         return JSONUtil.toJsonPrettyStr(result);
     }
 
+    @vip.mate.tool.ConcurrencyUnsafe("workspace memory write — concurrent writes to the same file would clobber each other")
     @Tool(description = """
             创建或覆写指定 Agent 的数据库工作区记忆文件。
             适用于把提炼后的长期记忆写入 MEMORY.md，或把原始事件写入 memory/YYYY-MM-DD.md。
@@ -133,6 +134,7 @@ public class WorkspaceMemoryTool {
         return JSONUtil.toJsonPrettyStr(result);
     }
 
+    @vip.mate.tool.ConcurrencyUnsafe("workspace memory edit — find/replace must serialize per file")
     @Tool(description = """
             通过精确查找替换编辑指定 Agent 的数据库工作区记忆文件。
             适用于在 MEMORY.md 的某个 section 中做增量更新，避免整篇重写。

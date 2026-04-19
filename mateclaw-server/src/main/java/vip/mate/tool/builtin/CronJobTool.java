@@ -30,6 +30,7 @@ public class CronJobTool {
 
     private final CronJobService cronJobService;
 
+    @vip.mate.tool.ConcurrencyUnsafe("cron job creation persists to mate_cron_job; concurrent creates can race on name")
     @Tool(description = "Create a scheduled task (cron job). The task will run automatically at the specified time "
             + "and send the trigger message to the current agent. Use 5-field cron expressions: minute hour day month weekday. "
             + "Examples: '0 9 * * *' = daily at 9am, '0 9 * * 1-5' = weekdays at 9am, '*/30 * * * *' = every 30 minutes.")
@@ -99,6 +100,7 @@ public class CronJobTool {
         }
     }
 
+    @vip.mate.tool.ConcurrencyUnsafe("toggles row state in mate_cron_job; serialize to keep enabled/disabled deterministic")
     @Tool(description = "Enable or disable a scheduled task by its job ID. "
             + "Use list_cron_jobs first to find the job ID.")
     public String toggle_cron_job(
@@ -120,6 +122,7 @@ public class CronJobTool {
         }
     }
 
+    @vip.mate.tool.ConcurrencyUnsafe("destructive — removes row from mate_cron_job")
     @Tool(description = "Delete a scheduled task by its job ID. This action requires user approval. "
             + "Use list_cron_jobs first to find the job ID.")
     public String delete_cron_job(

@@ -126,6 +126,9 @@ public class AgentGraphBuilder {
     private final WikiContextService wikiContextService;
     private final vip.mate.workspace.core.service.WorkspaceService workspaceService;
     private final vip.mate.llm.cache.AnthropicCacheOptionsFactory anthropicCacheOptionsFactory;
+    private final vip.mate.llm.cache.LlmCacheMetricsAggregator llmCacheMetricsAggregator;
+    private final vip.mate.agent.graph.executor.ToolResultStorage toolResultStorage;
+    private final vip.mate.tool.ToolConcurrencyRegistry toolConcurrencyRegistry;
 
     /**
      * 根据 AgentEntity 构建完整的 Agent 实例
@@ -250,8 +253,8 @@ public class AgentGraphBuilder {
     CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations, String reasoningEffort) {
         try {
             ChatModel fallbackModel = buildFallbackModel(chatModel);
-            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackModel);
-            ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties);
+            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackModel, llmCacheMetricsAggregator);
+            ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
             PlanGenerationNode planGenerationNode = new PlanGenerationNode(chatModel, planningService, streamingHelper, conversationWindowManager, toolSet);
             StepExecutionNode stepExecutionNode = new StepExecutionNode(chatModel, toolSet, executor, planningService, streamTracker, reasoningEffort, streamingHelper, conversationWindowManager);
             PlanSummaryNode planSummaryNode = new PlanSummaryNode(chatModel, planningService, streamingHelper);
@@ -344,8 +347,8 @@ public class AgentGraphBuilder {
     CompiledGraph buildReActGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations, String reasoningEffort) {
         try {
             ChatModel fallbackModel = buildFallbackModel(chatModel);
-            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackModel);
-            ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties);
+            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackModel, llmCacheMetricsAggregator);
+            ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
             ReasoningNode reasoningNode = new ReasoningNode(chatModel, toolSet, reasoningEffort, streamingHelper, conversationWindowManager, streamTracker, 0, wikiContextService);
             ActionNode actionNode = new ActionNode(executor, streamTracker);
             ObservationProcessor observationProcessor = new ObservationProcessor(graphObservationProperties);

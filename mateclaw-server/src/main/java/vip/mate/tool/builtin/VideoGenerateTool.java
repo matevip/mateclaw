@@ -32,6 +32,7 @@ public class VideoGenerateTool {
     private final SystemSettingService systemSettingService;
     private final AsyncTaskService asyncTaskService;
 
+    @vip.mate.tool.ConcurrencyUnsafe("creates async tasks and persists generated artifacts; provider rate limits also forbid parallel calls")
     @Tool(description = "视频生成工具，支持以下 action：\n"
             + "- generate（默认）：生成视频。提供 prompt 描述视频内容，可选 aspectRatio/duration/imageUrl/model\n"
             + "- list：列出所有可用的视频 Provider 及其支持的模型和能力\n"
