@@ -130,6 +130,7 @@ public class AgentGraphBuilder {
     private final vip.mate.agent.graph.executor.ToolResultStorage toolResultStorage;
     private final vip.mate.tool.ToolConcurrencyRegistry toolConcurrencyRegistry;
     private final vip.mate.i18n.I18nService i18nService;
+    private final vip.mate.llm.failover.ProviderHealthTracker providerHealthTracker;
 
     /**
      * 根据 AgentEntity 构建完整的 Agent 实例
@@ -258,8 +259,8 @@ public class AgentGraphBuilder {
     CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations,
                                          String reasoningEffort, ModelConfigEntity primaryModelConfig) {
         try {
-            List<ChatModel> fallbackChain = buildFallbackChain(primaryModelConfig);
-            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackChain, llmCacheMetricsAggregator);
+            List<vip.mate.llm.failover.FallbackEntry> fallbackChain = buildFallbackChain(primaryModelConfig);
+            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackChain, llmCacheMetricsAggregator, providerHealthTracker);
             ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
             PlanGenerationNode planGenerationNode = new PlanGenerationNode(chatModel, planningService, streamingHelper, conversationWindowManager, toolSet);
             StepExecutionNode stepExecutionNode = new StepExecutionNode(chatModel, toolSet, executor, planningService, streamTracker, reasoningEffort, streamingHelper, conversationWindowManager);
@@ -357,8 +358,8 @@ public class AgentGraphBuilder {
     CompiledGraph buildReActGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations,
                                    String reasoningEffort, ModelConfigEntity primaryModelConfig) {
         try {
-            List<ChatModel> fallbackChain = buildFallbackChain(primaryModelConfig);
-            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackChain, llmCacheMetricsAggregator);
+            List<vip.mate.llm.failover.FallbackEntry> fallbackChain = buildFallbackChain(primaryModelConfig);
+            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackChain, llmCacheMetricsAggregator, providerHealthTracker);
             ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
             ReasoningNode reasoningNode = new ReasoningNode(chatModel, toolSet, reasoningEffort, streamingHelper, conversationWindowManager, streamTracker, 0, wikiContextService);
             ActionNode actionNode = new ActionNode(executor, streamTracker);
@@ -560,7 +561,7 @@ public class AgentGraphBuilder {
      *     the primary model; used to identity-filter the chain
      * @return ordered, possibly-empty list of fallback {@link ChatModel}s
      */
-    List<ChatModel> buildFallbackChain(ModelConfigEntity primaryModelConfig) {
+    List<vip.mate.llm.failover.FallbackEntry> buildFallbackChain(ModelConfigEntity primaryModelConfig) {
         List<ModelProviderEntity> providers;
         try {
             providers = modelProviderService.listFallbackChain();
@@ -575,7 +576,7 @@ public class AgentGraphBuilder {
         String primaryProviderId = primaryModelConfig != null ? primaryModelConfig.getProvider() : null;
         String primaryModelName = primaryModelConfig != null ? primaryModelConfig.getModelName() : null;
 
-        List<ChatModel> chain = new ArrayList<>();
+        List<vip.mate.llm.failover.FallbackEntry> chain = new ArrayList<>();
         for (ModelProviderEntity p : providers) {
             ModelConfigEntity fallbackConfig;
             try {
@@ -600,7 +601,7 @@ public class AgentGraphBuilder {
             }
             try {
                 ChatModel m = buildRuntimeChatModel(fallbackConfig, RetryTemplate.builder().maxAttempts(1).build());
-                chain.add(m);
+                chain.add(new vip.mate.llm.failover.FallbackEntry(p.getProviderId(), m));
                 log.info("[LlmFailover] chain[{}] = {}/{} (priority={})",
                         chain.size(), p.getProviderId(), fallbackConfig.getModelName(),
                         p.getFallbackPriority());

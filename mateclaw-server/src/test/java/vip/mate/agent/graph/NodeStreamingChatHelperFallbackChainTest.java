@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import vip.mate.channel.web.ChatStreamTracker;
+import vip.mate.llm.failover.FallbackEntry;
 
 import java.lang.reflect.Field;
 import java.util.List;
@@ -25,24 +26,31 @@ class NodeStreamingChatHelperFallbackChainTest {
     private final ChatStreamTracker streamTracker = mock(ChatStreamTracker.class);
 
     @Test
-    @DisplayName("List-based constructor preserves fallback chain order and contents")
+    @DisplayName("List-based constructor preserves fallback chain order, providerId, and ChatModel")
     void listConstructorPreservesOrder() throws Exception {
         ChatModel a = mock(ChatModel.class);
         ChatModel b = mock(ChatModel.class);
         ChatModel c = mock(ChatModel.class);
-        NodeStreamingChatHelper helper = new NodeStreamingChatHelper(streamTracker, List.of(a, b, c), null);
+        List<FallbackEntry> input = List.of(
+                new FallbackEntry("openai", a),
+                new FallbackEntry("dashscope", b),
+                new FallbackEntry("anthropic", c));
+        NodeStreamingChatHelper helper = new NodeStreamingChatHelper(streamTracker, input, null);
 
-        List<ChatModel> chain = readFallbackChain(helper);
+        List<FallbackEntry> chain = readFallbackChain(helper);
         assertEquals(3, chain.size(), "fallback chain should preserve all entries");
-        assertSame(a, chain.get(0), "priority 1 must be first");
-        assertSame(b, chain.get(1));
-        assertSame(c, chain.get(2));
+        assertEquals("openai", chain.get(0).providerId());
+        assertSame(a, chain.get(0).chatModel());
+        assertEquals("dashscope", chain.get(1).providerId());
+        assertSame(b, chain.get(1).chatModel());
+        assertEquals("anthropic", chain.get(2).providerId());
+        assertSame(c, chain.get(2).chatModel());
     }
 
     @Test
     @DisplayName("Null fallback chain is normalized to empty list (defensive)")
     void nullChainNormalizedToEmpty() throws Exception {
-        NodeStreamingChatHelper helper = new NodeStreamingChatHelper(streamTracker, (List<ChatModel>) null, null);
+        NodeStreamingChatHelper helper = new NodeStreamingChatHelper(streamTracker, (List<FallbackEntry>) null, null);
         assertTrue(readFallbackChain(helper).isEmpty(),
                 "null chain must not throw — it should be normalized to an empty list");
     }
@@ -55,15 +63,19 @@ class NodeStreamingChatHelperFallbackChainTest {
     }
 
     @Test
-    @DisplayName("Deprecated single-fallback constructor wraps the model into a 1-element chain")
+    @DisplayName("Deprecated single-fallback constructor wraps the model into a 1-entry synthetic chain")
     void deprecatedSingleFallbackConstructorBackCompat() throws Exception {
         ChatModel single = mock(ChatModel.class);
         @SuppressWarnings("deprecation")
         NodeStreamingChatHelper helper = new NodeStreamingChatHelper(streamTracker, single);
 
-        List<ChatModel> chain = readFallbackChain(helper);
+        List<FallbackEntry> chain = readFallbackChain(helper);
         assertEquals(1, chain.size(), "deprecated overload should produce a 1-entry chain");
-        assertSame(single, chain.get(0));
+        assertSame(single, chain.get(0).chatModel(),
+                "the single fallback ChatModel must survive wrapping intact");
+        // Synthetic providerId is acceptable; just assert it's present so health
+        // tracking won't NPE on lookup.
+        assertNotNull(chain.get(0).providerId());
     }
 
     @Test
@@ -85,9 +97,9 @@ class NodeStreamingChatHelperFallbackChainTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static List<ChatModel> readFallbackChain(NodeStreamingChatHelper helper) throws Exception {
+    private static List<FallbackEntry> readFallbackChain(NodeStreamingChatHelper helper) throws Exception {
         Field f = NodeStreamingChatHelper.class.getDeclaredField("fallbackChain");
         f.setAccessible(true);
-        return (List<ChatModel>) f.get(helper);
+        return (List<FallbackEntry>) f.get(helper);
     }
 }

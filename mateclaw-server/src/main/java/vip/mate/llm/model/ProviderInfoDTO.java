@@ -29,4 +29,6 @@ public class ProviderInfoDTO {
     private String authType;
     private Boolean oauthConnected;
     private Long oauthExpiresAt;
+    /** position in the failover chain (0 = excluded, 1..N = priority). */
+    private Integer fallbackPriority;
 }

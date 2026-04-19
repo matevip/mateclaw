@@ -48,40 +48,67 @@ public class NodeStreamingChatHelper {
      * Ordered fallback chain tried after the primary model exhausts retries.
      * Each entry is attempted once (no retry); the first successful response
      * wins. Empty list disables fallover entirely.
+     *
+     * <p>Stored as {@link vip.mate.llm.failover.FallbackEntry} (providerId +
+     * ChatModel) so the chain walker can consult {@link vip.mate.llm.failover.ProviderHealthTracker}
+     * — cooldown state is keyed by providerId, not by ChatModel instance.</p>
      */
-    private final List<ChatModel> fallbackChain;
+    private final List<vip.mate.llm.failover.FallbackEntry> fallbackChain;
 
     /** Optional cache-metrics aggregator; {@code null} in tests or when the bean is absent. */
     private final vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics;
 
+    /** Optional per-provider health tracker; {@code null} in tests or when bean absent. */
+    private final vip.mate.llm.failover.ProviderHealthTracker healthTracker;
+
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker) {
-        this(streamTracker, List.of(), null);
+        this(streamTracker, List.of(), null, null);
     }
 
     /**
-     * @deprecated use the list-based constructor — a single fallback cannot
-     *     express the ordered multi-provider chain
+     * @deprecated use the list-based constructor with FallbackEntry — a single
+     *     fallback cannot express the ordered multi-provider chain
      */
     @Deprecated
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker, ChatModel fallbackModel) {
-        this(streamTracker, fallbackModel == null ? List.of() : List.of(fallbackModel), null);
+        this(streamTracker, wrap(fallbackModel), null, null);
     }
 
     /**
-     * @deprecated use the list-based constructor — a single fallback cannot
-     *     express the ordered multi-provider chain
+     * @deprecated use the list-based constructor with FallbackEntry — a single
+     *     fallback cannot express the ordered multi-provider chain
      */
     @Deprecated
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker, ChatModel fallbackModel,
                                    vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics) {
-        this(streamTracker, fallbackModel == null ? List.of() : List.of(fallbackModel), cacheMetrics);
+        this(streamTracker, wrap(fallbackModel), cacheMetrics, null);
     }
 
-    public NodeStreamingChatHelper(ChatStreamTracker streamTracker, List<ChatModel> fallbackChain,
+    /**
+     * Full chain constructor without health tracker — primarily for tests and
+     * legacy wiring. Production callers should use the 4-arg variant so
+     * cooldown state is honored.
+     */
+    public NodeStreamingChatHelper(ChatStreamTracker streamTracker,
+                                   List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
                                    vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics) {
+        this(streamTracker, fallbackChain, cacheMetrics, null);
+    }
+
+    public NodeStreamingChatHelper(ChatStreamTracker streamTracker,
+                                   List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
+                                   vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics,
+                                   vip.mate.llm.failover.ProviderHealthTracker healthTracker) {
         this.streamTracker = streamTracker;
         this.fallbackChain = fallbackChain == null ? List.of() : List.copyOf(fallbackChain);
         this.cacheMetrics = cacheMetrics;
+        this.healthTracker = healthTracker;
+    }
+
+    private static List<vip.mate.llm.failover.FallbackEntry> wrap(ChatModel m) {
+        // Legacy single-fallback path: providerId is unknown so health tracking
+        // is silently disabled for that one entry (it gets a synthetic id).
+        return m == null ? List.of() : List.of(new vip.mate.llm.failover.FallbackEntry("__legacy__", m));
     }
 
     /**
@@ -276,11 +303,19 @@ public class NodeStreamingChatHelper {
         // Each fallback gets a single shot (no retry); first successful result wins.
         // Same-instance entries (e.g., primary accidentally included in the chain)
         // are skipped so we don't re-try the exact model that just failed.
+        // Providers in cooldown  are also skipped so a known-bad
+        // provider doesn't add latency to every conversation turn.
         for (int i = 0; i < fallbackChain.size(); i++) {
-            ChatModel fallback = fallbackChain.get(i);
+            vip.mate.llm.failover.FallbackEntry entry = fallbackChain.get(i);
+            ChatModel fallback = entry.chatModel();
             if (fallback == chatModel) continue;
-            log.warn("[{}] Primary exhausted, trying fallback {}/{} ({}) for conversation {}",
-                    phase, i + 1, fallbackChain.size(),
+            if (healthTracker != null && healthTracker.isInCooldown(entry.providerId())) {
+                log.info("[{}] Skipping fallback {}/{} provider={} — in cooldown",
+                        phase, i + 1, fallbackChain.size(), entry.providerId());
+                continue;
+            }
+            log.warn("[{}] Primary exhausted, trying fallback {}/{} provider={} ({}) for conversation {}",
+                    phase, i + 1, fallbackChain.size(), entry.providerId(),
                     fallback.getClass().getSimpleName(), conversationId);
             if (broadcast) {
                 broadcastDelta(conversationId, "warning",
@@ -294,8 +329,10 @@ public class NodeStreamingChatHelper {
             if (fallbackResult != null
                     && fallbackResult.errorType() == ErrorType.NONE
                     && fallbackResult.errorMessage() == null) {
+                if (healthTracker != null) healthTracker.recordSuccess(entry.providerId());
                 return fallbackResult;
             }
+            if (healthTracker != null) healthTracker.recordFailure(entry.providerId());
             if (fallbackResult != null) {
                 lastResult = fallbackResult; // remember most recent to report if the whole chain fails
             }

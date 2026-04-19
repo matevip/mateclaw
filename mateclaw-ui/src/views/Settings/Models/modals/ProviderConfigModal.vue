@@ -118,7 +118,21 @@
               <span>{{ advancedOpen ? '−' : '+' }}</span>
             </button>
             <div v-if="advancedOpen" class="advanced-panel">
-              <label class="form-label">{{ t('settings.model.fields.generateKwargs') }}</label>
+              <!-- RFC-009 P3.5: failover chain priority editor.
+                   0 = excluded; 1..N defines try-order after primary fails. -->
+              <label class="form-label">{{ t('settings.model.fields.fallbackPriority') }}</label>
+              <input
+                v-model.number="form.fallbackPriority"
+                type="number"
+                min="0"
+                max="99"
+                step="1"
+                class="form-input"
+                style="max-width: 160px"
+              />
+              <div class="field-hint">{{ t('settings.model.fallbackPriorityHint') }}</div>
+
+              <label class="form-label" style="margin-top: 14px">{{ t('settings.model.fields.generateKwargs') }}</label>
               <textarea v-model="form.generateKwargsText" rows="6" class="form-textarea mono"></textarea>
               <div class="field-hint">{{ t('settings.model.advancedHint') }}</div>
             </div>
@@ -155,6 +169,7 @@ defineProps<{
     generateKwargsText: string
     enableSearch: boolean
     searchStrategy: string
+    fallbackPriority: number
   }
   advancedOpen: boolean
   protocolOptions: Array<{ value: string; label: string }>

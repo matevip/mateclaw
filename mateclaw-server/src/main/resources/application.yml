@@ -133,6 +133,15 @@ mateclaw:
         enabled: true              # 自适应降级（连续 miss 后短路到 NoOp，冷却后恢复）
         miss-threshold: 5
         cool-down-ms: 60000
+    # per-provider health tracker for the multi-model failover chain.
+    # When a provider hits failure-threshold consecutive failures it enters a cooldown
+    # window during which the chain walker skips it, avoiding repeated 5-retry stalls
+    # against a known-broken provider on every conversation turn.
+    failover:
+      health:
+        enabled: true
+        failure-threshold: 3
+        cooldown-ms: 300000
 
 # MateClaw Agent 配置
 mate:

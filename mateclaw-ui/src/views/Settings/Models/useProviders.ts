@@ -36,6 +36,9 @@ export function useProviders() {
     generateKwargsText: '{}',
     enableSearch: false,
     searchStrategy: '',
+    // RFC-009 P3.5: position in the multi-model failover chain.
+    // 0 = excluded; positive int = ascending try-order.
+    fallbackPriority: 0,
   })
 
   const providerModelForm = reactive({
@@ -81,6 +84,7 @@ export function useProviders() {
       generateKwargsText: '{}',
       enableSearch: false,
       searchStrategy: '',
+      fallbackPriority: 0,
     })
     showProviderModal.value = true
   }
@@ -104,6 +108,7 @@ export function useProviders() {
       generateKwargsText: JSON.stringify(kwargs, null, 2),
       enableSearch: searchDefault,
       searchStrategy: (kwargs.searchStrategy as string) || '',
+      fallbackPriority: provider.fallbackPriority ?? 0,
     })
     showProviderModal.value = true
   }
@@ -128,6 +133,8 @@ export function useProviders() {
       delete kwargs.enableSearch
       delete kwargs.searchStrategy
     }
+    // RFC-009 P3.5: clamp to non-negative, coerce string input back to integer.
+    const fallbackPriority = Math.max(0, Math.floor(Number(providerForm.fallbackPriority) || 0))
     if (editingProvider.value) {
       await modelApi.updateProviderConfig(editingProvider.value.id, {
         apiKey: providerForm.apiKey,
@@ -135,6 +142,7 @@ export function useProviders() {
         protocol: providerForm.protocol,
         chatModel: protocolToChatModel(providerForm.protocol),
         generateKwargs: kwargs,
+        fallbackPriority,
       })
     } else {
       await modelApi.createCustomProvider({
@@ -146,13 +154,14 @@ export function useProviders() {
         chatModel: protocolToChatModel(providerForm.protocol),
         models: [],
       })
-      if (providerForm.apiKey || providerForm.generateKwargsText) {
+      if (providerForm.apiKey || providerForm.generateKwargsText || fallbackPriority > 0) {
         await modelApi.updateProviderConfig(providerForm.id, {
           apiKey: providerForm.apiKey,
           baseUrl: providerForm.baseUrl,
           protocol: providerForm.protocol,
           chatModel: protocolToChatModel(providerForm.protocol),
           generateKwargs: kwargs,
+          fallbackPriority,
         })
       }
     }

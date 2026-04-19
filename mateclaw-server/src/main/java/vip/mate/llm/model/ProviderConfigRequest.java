@@ -11,4 +11,10 @@ public class ProviderConfigRequest {
     private String protocol;
     private String chatModel;
     private Map<String, Object> generateKwargs;
+    /**
+     * provider's position in the multi-model failover chain.
+     * {@code 0} = excluded; positive ints define ascending try-order. When
+     * {@code null} the field is left untouched on update.
+     */
+    private Integer fallbackPriority;
 }

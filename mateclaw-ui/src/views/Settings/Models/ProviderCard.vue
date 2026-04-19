@@ -18,6 +18,15 @@
           <span v-if="isProviderActive(provider)" class="provider-badge active">
             {{ t('settings.model.active') }}
           </span>
+          <!-- RFC-009 P3.5: surface failover priority so users can see at a glance
+               which providers participate in the chain and in what order. -->
+          <span
+            v-if="provider.fallbackPriority && provider.fallbackPriority > 0"
+            class="provider-badge fallback"
+            :title="t('settings.model.fallbackBadgeTitle')"
+          >
+            {{ t('settings.model.fallbackBadge', { priority: provider.fallbackPriority }) }}
+          </span>
         </div>
         <p class="provider-id">{{ provider.id }}</p>
       </div>
@@ -156,6 +165,7 @@ const { t } = useI18n()
 .provider-badge.builtin { background: var(--mc-primary-bg); color: var(--mc-primary); }
 .provider-badge.custom { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }
 .provider-badge.active { background: rgba(217, 119, 87, 0.12); color: var(--mc-primary-light); }
+.provider-badge.fallback { background: rgba(99, 102, 241, 0.12); color: #6366f1; cursor: help; }
 .provider-status { flex-shrink: 0; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .provider-status.configured { background: var(--mc-primary-bg); color: var(--mc-primary); }
 .provider-status.partial { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }

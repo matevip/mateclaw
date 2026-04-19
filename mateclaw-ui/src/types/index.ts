@@ -602,6 +602,8 @@ export interface ProviderInfo {
   authType?: string
   oauthConnected?: boolean
   oauthExpiresAt?: number
+  /** RFC-009 P3.5: position in the multi-model failover chain (0 = excluded). */
+  fallbackPriority?: number
 }
 
 export interface ActiveModelsInfo {

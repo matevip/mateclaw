@@ -72,6 +72,12 @@ public class ModelProviderService {
         provider.setBaseUrl(request.getBaseUrl());
         provider.setChatModel(ModelProtocol.resolveChatModel(request.getProtocol(), request.getChatModel()));
         provider.setGenerateKwargs(writeJson(request.getGenerateKwargs()));
+        // only update fallback priority when the caller explicitly
+        // sends a value. null leaves it untouched (existing chain unchanged).
+        if (request.getFallbackPriority() != null) {
+            int p = Math.max(0, request.getFallbackPriority());
+            provider.setFallbackPriority(p);
+        }
         modelProviderMapper.updateById(provider);
         tryAutoActivateModel(providerId, provider);
         eventPublisher.publishEvent(new ModelConfigChangedEvent("provider-config-updated"));
@@ -238,6 +244,7 @@ public class ModelProviderService {
         dto.setAuthType(provider.getAuthType() != null ? provider.getAuthType() : "api_key");
         dto.setOauthConnected(StringUtils.hasText(provider.getOauthAccessToken()));
         dto.setOauthExpiresAt(provider.getOauthExpiresAt());
+        dto.setFallbackPriority(provider.getFallbackPriority() != null ? provider.getFallbackPriority() : 0);
         List<ModelInfoDTO> builtinModels = new ArrayList<>();
         List<ModelInfoDTO> extraModels = new ArrayList<>();
         if (models != null) {
