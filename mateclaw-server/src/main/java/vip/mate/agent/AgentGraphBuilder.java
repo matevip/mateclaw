@@ -564,20 +564,56 @@ public class AgentGraphBuilder {
      * tie-broken by provider id alphabetically. {@code null} agentId keeps the
      * pre-PR-3 ordering (pure global priority) — that's the path for legacy
      * callers and tests.
+     *
+     * <p><b>Source = the available pool</b> (RFC-009 follow-up). Earlier this
+     * method only considered providers with {@code fallback_priority > 0}, which
+     * meant any provider the user hadn't explicitly opted into the chain was
+     * silently excluded — even if it was healthy and in the pool. The pool is
+     * the source of truth for "what's usable right now"; {@code fallback_priority}
+     * is just an ordering hint within the pool.</p>
+     *
+     * <p><b>Per-provider model selection</b> falls back gracefully: the
+     * provider's {@code is_default=true} chat model wins, otherwise we pick
+     * the first enabled chat model on that provider. Forcing users to mark a
+     * default per provider was administrative friction with no real benefit.</p>
      */
     List<vip.mate.llm.failover.FallbackEntry> buildFallbackChain(ModelConfigEntity primaryModelConfig,
                                                                   Long agentId) {
         List<ModelProviderEntity> providers;
         try {
-            providers = modelProviderService.listFallbackChain();
+            // Pull every configured provider, not just the ones with
+            // fallback_priority > 0 — pool membership is what gates usability,
+            // not this admin-set hint.
+            providers = modelProviderService.listProviders().stream()
+                    .filter(dto -> Boolean.TRUE.equals(dto.getConfigured()))
+                    .map(dto -> {
+                        try {
+                            return modelProviderService.getProviderConfig(dto.getId());
+                        } catch (Exception e) {
+                            return null;
+                        }
+                    })
+                    .filter(java.util.Objects::nonNull)
+                    .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         } catch (Exception e) {
-            log.warn("[LlmFailover] failed to load fallback chain from DB: {}; running without fallback",
+            log.warn("[LlmFailover] failed to load configured providers: {}; running without fallback",
                     e.getMessage());
             return List.of();
         }
-        if (providers == null || providers.isEmpty()) {
+        if (providers.isEmpty()) {
             return List.of();
         }
+
+        // Order: explicit fallback_priority > 0 wins (asc), priority == 0 trails alphabetically.
+        providers.sort((a, b) -> {
+            int pa = a.getFallbackPriority() == null ? 0 : a.getFallbackPriority();
+            int pb = b.getFallbackPriority() == null ? 0 : b.getFallbackPriority();
+            if (pa > 0 && pb > 0) return Integer.compare(pa, pb);
+            if (pa > 0) return -1;          // a has explicit priority, comes first
+            if (pb > 0) return 1;           // b has explicit priority, comes first
+            return a.getProviderId().compareTo(b.getProviderId()); // both 0: alphabetical
+        });
+
         String primaryProviderId = primaryModelConfig != null ? primaryModelConfig.getProvider() : null;
         String primaryModelName = primaryModelConfig != null ? primaryModelConfig.getModelName() : null;
 
@@ -593,36 +629,30 @@ public class AgentGraphBuilder {
 
         List<vip.mate.llm.failover.FallbackEntry> chain = new ArrayList<>();
         for (ModelProviderEntity p : providers) {
-            // RFC-009 Phase 4: skip providers known-bad at build time. This is
-            // a perf optimization (one fewer ChatModel to construct + one
-            // fewer round-trip on the chain walk); the runtime walker in
-            // NodeStreamingChatHelper re-checks pool membership per request,
-            // so a provider that re-enters the pool later still gets used
-            // (the graph is rebuilt on ModelConfigChangedEvent).
+            // Don't put the primary provider's row into the fallback chain — same-instance
+            // skipping is also done in the runtime walker, but excluding here saves building
+            // a duplicate ChatModel at agent-build time.
+            if (primaryProviderId != null && primaryProviderId.equals(p.getProviderId())) {
+                log.debug("[LlmFailover] skipping primary provider {} in fallback chain", primaryProviderId);
+                continue;
+            }
+            // RFC-009 Phase 4: skip providers known-bad at build time. The runtime walker in
+            // NodeStreamingChatHelper re-checks pool membership per request, so a provider
+            // that re-enters the pool later still gets used (the graph is rebuilt on
+            // ModelConfigChangedEvent).
             if (providerPool != null && !providerPool.contains(p.getProviderId())) {
                 log.debug("[LlmFailover] skipping provider {} — not in available pool",
                         p.getProviderId());
                 continue;
             }
-            ModelConfigEntity fallbackConfig;
-            try {
-                fallbackConfig = modelConfigService.getDefaultModelByProvider(p.getProviderId());
-            } catch (Exception e) {
-                log.warn("[LlmFailover] skipping provider {} — cannot resolve default model: {}",
-                        p.getProviderId(), e.getMessage());
-                continue;
-            }
+            ModelConfigEntity fallbackConfig = pickFallbackModel(p.getProviderId());
             if (fallbackConfig == null) {
-                log.debug("[LlmFailover] skipping provider {} — no default model configured",
+                log.debug("[LlmFailover] skipping provider {} — no enabled chat model",
                         p.getProviderId());
                 continue;
             }
-            if (primaryProviderId != null
-                    && primaryProviderId.equals(p.getProviderId())
-                    && fallbackConfig.getModelName() != null
-                    && fallbackConfig.getModelName().equals(primaryModelName)) {
-                log.debug("[LlmFailover] skipping primary {}/{} in fallback chain",
-                        primaryProviderId, primaryModelName);
+            if (primaryModelName != null && primaryModelName.equals(fallbackConfig.getModelName())) {
+                // Same model name picked for a different provider — exact same call, skip.
                 continue;
             }
             try {
@@ -637,6 +667,34 @@ public class AgentGraphBuilder {
             }
         }
         return chain;
+    }
+
+    /**
+     * Pick a chat model to use as a fallback for the given provider:
+     * <ol>
+     *   <li>Provider's explicit default ({@code is_default=true}) — most user-aligned.</li>
+     *   <li>First enabled chat model on the provider — pragmatic fallback so the user
+     *       isn't required to mark a default per provider just to participate in failover.</li>
+     * </ol>
+     * Returns {@code null} when the provider has no usable chat model.
+     */
+    private ModelConfigEntity pickFallbackModel(String providerId) {
+        try {
+            ModelConfigEntity defaultModel = modelConfigService.getDefaultModelByProvider(providerId);
+            if (defaultModel != null) return defaultModel;
+        } catch (Exception ignored) {
+            // No default — fall through to first-enabled lookup.
+        }
+        try {
+            return modelConfigService.listModelsByProvider(providerId).stream()
+                    .filter(m -> Boolean.TRUE.equals(m.getEnabled()))
+                    .filter(m -> m.getModelType() == null || "chat".equals(m.getModelType()))
+                    .findFirst()
+                    .orElse(null);
+        } catch (Exception e) {
+            log.warn("[LlmFailover] cannot list models for provider {}: {}", providerId, e.getMessage());
+            return null;
+        }
     }
 
     /**
