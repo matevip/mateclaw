@@ -333,6 +333,36 @@ public class WikiRawMaterialService {
     }
 
     /**
+     * Recover raw materials stuck in 'processing' status after a server restart.
+     * Resets them to 'pending', clears stale progress fields, and optionally
+     * fires processing events so they get picked up automatically.
+     *
+     * @return number of recovered rows
+     */
+    @Transactional
+    public int recoverStuckRawMaterialsOnStartup() {
+        List<WikiRawMaterialEntity> stuck = rawMapper.selectList(
+                new LambdaQueryWrapper<WikiRawMaterialEntity>()
+                        .eq(WikiRawMaterialEntity::getProcessingStatus, "processing"));
+        if (stuck.isEmpty()) return 0;
+
+        for (WikiRawMaterialEntity raw : stuck) {
+            raw.setProcessingStatus("pending");
+            raw.setProgressPhase(null);
+            raw.setProgressTotal(0);
+            raw.setProgressDone(0);
+            raw.setErrorMessage(null);
+            rawMapper.updateById(raw);
+
+            if (properties.isAutoProcessOnUpload()) {
+                eventPublisher.publishEvent(new WikiProcessingEvent(this, raw.getId(), raw.getKbId()));
+            }
+            log.info("[Wiki] Recovered stuck processing raw material: id={}, kbId={}", raw.getId(), raw.getKbId());
+        }
+        return stuck.size();
+    }
+
+    /**
      * Handle a duplicate upload: decide what to do based on the existing row's status.
      * - completed → return as-is (no reprocessing needed)
      * - partial / failed → reprocess (partial enters resume branch)
