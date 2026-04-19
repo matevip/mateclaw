@@ -88,12 +88,35 @@ class NodeStreamingChatHelperFallbackChainTest {
     }
 
     @Test
-    @DisplayName("EMPTY_RESPONSE error type exists (fallback trigger)")
-    void emptyResponseErrorTypeExists() {
-        // Compile-time safety net: the enum constant the streaming pipeline relies on
+    @DisplayName("EMPTY_RESPONSE / BILLING / MODEL_NOT_FOUND error types exist ")
+    void fallbackTriggerErrorTypesExist() {
+        // Compile-time safety net: these enum constants the streaming pipeline relies on
         // must not be renamed or removed without breaking the fallback contract.
-        NodeStreamingChatHelper.ErrorType t = NodeStreamingChatHelper.ErrorType.EMPTY_RESPONSE;
-        assertNotNull(t);
+        assertNotNull(NodeStreamingChatHelper.ErrorType.EMPTY_RESPONSE);
+        assertNotNull(NodeStreamingChatHelper.ErrorType.BILLING);
+        assertNotNull(NodeStreamingChatHelper.ErrorType.MODEL_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("primary providerId is stored when supplied via the full constructor")
+    void primaryProviderIdStored() throws Exception {
+        NodeStreamingChatHelper helper = new NodeStreamingChatHelper(
+                streamTracker, List.of(), null, null, "openai");
+
+        Field f = NodeStreamingChatHelper.class.getDeclaredField("primaryProviderId");
+        f.setAccessible(true);
+        assertEquals("openai", f.get(helper),
+                "primary provider id must be retained for health tracking");
+    }
+
+    @Test
+    @DisplayName("legacy constructors leave primaryProviderId null (tracking disabled)")
+    void primaryProviderIdNullForLegacyConstructors() throws Exception {
+        NodeStreamingChatHelper helper = new NodeStreamingChatHelper(streamTracker);
+        Field f = NodeStreamingChatHelper.class.getDeclaredField("primaryProviderId");
+        f.setAccessible(true);
+        assertNull(f.get(helper),
+                "legacy constructors must leave primaryProviderId unset so tracking is silently disabled");
     }
 
     @SuppressWarnings("unchecked")

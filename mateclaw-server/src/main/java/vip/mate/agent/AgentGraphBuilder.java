@@ -260,7 +260,9 @@ public class AgentGraphBuilder {
                                          String reasoningEffort, ModelConfigEntity primaryModelConfig) {
         try {
             List<vip.mate.llm.failover.FallbackEntry> fallbackChain = buildFallbackChain(primaryModelConfig);
-            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackChain, llmCacheMetricsAggregator, providerHealthTracker);
+            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(
+                    streamTracker, fallbackChain, llmCacheMetricsAggregator, providerHealthTracker,
+                    primaryModelConfig != null ? primaryModelConfig.getProvider() : null);
             ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
             PlanGenerationNode planGenerationNode = new PlanGenerationNode(chatModel, planningService, streamingHelper, conversationWindowManager, toolSet);
             StepExecutionNode stepExecutionNode = new StepExecutionNode(chatModel, toolSet, executor, planningService, streamTracker, reasoningEffort, streamingHelper, conversationWindowManager);
@@ -359,7 +361,9 @@ public class AgentGraphBuilder {
                                    String reasoningEffort, ModelConfigEntity primaryModelConfig) {
         try {
             List<vip.mate.llm.failover.FallbackEntry> fallbackChain = buildFallbackChain(primaryModelConfig);
-            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackChain, llmCacheMetricsAggregator, providerHealthTracker);
+            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(
+                    streamTracker, fallbackChain, llmCacheMetricsAggregator, providerHealthTracker,
+                    primaryModelConfig != null ? primaryModelConfig.getProvider() : null);
             ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
             ReasoningNode reasoningNode = new ReasoningNode(chatModel, toolSet, reasoningEffort, streamingHelper, conversationWindowManager, streamTracker, 0, wikiContextService);
             ActionNode actionNode = new ActionNode(executor, streamTracker);

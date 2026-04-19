@@ -61,54 +61,87 @@ public class NodeStreamingChatHelper {
     /** Optional per-provider health tracker; {@code null} in tests or when bean absent. */
     private final vip.mate.llm.failover.ProviderHealthTracker healthTracker;
 
+    /**
+     * Provider id of the primary {@link ChatModel} this helper drives. Used
+     * by {@link #streamCallInternal} to consult / update {@link #healthTracker}
+     * for the primary too — if a provider's API key is revoked, primary
+     * cooldown lets us bypass the 5-retry stall on subsequent calls within
+     * the same conversation. Falls back to {@code null} when unknown
+     * (legacy callers, tests).
+     */
+    private final String primaryProviderId;
+
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker) {
-        this(streamTracker, List.of(), null, null);
+        this(streamTracker, List.of(), null, null, null);
     }
 
     /**
-     * @deprecated use the list-based constructor with FallbackEntry — a single
-     *     fallback cannot express the ordered multi-provider chain
+     * @deprecated use the full constructor — a single fallback cannot
+     *     express the ordered multi-provider chain
      */
     @Deprecated
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker, ChatModel fallbackModel) {
-        this(streamTracker, wrap(fallbackModel), null, null);
+        this(streamTracker, wrap(fallbackModel), null, null, null);
     }
 
     /**
-     * @deprecated use the list-based constructor with FallbackEntry — a single
-     *     fallback cannot express the ordered multi-provider chain
+     * @deprecated use the full constructor.
      */
     @Deprecated
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker, ChatModel fallbackModel,
                                    vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics) {
-        this(streamTracker, wrap(fallbackModel), cacheMetrics, null);
+        this(streamTracker, wrap(fallbackModel), cacheMetrics, null, null);
     }
 
     /**
-     * Full chain constructor without health tracker — primarily for tests and
-     * legacy wiring. Production callers should use the 4-arg variant so
-     * cooldown state is honored.
+     * Chain constructor without health tracker — primarily for tests and
+     * legacy wiring. Production callers should use the full constructor.
      */
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker,
                                    List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
                                    vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics) {
-        this(streamTracker, fallbackChain, cacheMetrics, null);
+        this(streamTracker, fallbackChain, cacheMetrics, null, null);
+    }
+
+    /**
+     * Constructor with health tracker but unknown primary provider — used by
+     * tests where the helper isn't tied to a specific primary. Primary
+     * health tracking is disabled for instances built this way.
+     */
+    public NodeStreamingChatHelper(ChatStreamTracker streamTracker,
+                                   List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
+                                   vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics,
+                                   vip.mate.llm.failover.ProviderHealthTracker healthTracker) {
+        this(streamTracker, fallbackChain, cacheMetrics, healthTracker, null);
     }
 
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker,
                                    List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
                                    vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics,
-                                   vip.mate.llm.failover.ProviderHealthTracker healthTracker) {
+                                   vip.mate.llm.failover.ProviderHealthTracker healthTracker,
+                                   String primaryProviderId) {
         this.streamTracker = streamTracker;
         this.fallbackChain = fallbackChain == null ? List.of() : List.copyOf(fallbackChain);
         this.cacheMetrics = cacheMetrics;
         this.healthTracker = healthTracker;
+        this.primaryProviderId = primaryProviderId;
     }
 
     private static List<vip.mate.llm.failover.FallbackEntry> wrap(ChatModel m) {
         // Legacy single-fallback path: providerId is unknown so health tracking
         // is silently disabled for that one entry (it gets a synthetic id).
         return m == null ? List.of() : List.of(new vip.mate.llm.failover.FallbackEntry("__legacy__", m));
+    }
+
+    /**
+     * Record a single primary-model outcome to the health tracker. No-op when
+     * either the tracker bean isn't wired or the primary's providerId is
+     * unknown (e.g., tests, legacy callers built without the full constructor).
+     */
+    private void recordPrimary(boolean success) {
+        if (healthTracker == null || primaryProviderId == null) return;
+        if (success) healthTracker.recordSuccess(primaryProviderId);
+        else healthTracker.recordFailure(primaryProviderId);
     }
 
     /**
@@ -202,22 +235,36 @@ public class NodeStreamingChatHelper {
                 || msg.contains("thinking block")) {
             return ErrorType.THINKING_BLOCK_ERROR;
         }
+        // BILLING — payment / quota exhausted. Distinct from AUTH because
+        // a different provider may have credits, so we should fall back instead of
+        // terminating the call. Both OpenAI ("insufficient_quota") and Anthropic
+        // ("credit balance is too low") use these phrases in 402-class responses.
+        if (msg.contains("402") || msg.contains("insufficient_quota")
+                || msg.contains("credit balance is too low")
+                || msg.contains("billing_error") || msg.contains("billing_hard_limit_reached")
+                || msg.contains("You exceeded your current quota")
+                || msg.contains("quota exceeded") || msg.contains("Quota exceeded")) {
+            return ErrorType.BILLING;
+        }
+        // MODEL_NOT_FOUND — provider rejects the requested model id.
+        // Includes DashScope's "[InvalidParameter] url error, please check url"
+        // (https://help.aliyun.com/zh/model-studio/error-code#error-url) which despite
+        // the wording is the provider rejecting an unknown/unsupported model id on
+        // the native protocol. Splitting this out from CLIENT_ERROR lets us hand off
+        // to the fallback chain instead of terminating — a different provider may
+        // recognize the model name (or have an equivalent default).
+        if (msg.contains("Model not exist")
+                || msg.contains("model_not_found")
+                || msg.contains("Model not found")
+                || msg.contains("does not exist")
+                || msg.contains("[InvalidParameter]")
+                || msg.contains("InvalidParameter")
+                || msg.contains("url error")) {
+            return ErrorType.MODEL_NOT_FOUND;
+        }
         // Client errors (400 Bad Request — unsupported format, invalid params, etc.) — NOT retryable
         if (msg.contains("400") || msg.contains("Bad Request")
                 || msg.contains("invalid_request_error") || msg.contains("unsupported")) {
-            return ErrorType.CLIENT_ERROR;
-        }
-        // DashScope-specific "model name does not map to a valid endpoint" — reported as
-        // "[InvalidParameter] url error, please check url" (see
-        // https://help.aliyun.com/zh/model-studio/error-code#error-url). Despite the wording
-        // it's not a URL issue — it's the provider rejecting an unknown/unsupported model id
-        // on the native protocol. Treat as client error so we do NOT retry.
-        if (msg.contains("[InvalidParameter]")
-                || msg.contains("InvalidParameter")
-                || msg.contains("url error")
-                || msg.contains("Model not exist")
-                || msg.contains("model_not_found")
-                || msg.contains("Model not found")) {
             return ErrorType.CLIENT_ERROR;
         }
         // Server errors
@@ -253,18 +300,46 @@ public class NodeStreamingChatHelper {
             throw new CancellationException("Stream stopped by user");
         }
 
+        // if the primary's provider is in cooldown (3+ recent
+        // consecutive failures within the cooldown window), skip the 5-retry
+        // primary loop entirely and head straight to the fallback chain.
+        // Without this short-circuit a degraded primary forces every LLM
+        // call in the conversation to wait through the full backoff.
+        boolean primarySkipped = primaryProviderId != null
+                && healthTracker != null
+                && healthTracker.isInCooldown(primaryProviderId);
+        if (primarySkipped) {
+            log.warn("[{}] Primary provider={} is in cooldown — skipping straight to fallback chain",
+                    phase, primaryProviderId);
+            if (broadcast) {
+                broadcastDelta(conversationId, "warning",
+                        buildDeltaJson("主模型暂时不可用（冷却中），直接尝试备选模型..."));
+            }
+        }
+
         // 主模型重试循环
         StreamResult lastResult = null;
-        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        if (!primarySkipped) for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             lastResult = doStreamCall(chatModel, prompt, conversationId, phase, broadcast, attempt);
             if (lastResult != null) {
                 // PTL: 不重试，直接返回给上层 Node 处理
                 if (lastResult.errorType() == ErrorType.PROMPT_TOO_LONG) {
                     return lastResult;
                 }
-                // AUTH: 不重试
+                // AUTH: 不重试 — 但要记账（auth 不会自愈，连续 N 次后冷却避免每轮都撞）
                 if (lastResult.errorType() == ErrorType.AUTH_ERROR) {
+                    recordPrimary(false);
                     return lastResult;
+                }
+                // BILLING / MODEL_NOT_FOUND — provider-side hard failures
+                // that won't change on retry. Skip to fallback chain (a different
+                // provider may have credits, or the model name may be valid there).
+                if (lastResult.errorType() == ErrorType.BILLING
+                        || lastResult.errorType() == ErrorType.MODEL_NOT_FOUND) {
+                    log.warn("[{}] Primary error={} — skipping same-model retries, handing off to fallback chain",
+                            phase, lastResult.errorType());
+                    recordPrimary(false);
+                    break;
                 }
                 // CLIENT_ERROR (400 Bad Request): 不重试（参数/格式错误重试也不会变）
                 if (lastResult.errorType() == ErrorType.CLIENT_ERROR) {
@@ -284,19 +359,26 @@ public class NodeStreamingChatHelper {
                 // productive; a different provider has a better chance of succeeding.
                 if (lastResult.errorType() == ErrorType.EMPTY_RESPONSE) {
                     log.warn("[{}] Primary returned empty response — skipping same-model retries, handing off to fallback chain", phase);
+                    recordPrimary(false);
                     break;
                 }
                 // 成功
                 if (lastResult.errorMessage() == null || lastResult.errorType() == ErrorType.NONE) {
+                    recordPrimary(true);
                     return lastResult;
                 }
                 // Any other non-null errored result with a classified type that doStreamCall
                 // chose NOT to retry (i.e. UNKNOWN, or RATE_LIMIT/SERVER_ERROR past MAX_RETRIES)
                 // must exit — otherwise we silently spin through attempts and waste seconds
                 // per turn on unrecoverable errors like DashScope's "url error" / unknown model.
+                recordPrimary(false);
                 return lastResult;
             }
             // lastResult == null 表示需要重试
+        }
+        // If we exhausted the retry loop without a verdict, primary effectively failed.
+        if (!primarySkipped && lastResult != null && lastResult.errorType() != ErrorType.NONE) {
+            recordPrimary(false);
         }
 
         // Primary exhausted retries — walk the fallback chain in priority order.
@@ -850,6 +932,22 @@ public class NodeStreamingChatHelper {
          * rejection that comes back as HTTP 200 with empty body.
          */
         EMPTY_RESPONSE,
+        /**
+         * payment / billing failure (HTTP 402, "insufficient_quota",
+         * "credit balance is too low", etc.). Distinct from {@link #AUTH_ERROR}
+         * because the right response is to <i>switch provider</i> (a different
+         * provider may have credits) rather than just terminate. Skips same-model
+         * retries and falls through to the fallback chain.
+         */
+        BILLING,
+        /**
+         * requested model id not recognized by the provider
+         * (HTTP 404, "Model not exist", "model_not_found", DashScope's
+         * "url error"). Same handling as {@link #BILLING} — heads straight
+         * to the fallback chain instead of looping retries against a model
+         * that does not exist.
+         */
+        MODEL_NOT_FOUND,
         /** 其他未知错误 */
         UNKNOWN
     }
