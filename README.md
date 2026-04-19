@@ -6,7 +6,7 @@
 
 # MateClaw
 
-<p align="center"><b>AI that thinks, acts, remembers — and keeps going when one model dies.</b></p>
+<p align="center"><b>Your AI needs a Plan B.</b></p>
 
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repo-black.svg?logo=github)](https://github.com/matevip/mateclaw)
 [![Documentation](https://img.shields.io/badge/Docs-Website-green.svg?logo=readthedocs&label=Docs)](https://claw.mate.vip/docs)
@@ -28,9 +28,9 @@
 
 ---
 
-Most AI tools forget you the moment the tab closes. Most fall over when their model vendor has a bad day. Most give you a chatbox and call it a product.
+Most AI tools die when their vendor has a bad day. Most forget you the moment the tab closes. Most give you a chatbox and call it a product.
 
-**MateClaw is the whole widget.** One deployment. Reasoning, knowledge, memory, tools, and multi-channel presence — built together, not bolted on.
+**MateClaw is the whole widget.** One deployment. Reasoning, knowledge, memory, tools, channels — built together, not bolted on. And when your primary model goes down, the next one picks up mid-sentence.
 
 ---
 
@@ -42,7 +42,7 @@ Primary key expired. Vendor returns 401. Network blip. Quota drained.
 
 Other tools hand you a red error card. MateClaw routes to the next healthy provider — DashScope, OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Ollama, LM Studio, MLX, 14+ in total — and the user sees the reply finish. A provider health tracker parks bad vendors in a cooldown window so they don't waste seconds on every turn.
 
-You don't configure a retry script. You set priorities in the web UI. The runtime does the rest.
+You don't write a retry script. You drag providers into priority order in **Settings → Models** and watch the health dashboard fill with green dots as requests route around failures in real time.
 
 ### 2 · Knowledge that links itself
 
@@ -63,6 +63,8 @@ This is the difference between a warehouse and a library.
 | **Plugin SDK** | Java module for third-party capability packs |
 
 Same brain. Same memory. Same tools. Different doors.
+
+<p align="center"><b>$0 · No tokens metered. No seats billed. Your server. Your data. Your keys.</b></p>
 
 ---
 
@@ -87,17 +89,32 @@ RBAC + JWT. Full audit trail. Flyway-managed schema that auto-heals on upgrade. 
 
 ---
 
+## AI is becoming infrastructure
+
+On March 2, 2026, Claude went dark for 4 hours across API, web, and mobile. Three weeks later, another 5 hours. Every company that bet their AI strategy on a single vendor spent those outages staring at red error cards.
+
+This is the same shift databases went through around 2010 and cloud went through around 2018: the winning layer stops being tied to one supplier. **57% of companies now run AI agents in production.** None of them want one vendor's bad day to become their bad day.
+
+**MateClaw is that layer — built the Spring Boot way.**
+
+---
+
 ## Why MateClaw
 
-| | MateClaw | Claude Code | Cursor | Windsurf |
-|:---|:---:|:---:|:---:|:---:|
-| **Multi-model failover** | Auto-route across vendors | Anthropic only | One model | One model |
-| **Knowledge digestion** | Wiki with citations | CLAUDE.md only | Code index | — |
-| **Multi-channel presence** | 7 IM + Web + Desktop + Widget | 3 IM preview | IDE only | IDE only |
-| **Admin dashboard** | Full web console | Enterprise tier | — | — |
-| **Price** | **Free · Apache 2.0** | $20–200/mo | $0–200/mo | $0–200/mo |
+| | MateClaw | [OpenClaw](https://github.com/openclaw/openclaw) | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | [Claude Code](https://github.com/anthropics/claude-code) | [Cursor](https://cursor.com) |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| **Multi-vendor failover** | **Chain + health tracker + cooldown** | Swap providers via config | Orchestration w/ retry | Anthropic only | One model |
+| **Knowledge digestion** | **LLM Wiki + page-level citations** | Canvas + memory | Skills Hub + memory | — | Code index |
+| **Multi-user admin** | **RBAC + approval flow + audit** | Config-file first | Single-user CLI | Enterprise tier | Teams plan |
+| **Surfaces** | Web admin + Desktop + Widget + SDK + 6 IM | 25+ chat channels | 15+ channels (CLI-led) | 3 IM preview | IDE only |
+| **Stack** | **Java (Spring Boot)** | TypeScript | Python | TypeScript | Electron/TS |
+| **License / Price** | **Apache 2.0 · Free** | MIT · Free | MIT · Free | Proprietary · $20–200/mo | Proprietary · $0–200/mo |
 
-The comparison table everyone writes is the one that flatters themselves. This is the one that matters: in a category crowded with coding assistants, MateClaw's bet is **generality** — an AI operating system, not an IDE plugin.
+**OpenClaw and Hermes Agent are excellent personal AI platforms** — pick either if you're running one user on one laptop, building your own agent from CLI, and treating everything as config files to hand-tune. Both have bigger communities than MateClaw today.
+
+**MateClaw is the version built for teams.** RBAC per agent, per model, per tool. An approval flow that pauses risky actions for review. Full audit trail. A web admin dashboard where one operator manages 50 agents across 14 vendors. Spring Boot inside — drop-in for any Java shop already running production services.
+
+Same "whole widget" philosophy. Different center of gravity.
 
 ---
 
@@ -149,15 +166,14 @@ Download from [GitHub Releases](https://github.com/matevip/mateclaw/releases). B
 mateclaw/
 ├── mateclaw-server/        Spring Boot 3.5 backend (Spring AI Alibaba, StateGraph runtime)
 ├── mateclaw-ui/            Vue 3 + TypeScript admin SPA (built into the server JAR)
-├── mateclaw-desktop/       Electron app with bundled JRE 21
 ├── mateclaw-webchat/       Embeddable chat widget (UMD / ES bundles)
 ├── mateclaw-plugin-api/    Java SDK for third-party capability plugins
 ├── mateclaw-plugin-sample/ Reference plugin implementation
-├── matevip-sites/          Marketing site + VitePress docs (pnpm workspace)
-├── deploy/                 Production deployment configs
 ├── docker-compose.yml
 └── .env.example
 ```
+
+Desktop binaries ship via [GitHub Releases](https://github.com/matevip/mateclaw/releases) with a bundled JRE 21 — no Java install needed.
 
 ## Tech stack
 
