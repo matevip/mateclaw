@@ -435,19 +435,20 @@ public class ConversationWindowManager {
             String systemPrompt;
             String userPrompt;
 
+            // System prompt always carries the budget directive; both branches
+            // must replace the placeholder. The previous code applied the
+            // replace only on the first-compression branch, so iterative-mode
+            // calls leaked the literal "{summary_budget}" string to the LLM.
+            systemPrompt = STRUCTURED_SUMMARY_SYSTEM
+                    .replace("{summary_budget}", String.valueOf(summaryBudget));
             if (previousSummary != null) {
-                // 迭代更新模式：旧摘要 + 新轮次
-                systemPrompt = STRUCTURED_SUMMARY_SYSTEM;
+                // Iterative update: previous summary + new turns.
                 userPrompt = STRUCTURED_SUMMARY_UPDATE
                         .replace("{previous_summary}", previousSummary)
-                        .replace("{conversation}", conversationText)
-                        .replace("{summary_budget}", String.valueOf(summaryBudget));
+                        .replace("{conversation}", conversationText);
                 log.debug("[ConversationWindow] 使用迭代更新模式（第 {} 次压缩）, conv={}",
                         compressionCounts.getOrDefault(conversationId, 0) + 1, conversationId);
             } else {
-                // 首次压缩
-                systemPrompt = STRUCTURED_SUMMARY_SYSTEM
-                        .replace("{summary_budget}", String.valueOf(summaryBudget));
                 userPrompt = STRUCTURED_SUMMARY_USER
                         .replace("{conversation}", conversationText);
                 log.debug("[ConversationWindow] 使用首次压缩模式, conv={}", conversationId);

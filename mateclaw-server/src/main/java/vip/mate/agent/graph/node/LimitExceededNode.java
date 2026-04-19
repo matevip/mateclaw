@@ -13,6 +13,7 @@ import vip.mate.agent.graph.observation.ObservationProcessor;
 import vip.mate.agent.graph.state.FinishReason;
 import vip.mate.agent.graph.state.MateClawStateAccessor;
 import vip.mate.agent.prompt.PromptLoader;
+import vip.mate.i18n.I18nService;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -44,20 +45,28 @@ public class LimitExceededNode implements NodeAction {
     private final ChatModel chatModel;
     private final ObservationProcessor observationProcessor;
     private final NodeStreamingChatHelper streamingHelper;
+    /** Optional i18n service; nullable so legacy/tests without Spring context still work. */
+    private final I18nService i18n;
 
     public LimitExceededNode(ChatModel chatModel, ObservationProcessor observationProcessor,
                              NodeStreamingChatHelper streamingHelper) {
+        this(chatModel, observationProcessor, streamingHelper, null);
+    }
+
+    public LimitExceededNode(ChatModel chatModel, ObservationProcessor observationProcessor,
+                             NodeStreamingChatHelper streamingHelper, I18nService i18n) {
         this.chatModel = chatModel;
         this.observationProcessor = observationProcessor;
         this.streamingHelper = streamingHelper;
+        this.i18n = i18n;
     }
 
     /**
-     * @deprecated Use constructor with NodeStreamingChatHelper
+     * @deprecated use the constructor with {@link NodeStreamingChatHelper} (and optionally {@link I18nService})
      */
     @Deprecated
     public LimitExceededNode(ChatModel chatModel, ObservationProcessor observationProcessor) {
-        this(chatModel, observationProcessor, null);
+        this(chatModel, observationProcessor, null, null);
     }
 
     @Override
@@ -88,7 +97,7 @@ public class LimitExceededNode implements NodeAction {
             contextForLLM = observationProcessor.truncate(sb.toString(),
                     observationProcessor.getMaxTotalObservationChars());
         } else {
-            contextForLLM = "（尚未收集到工具调用结果）";
+            contextForLLM = i18n != null ? i18n.msg("agent.limit_exceeded.empty_context") : "(no tool results)";
         }
 
         // 构建 prompt
@@ -110,8 +119,11 @@ public class LimitExceededNode implements NodeAction {
         log.info("[LimitExceededNode] Generated limit-exceeded final answer: {} chars",
                 finalDraft != null ? finalDraft.length() : 0);
 
+        String fallbackMsg = i18n != null
+                ? i18n.msg("agent.limit_exceeded.fallback")
+                : "Sorry, the maximum reasoning steps were reached.";
         return MateClawStateAccessor.output()
-                .finalAnswerDraft(finalDraft != null ? finalDraft : "抱歉，已达到最大推理步数，未能获得完整结果。")
+                .finalAnswerDraft(finalDraft != null ? finalDraft : fallbackMsg)
                 .currentThinking(result.thinking())
                 .limitExceeded(true)
                 .contentStreamed(true)

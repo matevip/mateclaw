@@ -1,14 +1,14 @@
-## 研究主题
+## 研究主题 / Topic
 {topic}
 
-## 已写好的段落
+## 已写好的段落 / Drafted sections
 
 {sections}
 
-## 使用过的材料
+## 使用过的材料 / Materials used
 
 {materials_ref}
 
 ---
 
-请组装为一份 Markdown 格式的综合研究报告。
+请组装为一份 Markdown 格式的综合研究报告（语言跟随 topic）。

@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import vip.mate.agent.AgentGraphBuilder;
 import vip.mate.agent.prompt.PromptLoader;
 import vip.mate.channel.web.ChatStreamTracker;
+import vip.mate.i18n.I18nService;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.wiki.model.WikiRawMaterialEntity;
@@ -50,6 +51,7 @@ public class WikiResearchService {
     private final ModelConfigService modelConfigService;
     private final AgentGraphBuilder agentGraphBuilder;
     private final ChatStreamTracker streamTracker;
+    private final I18nService i18n;
 
     private static final RetryTemplate NO_RETRY = RetryTemplate.builder().maxAttempts(1).build();
     private static final ExecutorService EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
@@ -73,8 +75,8 @@ public class WikiResearchService {
             // Stage 1: Plan
             List<SubQuestion> questions = planStage(topic);
             if (questions.isEmpty()) {
-                broadcast(sessionId, "research.error", Map.of("message", "主题无法分解为可研究的子问题"));
-                return new ResearchResult(topic, List.of(), "无法为该主题生成研究计划。");
+                broadcast(sessionId, "research.error", Map.of("message", i18n.msg("research.broadcast.no_plan")));
+                return new ResearchResult(topic, List.of(), i18n.msg("research.fallback.no_plan"));
             }
             broadcast(sessionId, "research.plan", Map.of(
                     "questions", questions.stream().map(q -> Map.of("question", q.question, "intent", q.intent)).toList()
@@ -83,8 +85,8 @@ public class WikiResearchService {
             // Stage 2: Retrieve + Draft (并行)
             List<Section> sections = draftStage(kbId, questions, topK, sessionId);
             if (sections.stream().allMatch(s -> s.content == null || s.content.isBlank())) {
-                broadcast(sessionId, "research.error", Map.of("message", "所有子问题都未能起草出内容"));
-                return new ResearchResult(topic, sections, "没有足够的材料回答该主题。");
+                broadcast(sessionId, "research.error", Map.of("message", i18n.msg("research.broadcast.draft_all_empty")));
+                return new ResearchResult(topic, sections, i18n.msg("research.fallback.no_materials"));
             }
 
             // Stage 3: Compose
@@ -97,8 +99,8 @@ public class WikiResearchService {
             return new ResearchResult(topic, sections, report);
         } catch (Exception e) {
             log.error("[Research] Failed: kbId={}, topic={}: {}", kbId, topic, e.getMessage(), e);
-            broadcast(sessionId, "research.error", Map.of("message", e.getMessage() != null ? e.getMessage() : "研究失败"));
-            return new ResearchResult(topic, List.of(), "研究过程失败: " + e.getMessage());
+            broadcast(sessionId, "research.error", Map.of("message", e.getMessage() != null ? e.getMessage() : i18n.msg("research.broadcast.failed")));
+            return new ResearchResult(topic, List.of(), i18n.msg("research.fallback.failed", e.getMessage()));
         }
     }
 
@@ -174,10 +176,13 @@ public class WikiResearchService {
         List<HybridRetriever.ChunkHit> hits = hybridRetriever.searchChunks(kbId, q.question, topK);
 
         if (hits.isEmpty()) {
-            return new Section(q.question, "现有材料中未找到与该问题相关的内容。", List.of());
+            return new Section(q.question, i18n.msg("research.fallback.no_materials_for_question"), List.of());
         }
 
-        // 装配材料文本（带编号）
+        // Assemble material snippets with neutral [M1]/[M2]... markers so the
+        // LLM is not biased toward any output language. The same `[Mn]` token
+        // is the citation format the draft prompt asks for, so the model can
+        // refer to materials without translation.
         StringBuilder materials = new StringBuilder();
         List<MaterialRef> refs = new ArrayList<>();
         Map<Long, String> rawTitleCache = new HashMap<>();
@@ -188,8 +193,7 @@ public class WikiResearchService {
                 WikiRawMaterialEntity raw = rawService.getById(id);
                 return raw != null ? raw.getTitle() : "unknown";
             });
-            materials.append("### 材料 ").append(i + 1)
-                    .append("（来自《").append(rawTitle).append("》）\n")
+            materials.append("### [M").append(i + 1).append("] Source: ").append(rawTitle).append("\n")
                     .append(hit.snippet())
                     .append("\n\n");
             refs.add(new MaterialRef(i + 1, hit.chunkId(), hit.rawId(), rawTitle));
@@ -203,7 +207,7 @@ public class WikiResearchService {
 
         String content = callLlm(systemPrompt, userPrompt, "draft: " + q.question);
         if (content == null || content.isBlank()) {
-            content = "现有材料不足以回答该子问题。";
+            content = i18n.msg("research.fallback.draft_empty");
         }
 
         return new Section(q.question, content, refs);
@@ -217,7 +221,9 @@ public class WikiResearchService {
 
         for (int i = 0; i < sections.size(); i++) {
             Section s = sections.get(i);
-            sectionsText.append("### 子问题 ").append(i + 1).append("：").append(s.question).append("\n");
+            // Use neutral [Q1]/[Q2] tokens — keeps prompt and (in compose-failure
+            // fallback) the report itself language-independent.
+            sectionsText.append("### [Q").append(i + 1).append("] ").append(s.question).append("\n");
             sectionsText.append(s.content).append("\n\n");
             for (MaterialRef ref : s.materialRefs) {
                 usedMaterials.putIfAbsent(ref.index, ref.rawTitle);
@@ -226,7 +232,7 @@ public class WikiResearchService {
 
         StringBuilder materialsRef = new StringBuilder();
         usedMaterials.forEach((idx, title) ->
-                materialsRef.append("- 材料 ").append(idx).append("：").append(title).append("\n"));
+                materialsRef.append("- [M").append(idx).append("] ").append(title).append("\n"));
 
         String systemPrompt = PromptLoader.loadPrompt("research/compose-system");
         String userPrompt = PromptLoader.loadPrompt("research/compose-user")

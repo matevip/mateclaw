@@ -129,6 +129,7 @@ public class AgentGraphBuilder {
     private final vip.mate.llm.cache.LlmCacheMetricsAggregator llmCacheMetricsAggregator;
     private final vip.mate.agent.graph.executor.ToolResultStorage toolResultStorage;
     private final vip.mate.tool.ToolConcurrencyRegistry toolConcurrencyRegistry;
+    private final vip.mate.i18n.I18nService i18nService;
 
     /**
      * 根据 AgentEntity 构建完整的 Agent 实例
@@ -354,7 +355,7 @@ public class AgentGraphBuilder {
             ObservationProcessor observationProcessor = new ObservationProcessor(graphObservationProperties);
             ObservationNode observationNode = new ObservationNode(observationProcessor, streamTracker);
             SummarizingNode summarizingNode = new SummarizingNode(chatModel, streamingHelper, streamTracker);
-            LimitExceededNode limitExceededNode = new LimitExceededNode(chatModel, observationProcessor, streamingHelper);
+            LimitExceededNode limitExceededNode = new LimitExceededNode(chatModel, observationProcessor, streamingHelper, i18nService);
             FinalAnswerNode finalAnswerNode = new FinalAnswerNode();
 
             KeyStrategyFactory keyStrategyFactory = KeyStrategy.builder()

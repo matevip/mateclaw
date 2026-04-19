@@ -46,17 +46,8 @@ public class I18nService {
     }
 
     /**
-     * 获取当前语言的 locale 标识（用于 PromptLoader 等需要 locale 字符串的场景）
-     *
-     * @return "zh" 或 "en"
-     */
-    public String currentLocaleTag() {
-        String lang = settingService.getLanguage();
-        return lang.startsWith("en") ? "en" : "zh";
-    }
-
-    /**
-     * 清除缓存的 Locale（语言切换时调用）
+     * Clear the cached Locale. Call after a language switch so that the next
+     * {@link #msg(String, Object...)} call re-reads {@code SystemSettingService.getLanguage()}.
      */
     public void clearLocaleCache() {
         cachedLocale = null;
