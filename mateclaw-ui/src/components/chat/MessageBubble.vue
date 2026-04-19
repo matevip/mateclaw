@@ -124,8 +124,16 @@
           class="msg-content"
           :class="{ 'with-cursor': showCursor }"
         >
-          <div class="markdown-body" v-html="renderedContent"></div>
-          <TypingCursor v-if="showCursor" :typing="isGenerating" />
+          <!--
+            User-authored messages render as plain text (no markdown) and
+            auto-collapse beyond 8 lines. Assistant content goes through the
+            normal markdown pipeline.
+          -->
+          <UserMessageContent v-if="role === 'user'" :content="displayContent" />
+          <template v-else>
+            <div class="markdown-body" v-html="renderedContent"></div>
+            <TypingCursor v-if="showCursor" :typing="isGenerating" />
+          </template>
         </div>
 
 
@@ -272,6 +280,7 @@ import ToolCallSegment from './ToolCallSegment.vue'
 import ThinkingSegment from './ThinkingSegment.vue'
 import ContentSegment from './ContentSegment.vue'
 import PlanStepsPanel from './PlanStepsPanel.vue'
+import UserMessageContent from './UserMessageContent.vue'
 import type { BrowserAction } from './BrowserTimeline.vue'
 import type { Message, MessageSegment, ChatAttachment, ToolCallMeta, PlanMeta } from '@/types'
 import type { ChatErrorInfo } from '@/types/chatError'

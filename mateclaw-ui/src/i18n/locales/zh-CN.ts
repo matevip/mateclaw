@@ -53,6 +53,8 @@ export default {
     thinkingInProgress: '思考中...',
     stopped: '已停止生成',
     interrupted: '已中断',
+    expandLines: '展开（还有 {hidden} 行）',
+    collapse: '收起',
     failed: '生成失败',
     compressionSummary: '之前的对话已整理为摘要',
     compressionWithCount: '之前的 {count} 条对话已整理为摘要',

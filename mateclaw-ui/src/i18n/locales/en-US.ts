@@ -53,6 +53,8 @@ export default {
     thinkingInProgress: 'Thinking...',
     stopped: 'Generation stopped',
     interrupted: 'Interrupted',
+    expandLines: 'Show more ({hidden} more lines)',
+    collapse: 'Show less',
     failed: 'Generation failed',
     compressionSummary: 'Previous conversations summarized',
     compressionWithCount: '{count} previous messages summarized',
