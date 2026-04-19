@@ -6,6 +6,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestClient;
 import vip.mate.llm.failover.ProbeResult;
 import vip.mate.llm.failover.ProviderProbeStrategy;
@@ -52,9 +54,20 @@ public class DashScopeListModelsProbe implements ProviderProbeStrategy {
 
             String body = client.get().uri("/v1/models").retrieve().body(String.class);
             long latency = System.currentTimeMillis() - start;
-            if (body == null || body.isBlank()) {
-                return ProbeResult.fail(latency, "empty body from /v1/models");
+            return ProbeResult.ok(latency);
+        } catch (HttpClientErrorException e) {
+            long latency = System.currentTimeMillis() - start;
+            int status = e.getStatusCode().value();
+            // Real auth failure → HARD remove. Other 4xx are inconclusive: fail-open.
+            if (status == 401 || status == 403) {
+                return ProbeResult.fail(latency, "auth failed (" + status + ")");
             }
+            log.info("[Probe] dashscope /v1/models returned {} — fail-open (in-pool)", status);
+            return ProbeResult.ok(latency);
+        } catch (HttpServerErrorException e) {
+            long latency = System.currentTimeMillis() - start;
+            log.info("[Probe] dashscope /v1/models returned {} — fail-open (5xx may be transient)",
+                    e.getStatusCode().value());
             return ProbeResult.ok(latency);
         } catch (Exception e) {
             long latency = System.currentTimeMillis() - start;
