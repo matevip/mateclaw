@@ -237,7 +237,7 @@ public class AgentGraphBuilder {
         ChatModel chatModel = buildRuntimeChatModel(runtimeModel);
         ChatClient chatClient = ChatClient.create(chatModel);
         String reasoningEffort = resolveReasoningEffortForModel(runtimeModel);
-        CompiledGraph compiledGraph = buildReActGraph(toolSet, chatModel, maxIter, reasoningEffort);
+        CompiledGraph compiledGraph = buildReActGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel);
         return new StateGraphReActAgent(chatClient, conversationService, compiledGraph,
                 chatModel, conversationWindowManager);
     }
@@ -246,15 +246,20 @@ public class AgentGraphBuilder {
         ChatModel chatModel = buildRuntimeChatModel(runtimeModel);
         ChatClient chatClient = ChatClient.create(chatModel);
         String reasoningEffort = resolveReasoningEffortForModel(runtimeModel);
-        CompiledGraph graph = buildPlanExecuteGraph(toolSet, chatModel, maxIter, reasoningEffort);
+        CompiledGraph graph = buildPlanExecuteGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel);
         return new StateGraphPlanExecuteAgent(chatClient, conversationService, graph, planningService,
                 chatModel, conversationWindowManager);
     }
 
     CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations, String reasoningEffort) {
+        return buildPlanExecuteGraph(toolSet, chatModel, maxIterations, reasoningEffort, null);
+    }
+
+    CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations,
+                                         String reasoningEffort, ModelConfigEntity primaryModelConfig) {
         try {
-            ChatModel fallbackModel = buildFallbackModel(chatModel);
-            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackModel, llmCacheMetricsAggregator);
+            List<ChatModel> fallbackChain = buildFallbackChain(primaryModelConfig);
+            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackChain, llmCacheMetricsAggregator);
             ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
             PlanGenerationNode planGenerationNode = new PlanGenerationNode(chatModel, planningService, streamingHelper, conversationWindowManager, toolSet);
             StepExecutionNode stepExecutionNode = new StepExecutionNode(chatModel, toolSet, executor, planningService, streamTracker, reasoningEffort, streamingHelper, conversationWindowManager);
@@ -346,9 +351,14 @@ public class AgentGraphBuilder {
     }
 
     CompiledGraph buildReActGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations, String reasoningEffort) {
+        return buildReActGraph(toolSet, chatModel, maxIterations, reasoningEffort, null);
+    }
+
+    CompiledGraph buildReActGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations,
+                                   String reasoningEffort, ModelConfigEntity primaryModelConfig) {
         try {
-            ChatModel fallbackModel = buildFallbackModel(chatModel);
-            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackModel, llmCacheMetricsAggregator);
+            List<ChatModel> fallbackChain = buildFallbackChain(primaryModelConfig);
+            NodeStreamingChatHelper streamingHelper = new NodeStreamingChatHelper(streamTracker, fallbackChain, llmCacheMetricsAggregator);
             ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
             ReasoningNode reasoningNode = new ReasoningNode(chatModel, toolSet, reasoningEffort, streamingHelper, conversationWindowManager, streamTracker, 0, wikiContextService);
             ActionNode actionNode = new ActionNode(executor, streamTracker);
@@ -530,9 +540,84 @@ public class AgentGraphBuilder {
     }
 
     /**
-     * 构建 fallback 模型：优先使用 UI 配置的 DashScope provider key 构建新实例，
-     * 避免直接依赖 Spring 注入的 dashScopeChatModel bean（它只读环境变量）。
+     * build the full multi-provider failover chain for a primary
+     * model. Providers are read from {@code mate_model_provider} ordered by
+     * {@code fallback_priority ASC} (positive values only), each resolved to
+     * its default {@link ModelConfigEntity} and turned into a {@link ChatModel}
+     * via {@link #buildRuntimeChatModel(ModelConfigEntity, RetryTemplate)}.
+     *
+     * <p>Providers whose API key / base URL is missing (build throws) are
+     * <b>silently skipped</b> with a warning — fallback should never break
+     * the primary call path. The returned list preserves chain order; the
+     * streaming helper tries entries in order until one succeeds.</p>
+     *
+     * <p>The primary model is excluded from the chain when its provider +
+     * model name matches a chain entry. Previously only reference equality
+     * was checked, which meant a DashScope-primary deployment ended up with
+     * {@code null} fallback — the case this design targets.</p>
+     *
+     * @param primaryModelConfig the {@code ModelConfigEntity} used to build
+     *     the primary model; used to identity-filter the chain
+     * @return ordered, possibly-empty list of fallback {@link ChatModel}s
      */
+    List<ChatModel> buildFallbackChain(ModelConfigEntity primaryModelConfig) {
+        List<ModelProviderEntity> providers;
+        try {
+            providers = modelProviderService.listFallbackChain();
+        } catch (Exception e) {
+            log.warn("[LlmFailover] failed to load fallback chain from DB: {}; running without fallback",
+                    e.getMessage());
+            return List.of();
+        }
+        if (providers == null || providers.isEmpty()) {
+            return List.of();
+        }
+        String primaryProviderId = primaryModelConfig != null ? primaryModelConfig.getProvider() : null;
+        String primaryModelName = primaryModelConfig != null ? primaryModelConfig.getModelName() : null;
+
+        List<ChatModel> chain = new ArrayList<>();
+        for (ModelProviderEntity p : providers) {
+            ModelConfigEntity fallbackConfig;
+            try {
+                fallbackConfig = modelConfigService.getDefaultModelByProvider(p.getProviderId());
+            } catch (Exception e) {
+                log.warn("[LlmFailover] skipping provider {} — cannot resolve default model: {}",
+                        p.getProviderId(), e.getMessage());
+                continue;
+            }
+            if (fallbackConfig == null) {
+                log.debug("[LlmFailover] skipping provider {} — no default model configured",
+                        p.getProviderId());
+                continue;
+            }
+            if (primaryProviderId != null
+                    && primaryProviderId.equals(p.getProviderId())
+                    && fallbackConfig.getModelName() != null
+                    && fallbackConfig.getModelName().equals(primaryModelName)) {
+                log.debug("[LlmFailover] skipping primary {}/{} in fallback chain",
+                        primaryProviderId, primaryModelName);
+                continue;
+            }
+            try {
+                ChatModel m = buildRuntimeChatModel(fallbackConfig, RetryTemplate.builder().maxAttempts(1).build());
+                chain.add(m);
+                log.info("[LlmFailover] chain[{}] = {}/{} (priority={})",
+                        chain.size(), p.getProviderId(), fallbackConfig.getModelName(),
+                        p.getFallbackPriority());
+            } catch (Exception e) {
+                log.warn("[LlmFailover] skipping provider {} — chat model build failed: {}",
+                        p.getProviderId(), e.getMessage());
+            }
+        }
+        return chain;
+    }
+
+    /**
+     * @deprecated use {@link #buildFallbackChain(ModelConfigEntity)} — the
+     *     single-fallback variant cannot represent an ordered chain and only
+     *     worked when the primary was a non-DashScope provider.
+     */
+    @Deprecated
     ChatModel buildFallbackModel(ChatModel primaryModel) {
         try {
             ModelProviderEntity dashScopeProvider = modelProviderService.getProviderConfig("dashscope");

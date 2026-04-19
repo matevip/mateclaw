@@ -44,24 +44,43 @@ public class NodeStreamingChatHelper {
 
     private final ChatStreamTracker streamTracker;
 
-    /** Fallback model, used after consecutive failures of the primary model. */
-    private final ChatModel fallbackModel;
+    /**
+     * Ordered fallback chain tried after the primary model exhausts retries.
+     * Each entry is attempted once (no retry); the first successful response
+     * wins. Empty list disables fallover entirely.
+     */
+    private final List<ChatModel> fallbackChain;
 
     /** Optional cache-metrics aggregator; {@code null} in tests or when the bean is absent. */
     private final vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics;
 
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker) {
-        this(streamTracker, null, null);
+        this(streamTracker, List.of(), null);
     }
 
+    /**
+     * @deprecated use the list-based constructor — a single fallback cannot
+     *     express the ordered multi-provider chain
+     */
+    @Deprecated
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker, ChatModel fallbackModel) {
-        this(streamTracker, fallbackModel, null);
+        this(streamTracker, fallbackModel == null ? List.of() : List.of(fallbackModel), null);
     }
 
+    /**
+     * @deprecated use the list-based constructor — a single fallback cannot
+     *     express the ordered multi-provider chain
+     */
+    @Deprecated
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker, ChatModel fallbackModel,
                                    vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics) {
+        this(streamTracker, fallbackModel == null ? List.of() : List.of(fallbackModel), cacheMetrics);
+    }
+
+    public NodeStreamingChatHelper(ChatStreamTracker streamTracker, List<ChatModel> fallbackChain,
+                                   vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics) {
         this.streamTracker = streamTracker;
-        this.fallbackModel = fallbackModel;
+        this.fallbackChain = fallbackChain == null ? List.of() : List.copyOf(fallbackChain);
         this.cacheMetrics = cacheMetrics;
     }
 
@@ -233,6 +252,13 @@ public class NodeStreamingChatHelper {
                 if (lastResult.errorType() == ErrorType.THINKING_BLOCK_ERROR) {
                     return lastResult; // 已经重试过了
                 }
+                // EMPTY_RESPONSE — break the primary-retry loop and fall through to
+                // the fallback chain. Retrying the same model that returned nothing is rarely
+                // productive; a different provider has a better chance of succeeding.
+                if (lastResult.errorType() == ErrorType.EMPTY_RESPONSE) {
+                    log.warn("[{}] Primary returned empty response — skipping same-model retries, handing off to fallback chain", phase);
+                    break;
+                }
                 // 成功
                 if (lastResult.errorMessage() == null || lastResult.errorType() == ErrorType.NONE) {
                     return lastResult;
@@ -246,18 +272,32 @@ public class NodeStreamingChatHelper {
             // lastResult == null 表示需要重试
         }
 
-        // 主模型耗尽重试 — 尝试 fallback model
-        if (fallbackModel != null && fallbackModel != chatModel) {
-            log.warn("[{}] Primary model exhausted retries, switching to fallback model for conversation {}",
-                    phase, conversationId);
+        // Primary exhausted retries — walk the fallback chain in priority order.
+        // Each fallback gets a single shot (no retry); first successful result wins.
+        // Same-instance entries (e.g., primary accidentally included in the chain)
+        // are skipped so we don't re-try the exact model that just failed.
+        for (int i = 0; i < fallbackChain.size(); i++) {
+            ChatModel fallback = fallbackChain.get(i);
+            if (fallback == chatModel) continue;
+            log.warn("[{}] Primary exhausted, trying fallback {}/{} ({}) for conversation {}",
+                    phase, i + 1, fallbackChain.size(),
+                    fallback.getClass().getSimpleName(), conversationId);
             if (broadcast) {
                 broadcastDelta(conversationId, "warning",
-                        buildDeltaJson("主模型不可用，正在切换到备选模型..."));
+                        buildDeltaJson("主模型不可用，正在切换到备选模型 (" + (i + 1) + "/" + fallbackChain.size() + ")..."));
             }
-            StreamResult fallbackResult = doStreamCall(fallbackModel, prompt, conversationId,
-                    phase + "_fallback", broadcast, 0);
-            if (fallbackResult != null) {
+            StreamResult fallbackResult = doStreamCall(fallback, prompt, conversationId,
+                    phase + "_fallback_" + (i + 1), broadcast, 0);
+            // Accept only fully successful fallbacks. Non-successful results (auth
+            // error, client error, still-rate-limited) propagate to the next
+            // fallback instead of being surfaced as the final result.
+            if (fallbackResult != null
+                    && fallbackResult.errorType() == ErrorType.NONE
+                    && fallbackResult.errorMessage() == null) {
                 return fallbackResult;
+            }
+            if (fallbackResult != null) {
+                lastResult = fallbackResult; // remember most recent to report if the whole chain fails
             }
         }
 
@@ -274,7 +314,7 @@ public class NodeStreamingChatHelper {
                                        boolean broadcast, int attempt) {
         if (attempt > 0) {
             long delay = Math.min(BACKOFF_BASE_MS * (1L << (attempt - 1)), BACKOFF_CAP_MS);
-            // 加入 jitter 防止雷群效应（Hermes 风格）
+            // 加入 jitter 防止雷群效应（a comparable reference runtime 风格）
             delay += ThreadLocalRandom.current().nextLong(0, Math.max(1, delay / 2));
             delay = Math.min(delay, BACKOFF_CAP_MS);
             log.warn("[{}] Retry attempt {}/{} after {}ms for conversation {}",
@@ -496,6 +536,22 @@ public class NodeStreamingChatHelper {
                     phase, conversationId);
             // warning 已在 dispose 时广播，无需重复
         }
+
+        // guard against silent empty responses. Some providers return
+        // HTTP 200 with an empty body under soft-failure conditions (rate-limit
+        // capacity, context filter, upstream overload). Treat this as a failure
+        // signal so streamCallInternal can hand off to the fallback chain.
+        // Only fire when the primary wasn't truncated by our own repetition
+        // detector (which deliberately produces short content) and when there
+        // are no tool calls (tool-only responses are legitimately empty-text).
+        if (!truncatedByRepetition
+                && contentAccum.length() == 0
+                && thinkingAccum.length() == 0
+                && toolCallAccumulators.isEmpty()) {
+            log.warn("[{}] LLM returned empty response (no content, no thinking, no tool calls) — marking as EMPTY_RESPONSE for fallback", phase);
+            return buildErrorResultWithType("LLM 返回空响应", conversationId, phase, ErrorType.EMPTY_RESPONSE);
+        }
+
         return assembleResult(contentAccum, thinkingAccum, toolCallAccumulators,
                 promptTokens.get(), completionTokens.get(),
                 cacheReadTokens.get(), cacheWriteTokens.get(), phase,
@@ -750,6 +806,13 @@ public class NodeStreamingChatHelper {
         CLIENT_ERROR,
         /** Thinking 块错误（旧消息中的 thinking block 不可修改）— 可剥离后单次重试 */
         THINKING_BLOCK_ERROR,
+        /**
+         * LLM returned no content, no thinking, and no tool calls.
+         * Treated as a soft failure — skip same-model retries and hand off to
+         * the fallback chain directly. Typical cause: upstream rate-limit
+         * rejection that comes back as HTTP 200 with empty body.
+         */
+        EMPTY_RESPONSE,
         /** 其他未知错误 */
         UNKNOWN
     }

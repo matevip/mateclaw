@@ -49,6 +49,13 @@ public class ModelProviderEntity {
 
     private String oauthAccountId;
 
+    /**
+     * position of this provider in the fallback chain.
+     * {@code 0} (default) means "not in the chain"; positive values are tried
+     * in ascending order after the primary model exhausts its retries.
+     */
+    private Integer fallbackPriority;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

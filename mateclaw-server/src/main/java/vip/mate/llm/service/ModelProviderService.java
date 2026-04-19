@@ -143,6 +143,20 @@ public class ModelProviderService {
         return getProvider(providerId);
     }
 
+    /**
+     * ordered list of providers that participate in the multi-model
+     * failover chain. Filters by {@code fallback_priority > 0} and sorts
+     * ascending, so priority 1 is tried first after the primary model
+     * exhausts retries. An empty list disables fallover entirely.
+     */
+    public List<ModelProviderEntity> listFallbackChain() {
+        com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<ModelProviderEntity> qw =
+                new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
+        qw.gt("fallback_priority", 0);
+        qw.orderByAsc("fallback_priority");
+        return modelProviderMapper.selectList(qw);
+    }
+
     public boolean isProviderConfigured(String providerId) {
         return isProviderConfigured(getProvider(providerId));
     }

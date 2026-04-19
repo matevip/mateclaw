@@ -151,7 +151,7 @@ mate:
         per-category:
           shell: 120
           web: 30
-    # RFC-008 Phase 3: tool-result three-layer budget (per-result spill + per-turn aggregate budget).
+    # RFC-008 tool-result three-layer budget (per-result spill + per-turn aggregate budget).
     # Layer 1 (per-tool cap) lives inside individual tools; Layer 2 spills oversized
     # single results to disk; Layer 3 enforces an aggregate cap on the combined
     # response size of one tool turn. The full output is preserved on disk and
