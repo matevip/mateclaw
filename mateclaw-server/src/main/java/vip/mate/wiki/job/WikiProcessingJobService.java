@@ -95,6 +95,15 @@ public class WikiProcessingJobService {
         } else if (newStage == WikiJobStage.COMPLETED) {
             job.setFinishedAt(LocalDateTime.now());
             job.setStatus(WikiJobStatus.COMPLETED.name().toLowerCase());
+        } else if (newStage == WikiJobStage.FAILED) {
+            job.setFinishedAt(LocalDateTime.now());
+            job.setStatus(WikiJobStatus.FAILED.name().toLowerCase());
+        } else if (newStage == WikiJobStage.PARTIAL) {
+            job.setFinishedAt(LocalDateTime.now());
+            job.setStatus(WikiJobStatus.PARTIAL.name().toLowerCase());
+        } else if (!newStage.isTerminal()) {
+            // Non-terminal intermediate stage: mark as running
+            job.setStatus(WikiJobStatus.RUNNING.name().toLowerCase());
         }
         jobMapper.updateById(job);
         return job;

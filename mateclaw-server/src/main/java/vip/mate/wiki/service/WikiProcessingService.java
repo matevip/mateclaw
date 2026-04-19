@@ -137,10 +137,13 @@ public class WikiProcessingService {
 
         kbService.updateStatus(kb.getId(), "processing");
 
-        // RFC-030 §9.1: create a processing job record before starting
+        // RFC-030 §9.1: create a processing job record and track its ID for stage transitions
+        Long jobId = null;
         if (wikiJobService != null) {
             try {
-                wikiJobService.createHeavyIngest(kb.getId(), rawId);
+                var job = wikiJobService.createHeavyIngest(kb.getId(), rawId);
+                jobId = job.getId();
+                wikiJobService.transition(jobId, vip.mate.wiki.job.WikiJobStage.ROUTING);
             } catch (Exception e) {
                 log.warn("[Wiki] Failed to create heavy ingest job record for raw={}: {}", rawId, e.getMessage());
             }
@@ -181,6 +184,11 @@ public class WikiProcessingService {
 
             // Phase 3: 构建已有页面索引（一次构建，所有 chunk 共用）
             String existingPagesIndex = buildExistingPagesIndex(kb.getId());
+
+            // Transition job to phase_a (chunk processing begins)
+            if (wikiJobService != null && jobId != null) {
+                try { wikiJobService.transition(jobId, vip.mate.wiki.job.WikiJobStage.PHASE_A_RUNNING); } catch (Exception ignored) {}
+            }
 
             // Phase 3: LLM 消化
             // result[0] = totalPages, result[1] = failedChunks, result[2] = totalChunks
@@ -256,6 +264,18 @@ public class WikiProcessingService {
                                 "kbPageCount", pageCount));
             }
 
+            // Transition job to terminal stage
+            if (wikiJobService != null && jobId != null) {
+                try {
+                    var terminalStage = switch (finalStatus) {
+                        case "failed" -> vip.mate.wiki.job.WikiJobStage.FAILED;
+                        case "partial" -> vip.mate.wiki.job.WikiJobStage.PARTIAL;
+                        default -> vip.mate.wiki.job.WikiJobStage.COMPLETED;
+                    };
+                    wikiJobService.transition(jobId, terminalStage);
+                } catch (Exception ignored) {}
+            }
+
             log.info("[Wiki] Processing completed for raw={}, kbId={}, generatedPages={}, totalPages={}",
                     rawId, kb.getId(), totalPages, pageCount);
 
@@ -282,6 +302,10 @@ public class WikiProcessingService {
             log.error("[Wiki] Processing failed for raw={}: {}", rawId, e.getMessage(), e);
             rawService.updateProcessingStatus(rawId, "failed", e.getMessage());
             kbService.updateStatus(kb.getId(), "active");
+            // Transition job to failed
+            if (wikiJobService != null && jobId != null) {
+                try { wikiJobService.transition(jobId, vip.mate.wiki.job.WikiJobStage.FAILED); } catch (Exception ignored) {}
+            }
             // RFC-012 M3：广播异常终态
             progressBus.broadcast(kb.getId(), WikiProgressBus.EVENT_RAW_FAILED,
                     java.util.Map.of("rawId", rawId, "error", e.getMessage() == null ? "unknown" : e.getMessage()));

@@ -81,7 +81,25 @@ const stages = [
 ]
 
 const stageOrder = stages.map(s => s.key)
-const currentStage = computed(() => props.stage)
+
+// Map backend stage values (including intermediates/terminals not shown as dots)
+// to their logical position in the visible stage list.
+const stageMapping: Record<string, string> = {
+  phase_a_done: 'phase_b_running',  // between phase_a and phase_b → show as phase_b active
+  failed: 'completed',              // terminal → all dots done up to failure point
+  partial: 'completed',
+  cancelled: 'completed',
+}
+
+const currentStage = computed(() => {
+  const raw = props.stage
+  return stageMapping[raw] ?? raw
+})
+
+// True when backend status indicates a terminal failure (dots should not pulse)
+const isTerminalFailure = computed(() =>
+  props.status === 'failed' || props.status === 'partial' || props.status === 'cancelled'
+)
 
 function stageIndex(key: string): number {
   return stageOrder.indexOf(key)
@@ -90,13 +108,20 @@ function stageIndex(key: string): number {
 function isStageComplete(key: string): boolean {
   const cur = stageIndex(currentStage.value)
   const target = stageIndex(key)
+  if (cur < 0) return false
   return target < cur
 }
 
 function dotClass(key: string) {
   const cur = stageIndex(currentStage.value)
   const target = stageIndex(key)
-  if (props.status === 'failed' && key === currentStage.value) return 'failed'
+  if (cur < 0) return 'pending' // unknown stage → all pending
+  if (isTerminalFailure.value) {
+    // Terminal failure: all dots before the failure point are done, the failure point is failed
+    if (target < cur) return 'done'
+    if (target === cur) return 'failed'
+    return 'pending'
+  }
   if (target < cur) return 'done'
   if (target === cur) return 'active'
   return 'pending'
