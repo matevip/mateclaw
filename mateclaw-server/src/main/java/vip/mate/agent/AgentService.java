@@ -11,11 +11,16 @@ import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.exception.MateClawException;
 import vip.mate.llm.event.ModelConfigChangedEvent;
+import vip.mate.memory.MemoryProperties;
+import vip.mate.memory.lifecycle.MemoryLifecycleMediator;
+import vip.mate.memory.lifecycle.TurnContext;
 import vip.mate.memory.service.MemoryRecallTracker;
 
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Agent 业务服务
@@ -33,6 +38,8 @@ public class AgentService {
     private final AgentMapper agentMapper;
     private final AgentGraphBuilder agentGraphBuilder;
     private final MemoryRecallTracker memoryRecallTracker;
+    private final MemoryLifecycleMediator lifecycleMediator;
+    private final MemoryProperties memoryProperties;
 
     /** 运行时 Agent 实例缓存（agentId -> BaseAgent） */
     private final Map<Long, BaseAgent> agentInstances = new ConcurrentHashMap<>();
@@ -93,13 +100,16 @@ public class AgentService {
     public String chat(Long agentId, String message, String conversationId) {
         memoryRecallTracker.trackRecalls(agentId, message);
         BaseAgent agent = getOrBuildAgent(agentId);
-        return agent.chat(message, conversationId);
+        return withLifecycleSync(agentId, message, conversationId,
+                () -> agent.chat(message, conversationId));
     }
 
     public Flux<String> chatStream(Long agentId, String message, String conversationId) {
         memoryRecallTracker.trackRecalls(agentId, message);
         BaseAgent agent = getOrBuildAgent(agentId);
-        return agent.chatStream(message, conversationId);
+        return withLifecycleFlux(agentId, message, conversationId,
+                () -> agent.chatStream(message, conversationId),
+                chunk -> chunk);
     }
 
     public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId) {
@@ -130,21 +140,26 @@ public class AgentService {
         }
 
         if (agent instanceof StructuredStreamCapable capable) {
-            return capable.chatStructuredStream(message, conversationId,
-                    requesterId != null ? requesterId : "")
-                    .doFinally(signal -> ThinkingLevelHolder.clear());
+            return withLifecycleFlux(agentId, message, conversationId,
+                    () -> capable.chatStructuredStream(message, conversationId,
+                            requesterId != null ? requesterId : "")
+                            .doFinally(signal -> ThinkingLevelHolder.clear()),
+                    StreamDelta::content);
         }
 
         // 降级：不支持结构化流的 Agent，包装为纯内容流
         ThinkingLevelHolder.clear();
-        return agent.chatStream(message, conversationId)
-                .map(chunk -> new StreamDelta(chunk, null));
+        return withLifecycleFlux(agentId, message, conversationId,
+                () -> agent.chatStream(message, conversationId)
+                        .map(chunk -> new StreamDelta(chunk, null)),
+                StreamDelta::content);
     }
 
     public String execute(Long agentId, String goal, String conversationId) {
         memoryRecallTracker.trackRecalls(agentId, goal);
         BaseAgent agent = getOrBuildAgent(agentId);
-        return agent.execute(goal, conversationId);
+        return withLifecycleSync(agentId, goal, conversationId,
+                () -> agent.execute(goal, conversationId));
     }
 
     /**
@@ -160,7 +175,8 @@ public class AgentService {
                                   String toolCallPayload) {
         memoryRecallTracker.trackRecalls(agentId, userMessage);
         BaseAgent agent = getOrBuildAgent(agentId);
-        return agent.chatWithReplay(userMessage, conversationId, toolCallPayload);
+        return withLifecycleSync(agentId, userMessage, conversationId,
+                () -> agent.chatWithReplay(userMessage, conversationId, toolCallPayload));
     }
 
     /**
@@ -175,8 +191,10 @@ public class AgentService {
                                                    String toolCallPayload, String requesterId) {
         memoryRecallTracker.trackRecalls(agentId, userMessage);
         BaseAgent agent = getOrBuildAgent(agentId);
-        return agent.chatWithReplayStream(userMessage, conversationId, toolCallPayload,
-                requesterId != null ? requesterId : "");
+        return withLifecycleFlux(agentId, userMessage, conversationId,
+                () -> agent.chatWithReplayStream(userMessage, conversationId, toolCallPayload,
+                        requesterId != null ? requesterId : ""),
+                StreamDelta::content);
     }
 
     public AgentState getAgentState(Long agentId) {
@@ -206,6 +224,47 @@ public class AgentService {
     public void onToolGuardConfigChanged(vip.mate.tool.guard.service.ToolGuardConfigService.ToolGuardConfigChangedEvent event) {
         refreshAllAgents();
         log.info("Agent caches refreshed after tool guard config change (denied tools may have changed)");
+    }
+
+    // ==================== Lifecycle helpers ====================
+
+    /**
+     * Wraps a synchronous agent call with lifecycle mediator hooks.
+     * When lifecycleMediatorEnabled is off, runs plainInvoke directly (Phase 0 behavior).
+     */
+    private String withLifecycleSync(Long agentId, String message, String conversationId,
+                                     Supplier<String> plainInvoke) {
+        if (!memoryProperties.isLifecycleMediatorEnabled()) {
+            return plainInvoke.get();
+        }
+        TurnContext ctx = new TurnContext(agentId, conversationId, conversationId, 0, message);
+        lifecycleMediator.beforeLlmCall(ctx);
+        String result = plainInvoke.get();
+        lifecycleMediator.afterLlmCall(ctx, result != null ? result : "");
+        return result;
+    }
+
+    /**
+     * Wraps a streaming agent call with lifecycle mediator hooks.
+     * When lifecycleMediatorEnabled is off, runs plainInvoke directly (Phase 0 behavior).
+     */
+    private <T> Flux<T> withLifecycleFlux(Long agentId, String message, String conversationId,
+                                          Supplier<Flux<T>> plainInvoke,
+                                          Function<T, String> contentExtractor) {
+        if (!memoryProperties.isLifecycleMediatorEnabled()) {
+            return plainInvoke.get();
+        }
+        TurnContext ctx = new TurnContext(agentId, conversationId, conversationId, 0, message);
+        lifecycleMediator.beforeLlmCall(ctx);
+        StringBuilder reply = new StringBuilder();
+        return plainInvoke.get()
+                .doOnNext(item -> {
+                    String text = contentExtractor.apply(item);
+                    if (text != null) {
+                        reply.append(text);
+                    }
+                })
+                .doFinally(signal -> lifecycleMediator.afterLlmCall(ctx, reply.toString()));
     }
 
     // ==================== 内部方法 ====================

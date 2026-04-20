@@ -198,3 +198,23 @@ mate:
     upload-dir: ./data/wiki-uploads     # 上传文件存储目录
     max-scan-files: 500                 # 目录扫描最大文件数
     max-scan-file-size: 52428800        # 扫描时跳过大于此大小的文件（字节，默认 50MB）
+  # Dream v2 feature flags (all default off; enable per phase after staging validation)
+  memory:
+    # Phase 1: lifecycle mediator wiring
+    lifecycle-mediator-enabled: false
+    dream:
+      focused-enabled: false
+      archive-enabled: false
+      archive-keep-days: 30
+      max-candidates-per-dream: 100
+    # Phase 2: SOUL auto-evolution and provider decorators (enable after Phase 1 GA)
+    soul-update-interval: 0
+    provider-retry-attempts: 1
+    provider-metrics-enabled: false
+    # Phase 3: fact projection (enable after Phase 2 GA)
+    fact:
+      projection-enabled: false
+      projection-rebuild-cron: "0 */30 * * * ?"
+      llm-extraction-enabled: false
+      contradiction-check-enabled: false
+      trust-half-life-days: 60

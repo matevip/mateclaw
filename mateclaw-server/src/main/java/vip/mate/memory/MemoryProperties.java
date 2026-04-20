@@ -80,4 +80,63 @@ public class MemoryProperties {
 
     /** 禁用的 MemoryProvider ID 集合（例如 "structured", "session_search"） */
     private Set<String> disabledProviders = new HashSet<>();
+
+    // ==================== Dream v2 Feature Flags ====================
+
+    // --- Phase 1: Lifecycle mediator wiring ---
+
+    /** Enable MemoryLifecycleMediator prefetch/sync/onSessionEnd chain; off = Phase 0 behavior only */
+    private boolean lifecycleMediatorEnabled = false;
+
+    /** Dream v2 configuration */
+    private DreamProperties dream = new DreamProperties();
+
+    // --- Phase 2: SOUL auto-evolution and provider decorators ---
+
+    /** SOUL.md auto-evolution trigger interval (0 = off) */
+    private int soulUpdateInterval = 0;
+
+    /** Provider decorator retry attempts (1 = no retry) */
+    private int providerRetryAttempts = 1;
+
+    /** Enable provider metrics collection */
+    private boolean providerMetricsEnabled = false;
+
+    // --- Phase 3: Fact projection ---
+
+    /** Fact projection configuration */
+    private FactProperties fact = new FactProperties();
+
+    @Data
+    public static class DreamProperties {
+        /** Enable focused dream mode endpoint */
+        private boolean focusedEnabled = false;
+
+        /** Enable monthly dream archive rotation */
+        private boolean archiveEnabled = false;
+
+        /** Days to keep in DREAMS.md before archiving */
+        private int archiveKeepDays = 30;
+
+        /** Maximum candidates per dream consolidation run */
+        private int maxCandidatesPerDream = 100;
+    }
+
+    @Data
+    public static class FactProperties {
+        /** Enable fact projection rebuild */
+        private boolean projectionEnabled = false;
+
+        /** Fact projection rebuild cron expression */
+        private String projectionRebuildCron = "0 */30 * * * ?";
+
+        /** Enable LLM-based entity extraction (false = pattern-only) */
+        private boolean llmExtractionEnabled = false;
+
+        /** Enable contradiction detection in dream consolidation */
+        private boolean contradictionCheckEnabled = false;
+
+        /** Trust score half-life in days for time decay */
+        private int trustHalfLifeDays = 60;
+    }
 }

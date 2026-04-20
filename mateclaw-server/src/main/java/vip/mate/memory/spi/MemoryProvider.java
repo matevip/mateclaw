@@ -95,4 +95,18 @@ public interface MemoryProvider {
     default String onPreCompress(Long agentId, List<?> messages) {
         return "";
     }
+
+    /**
+     * Notification that a memory write occurred. Called after canonical memory
+     * files (structured/*.md, MEMORY.md) are updated.
+     *
+     * <p>Phase 1: no subscribers. Phase 2: SOUL auto-evolution hook.
+     *
+     * @param agentId the agent ID
+     * @param target  which file was written (e.g. "MEMORY.md", "structured/user_pref.md")
+     * @param action  what happened ("append", "update", "consolidate")
+     * @param content the written content
+     */
+    default void onMemoryWrite(Long agentId, String target, String action, String content) {
+    }
 }
