@@ -8,6 +8,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
+import org.springframework.http.MediaType;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import vip.mate.memory.model.DreamReportEntity;
 import vip.mate.memory.repository.DreamReportMapper;
 import vip.mate.memory.service.MorningCardService;
@@ -32,6 +34,7 @@ public class DreamController {
     private final DreamReportMapper dreamReportMapper;
     private final MorningCardService morningCardService;
     private final MemoryHilService hilService;
+    private final DreamEventBroadcaster eventBroadcaster;
 
     @Operation(summary = "List dream reports (paginated, newest first)")
     @GetMapping("/reports")
@@ -70,6 +73,15 @@ public class DreamController {
             return R.fail("Report not found");
         }
         return R.ok(entity);
+    }
+
+    // ==================== SSE Events ====================
+
+    @Operation(summary = "Subscribe to dream events (SSE)")
+    @GetMapping(value = "/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @RequireWorkspaceRole("viewer")
+    public SseEmitter subscribeDreamEvents(@PathVariable Long agentId) {
+        return eventBroadcaster.register(agentId);
     }
 
     // ==================== Morning Card ====================

@@ -25,6 +25,7 @@ export const useMemoryStore = defineStore('memory', () => {
   const total = ref(0)
   const loading = ref(false)
   const currentReport = ref<DreamReportItem | null>(null)
+  let eventSource: EventSource | null = null
 
   async function fetchReports(agentId: number, page = 1, size = 20) {
     loading.value = true
@@ -49,5 +50,42 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   }
 
-  return { reports, total, loading, currentReport, fetchReports, fetchReport }
+  /**
+   * Subscribe to dream SSE events for an agent.
+   * Automatically refreshes the report list on new dream events.
+   */
+  function subscribeEvents(agentId: number) {
+    unsubscribeEvents()
+    const token = localStorage.getItem('token')
+    const url = `/api/v1/memory/${agentId}/dream/events`
+    eventSource = new EventSource(url)
+
+    eventSource.addEventListener('dream.completed', (e) => {
+      // Refresh the report list to show the new dream
+      fetchReports(agentId, 1, 20)
+    })
+
+    eventSource.addEventListener('dream.failed', (e) => {
+      fetchReports(agentId, 1, 20)
+    })
+
+    eventSource.onerror = () => {
+      // Reconnect after 5s on error
+      unsubscribeEvents()
+      setTimeout(() => subscribeEvents(agentId), 5000)
+    }
+  }
+
+  function unsubscribeEvents() {
+    if (eventSource) {
+      eventSource.close()
+      eventSource = null
+    }
+  }
+
+  return {
+    reports, total, loading, currentReport,
+    fetchReports, fetchReport,
+    subscribeEvents, unsubscribeEvents,
+  }
 })

@@ -1828,5 +1828,17 @@ export default {
       confirmed: '已确认',
       saved: '已保存到 MEMORY.md',
     },
+    focused: {
+      btn: '现在想一想',
+      title: 'Focused Dream',
+      desc: '围绕一个主题让 Agent 重新整理记忆。Agent 会优先提炼该主题相关的信息。',
+      placeholder: '输入主题，如"项目架构决策"、"用户偏好"...',
+      trigger: '开始整理',
+      success: 'Dream 完成，时间线已更新',
+      skipped: '没有需要整合的内容',
+    },
+    diff: {
+      title: '变更摘要',
+    },
   },
 } as const

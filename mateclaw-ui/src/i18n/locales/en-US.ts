@@ -1818,5 +1818,17 @@ export default {
       confirmed: 'Confirmed',
       saved: 'Saved to MEMORY.md',
     },
+    focused: {
+      btn: 'Think Now',
+      title: 'Focused Dream',
+      desc: 'Let the Agent re-organize memories around a specific topic. It will prioritize consolidating information related to your theme.',
+      placeholder: 'Enter a topic, e.g. "architecture decisions", "user preferences"...',
+      trigger: 'Start',
+      success: 'Dream completed, timeline updated',
+      skipped: 'Nothing to consolidate',
+    },
+    diff: {
+      title: 'Change Summary',
+    },
   },
 } as const

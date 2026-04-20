@@ -21,6 +21,13 @@
         <!-- Morning Card -->
         <MorningCard v-if="selectedAgentId" :agent-id="selectedAgentId" />
 
+        <!-- Action bar -->
+        <div v-if="selectedAgentId" class="memory-actions">
+          <el-button size="small" type="primary" plain @click="showFocusedDialog = true">
+            {{ t('memory.focused.btn') }}
+          </el-button>
+        </div>
+
         <!-- Tab navigation: minimal, no borders -->
         <div class="memory-nav">
           <button
@@ -45,23 +52,35 @@
             <p>Coming soon</p>
           </div>
         </div>
+
+        <!-- Focused Dream Dialog -->
+        <FocusedDreamDialog
+          v-if="selectedAgentId"
+          v-model="showFocusedDialog"
+          :agent-id="selectedAgentId"
+          @triggered="onDreamTriggered"
+        />
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/useAgentStore'
+import { useMemoryStore } from '@/stores/useMemoryStore'
 import DreamTimeline from './components/DreamTimeline.vue'
 import MorningCard from './components/MorningCard.vue'
+import FocusedDreamDialog from './components/FocusedDreamDialog.vue'
 
 const { t } = useI18n()
 const agentStore = useAgentStore()
+const memoryStore = useMemoryStore()
 const agents = ref<any[]>([])
 const selectedAgentId = ref<number | null>(null)
 const activeTab = ref('timeline')
+const showFocusedDialog = ref(false)
 
 const tabs = computed(() => [
   { key: 'timeline', label: t('memory.tabTimeline'), disabled: false },
@@ -78,8 +97,25 @@ onMounted(async () => {
   }
 })
 
+// SSE subscription management
+watch(selectedAgentId, (id) => {
+  if (id) memoryStore.subscribeEvents(id)
+  else memoryStore.unsubscribeEvents()
+})
+
+onUnmounted(() => {
+  memoryStore.unsubscribeEvents()
+})
+
 function onAgentChange() {
   activeTab.value = 'timeline'
+}
+
+function onDreamTriggered() {
+  // Refresh timeline after focused dream
+  if (selectedAgentId.value) {
+    memoryStore.fetchReports(selectedAgentId.value, 1, 20)
+  }
 }
 </script>
 
@@ -130,6 +166,9 @@ function onAgentChange() {
 
 .memory-content {
   min-height: 300px;
+}
+.memory-actions {
+  margin: 16px 0 0;
 }
 .empty-state {
   display: flex;
