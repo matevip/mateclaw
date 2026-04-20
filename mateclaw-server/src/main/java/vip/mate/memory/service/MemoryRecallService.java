@@ -227,7 +227,7 @@ public class MemoryRecallService {
     }
 
     /**
-     * 标记候选为已提升
+     * Mark candidates as promoted to MEMORY.md.
      */
     public void markPromoted(List<Long> ids) {
         if (ids == null || ids.isEmpty()) return;
@@ -235,6 +235,21 @@ public class MemoryRecallService {
                 new LambdaUpdateWrapper<MemoryRecallEntity>()
                         .in(MemoryRecallEntity::getId, ids)
                         .set(MemoryRecallEntity::getPromoted, true));
+    }
+
+    /**
+     * Increment review_count and set last_reviewed_at for rejected candidates.
+     * Phase 1: write-only; filtering by review_count is deferred to Phase 2.
+     */
+    public void incrementReviewCounts(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) return;
+        for (Long id : ids) {
+            recallMapper.update(null,
+                    new LambdaUpdateWrapper<MemoryRecallEntity>()
+                            .eq(MemoryRecallEntity::getId, id)
+                            .setSql("review_count = COALESCE(review_count, 0) + 1")
+                            .set(MemoryRecallEntity::getLastReviewedAt, java.time.LocalDateTime.now()));
+        }
     }
 
     // ==================== 查询方法（供 API 使用） ====================
