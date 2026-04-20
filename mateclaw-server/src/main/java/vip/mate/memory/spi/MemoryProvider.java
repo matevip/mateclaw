@@ -100,7 +100,7 @@ public interface MemoryProvider {
      * Notification that a memory write occurred. Called after canonical memory
      * files (structured/*.md, MEMORY.md) are updated.
      *
-     * <p>Phase 1: no subscribers. Phase 2: SOUL auto-evolution hook.
+     * <p>Phase 2: SOUL auto-evolution subscribes to this.
      *
      * @param agentId the agent ID
      * @param target  which file was written (e.g. "MEMORY.md", "structured/user_pref.md")
@@ -108,5 +108,25 @@ public interface MemoryProvider {
      * @param content the written content
      */
     default void onMemoryWrite(Long agentId, String target, String action, String content) {
+    }
+
+    /**
+     * Warm up provider internal state (embeddings, index handles, connection pools).
+     * Called when an agent session is likely to start. Providers decide what to cache.
+     *
+     * <p>Phase 2: provider internal-state cache (not recall text cache — F2).
+     *
+     * @param agentId the agent ID
+     */
+    default void warmup(Long agentId) {
+    }
+
+    /**
+     * Evict cached internal state for an agent. Called on agent deactivation or
+     * memory pressure.
+     *
+     * @param agentId the agent ID
+     */
+    default void evict(Long agentId) {
     }
 }

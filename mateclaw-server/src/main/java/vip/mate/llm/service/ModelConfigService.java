@@ -2,6 +2,8 @@ package vip.mate.llm.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import vip.mate.exception.MateClawException;
@@ -21,6 +23,14 @@ public class ModelConfigService {
 
     private final ModelConfigMapper modelConfigMapper;
     private final ApplicationEventPublisher eventPublisher;
+
+    /**
+     * Lazy to break circular dependency: ModelProviderService → ModelConfigService.
+     * Used only in getDefaultModel() to skip models whose provider is unconfigured.
+     */
+    @Lazy
+    @Autowired
+    private ModelProviderService modelProviderService;
 
     public List<ModelConfigEntity> listModels() {
         return modelConfigMapper.selectList(new LambdaQueryWrapper<ModelConfigEntity>()
@@ -91,25 +101,55 @@ public class ModelConfigService {
     }
 
     public ModelConfigEntity getDefaultModel() {
-        // 默认 chat 模型：明确排除 embedding 类型
-        ModelConfigEntity entity = modelConfigMapper.selectOne(new LambdaQueryWrapper<ModelConfigEntity>()
+        // Prefer the explicitly marked default chat model when its provider is configured.
+        ModelConfigEntity defaultMarked = modelConfigMapper.selectOne(new LambdaQueryWrapper<ModelConfigEntity>()
                 .eq(ModelConfigEntity::getIsDefault, true)
                 .and(w -> w.isNull(ModelConfigEntity::getModelType)
                            .or().eq(ModelConfigEntity::getModelType, "chat"))
                 .last("LIMIT 1"));
-        if (entity != null) {
-            return entity;
+        if (defaultMarked != null && isProviderConfigured(defaultMarked.getProvider())) {
+            return defaultMarked;
         }
-        entity = modelConfigMapper.selectOne(new LambdaQueryWrapper<ModelConfigEntity>()
+
+        // Default model's provider is unavailable (or no default set) — scan all enabled
+        // chat models and pick the first one whose provider is actually configured.
+        List<ModelConfigEntity> candidates = modelConfigMapper.selectList(new LambdaQueryWrapper<ModelConfigEntity>()
                 .eq(ModelConfigEntity::getEnabled, true)
                 .and(w -> w.isNull(ModelConfigEntity::getModelType)
                            .or().eq(ModelConfigEntity::getModelType, "chat"))
-                .orderByAsc(ModelConfigEntity::getName)
-                .last("LIMIT 1"));
-        if (entity == null) {
-            throw new MateClawException("err.llm.no_available_model", "没有可用的模型配置");
+                .orderByDesc(ModelConfigEntity::getIsDefault)
+                .orderByAsc(ModelConfigEntity::getName));
+        for (ModelConfigEntity candidate : candidates) {
+            if (isProviderConfigured(candidate.getProvider())) {
+                return candidate;
+            }
         }
-        return entity;
+
+        // No configured provider found — give a clearer error than the generic one.
+        if (!candidates.isEmpty()) {
+            String unconfiguredProvider = candidates.get(0).getProvider();
+            throw new MateClawException("err.llm.no_configured_provider",
+                    "所有已启用的模型 Provider 均未完成配置（默认 Provider: " + unconfiguredProvider
+                    + "），请在「设置 → 模型」中填写 API Key");
+        }
+        throw new MateClawException("err.llm.no_available_model", "没有可用的模型配置");
+    }
+
+    /**
+     * Checks whether a provider is fully configured (API key / credentials present).
+     * Delegates to ModelProviderService which is injected lazily to avoid a circular
+     * dependency. Falls back to {@code true} when the service is not yet available
+     * (e.g., during early bootstrap) so we don't accidentally block startup.
+     */
+    private boolean isProviderConfigured(String providerId) {
+        if (modelProviderService == null || providerId == null) {
+            return true;
+        }
+        try {
+            return modelProviderService.isProviderConfigured(providerId);
+        } catch (Exception e) {
+            return true; // conservative: don't filter if lookup fails
+        }
     }
 
     public ModelConfigEntity getDefaultModelByProvider(String providerId) {

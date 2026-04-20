@@ -9,7 +9,9 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import vip.mate.memory.event.MemoryWriteEvent;
 import vip.mate.agent.AgentGraphBuilder;
 import vip.mate.agent.prompt.PromptLoader;
 import vip.mate.llm.service.ModelConfigService;
@@ -46,6 +48,7 @@ public class MemoryEmergenceService {
     private final MemoryRecallService recallService;
     private final DreamReportMapper dreamReportMapper;
     private final vip.mate.memory.archive.MemoryArchiveService archiveService;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * Legacy signature — delegates to NIGHTLY mode for backward compatibility.
@@ -154,6 +157,7 @@ public class MemoryEmergenceService {
             }
 
             workspaceFileService.saveFile(agentId, "MEMORY.md", newContent);
+            eventPublisher.publishEvent(new MemoryWriteEvent(agentId, "MEMORY.md", "consolidate", newContent));
             String llmReason = root.path("reason").asText("");
             log.info("[Memory] Emergence completed for agent={}: {}", agentId, llmReason);
 

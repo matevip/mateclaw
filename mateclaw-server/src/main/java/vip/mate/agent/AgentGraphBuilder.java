@@ -157,6 +157,28 @@ public class AgentGraphBuilder {
             throw new MateClawException("err.agent.model_not_configured", "模型 " + runtimeModel.getModelName()
                     + " 的 Provider（" + runtimeModel.getProvider() + "）未配置，请检查模型设置");
         }
+
+        // Safety net: getDefaultModel() already skips unconfigured providers, but guard here
+        // too so a stale cached model doesn't silently proceed to a broken API call.
+        if (!modelProviderService.isProviderConfigured(provider.getProviderId())) {
+            String reason = modelProviderService.getProviderUnavailableReason(provider.getProviderId());
+            log.warn("Runtime model {}/{} provider not configured ({}); trying fallback",
+                    runtimeModel.getProvider(), runtimeModel.getModelName(), reason);
+            ModelConfigEntity fallback = findFirstAvailableChatModel();
+            if (fallback == null) {
+                throw new MateClawException("err.agent.no_configured_model",
+                        "默认模型 Provider「" + runtimeModel.getProvider() + "」未配置（" + reason
+                        + "），且找不到其他已配置的 Provider，请先在「设置 → 模型」中完成配置");
+            }
+            runtimeModel = fallback;
+            try {
+                provider = modelProviderService.getProviderConfig(runtimeModel.getProvider());
+            } catch (Exception e) {
+                throw new MateClawException("err.agent.model_not_configured", "备用模型 " + runtimeModel.getModelName()
+                        + " 的 Provider（" + runtimeModel.getProvider() + "）获取失败");
+            }
+        }
+
         ModelProtocol protocol = ModelProtocol.fromChatModel(provider.getChatModel());
 
         // 内置搜索检测（DashScope / Kimi），但不再移除 WebSearchTool — 两者协同而非互斥
@@ -725,6 +747,24 @@ public class AgentGraphBuilder {
             }
         }
         return reordered;
+    }
+
+    /**
+     * Finds the first enabled chat model whose provider is fully configured.
+     * Used as a fallback when the default model's provider is not available.
+     */
+    private ModelConfigEntity findFirstAvailableChatModel() {
+        return modelConfigService.listByType("chat").stream()
+                .filter(m -> Boolean.TRUE.equals(m.getEnabled()))
+                .filter(m -> {
+                    try {
+                        return modelProviderService.isProviderConfigured(m.getProvider());
+                    } catch (Exception e) {
+                        return false;
+                    }
+                })
+                .findFirst()
+                .orElse(null);
     }
 
     // PR-0b: legacy single-fallback buildFallbackModel deleted (already @Deprecated, no callers).

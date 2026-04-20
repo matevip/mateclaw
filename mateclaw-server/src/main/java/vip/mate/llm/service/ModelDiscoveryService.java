@@ -46,10 +46,14 @@ public class ModelDiscoveryService {
     /**
      * Explicit deny list: model ids listed by DashScope compatible-mode that are known
      * to fail on the native protocol. Updated as we observe new failures.
+     * Note: the DASHSCOPE_NATIVE_UNSUPPORTED_PATTERN below also catches the whole
+     * dot-versioned family; this set makes individual blocked names searchable/auditable.
      */
     private static final Set<String> DASHSCOPE_NATIVE_DENY = Set.of(
             "qwen3.5-max",
-            "qwen3.5-plus"
+            "qwen3.5-plus",
+            "qwen3.6-plus",
+            "qwen3.6-max"
     );
 
     /**

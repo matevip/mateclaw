@@ -7,6 +7,7 @@ import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import com.alibaba.cloud.ai.dashscope.spec.DashScopeApiSpec;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -27,19 +28,23 @@ import java.util.Map;
  * fallback-chain helpers for resolving API key / Base URL when the provider
  * row is incomplete. PR-0b moved this code out of {@code AgentGraphBuilder}
  * so the agent package no longer carries any DashScope schema knowledge.</p>
+ *
+ * <p>DashScopeChatModel is injected via ObjectProvider so that the builder
+ * degrades gracefully when DashScope auto-configuration is disabled or the
+ * dependency is absent, rather than failing the entire application context.</p>
  */
 @Slf4j
 @Component
 public class AgentDashScopeChatModelBuilder implements ChatModelBuilder {
 
-    private final DashScopeChatModel dashScopeChatModel;
+    private final ObjectProvider<DashScopeChatModel> dashScopeChatModelProvider;
     private final DashScopeConnectionProperties dashScopeConnectionProperties;
     private final ModelProviderService modelProviderService;
 
-    public AgentDashScopeChatModelBuilder(DashScopeChatModel dashScopeChatModel,
+    public AgentDashScopeChatModelBuilder(ObjectProvider<DashScopeChatModel> dashScopeChatModelProvider,
                                           DashScopeConnectionProperties dashScopeConnectionProperties,
                                           ModelProviderService modelProviderService) {
-        this.dashScopeChatModel = dashScopeChatModel;
+        this.dashScopeChatModelProvider = dashScopeChatModelProvider;
         this.dashScopeConnectionProperties = dashScopeConnectionProperties;
         this.modelProviderService = modelProviderService;
     }
@@ -51,9 +56,14 @@ public class AgentDashScopeChatModelBuilder implements ChatModelBuilder {
 
     @Override
     public ChatModel build(ModelConfigEntity model, ModelProviderEntity provider, RetryTemplate retry) {
+        DashScopeChatModel defaultModel = dashScopeChatModelProvider.getIfAvailable();
+        if (defaultModel == null) {
+            throw new MateClawException("err.agent.dashscope_unavailable",
+                    "DashScope 自动配置未激活（可能缺少依赖或被排除），无法构建 DashScope 模型");
+        }
         DashScopeApi api = buildDashScopeApi(provider);
         DashScopeChatOptions options = buildDashScopeOptions(model, provider);
-        return dashScopeChatModel.mutate()
+        return defaultModel.mutate()
                 .dashScopeApi(api)
                 .defaultOptions(options)
                 .build();
@@ -200,9 +210,13 @@ public class AgentDashScopeChatModelBuilder implements ChatModelBuilder {
     }
 
     private DashScopeApi readDashScopeApiFromDefaultChatModel() throws NoSuchFieldException, IllegalAccessException {
+        DashScopeChatModel defaultModel = dashScopeChatModelProvider.getIfAvailable();
+        if (defaultModel == null) {
+            return null;
+        }
         Field apiField = DashScopeChatModel.class.getDeclaredField("dashscopeApi");
         apiField.setAccessible(true);
-        Object api = apiField.get(dashScopeChatModel);
+        Object api = apiField.get(defaultModel);
         return api instanceof DashScopeApi dashScopeApi ? dashScopeApi : null;
     }
 }
