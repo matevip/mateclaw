@@ -1812,5 +1812,19 @@ export default {
       reason: 'LLM 理由',
       diff: '变更摘要',
     },
+    morningCard: {
+      title: '昨夜 Dream 回顾',
+      dismiss: '我知道了',
+      promoted: '整合了 {count} 条记忆',
+    },
+    hil: {
+      confirm: '确认',
+      edit: '编辑',
+      cancel: '取消',
+      save: '保存',
+      editPlaceholder: '修改记忆内容...',
+      confirmed: '已确认',
+      saved: '已保存到 MEMORY.md',
+    },
   },
 } as const

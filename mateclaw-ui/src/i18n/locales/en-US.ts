@@ -1802,5 +1802,19 @@ export default {
       reason: 'LLM Reason',
       diff: 'Change Summary',
     },
+    morningCard: {
+      title: 'Dream Recap',
+      dismiss: 'Got it',
+      promoted: '{count} memories consolidated',
+    },
+    hil: {
+      confirm: 'Confirm',
+      edit: 'Edit',
+      cancel: 'Cancel',
+      save: 'Save',
+      editPlaceholder: 'Edit memory content...',
+      confirmed: 'Confirmed',
+      saved: 'Saved to MEMORY.md',
+    },
   },
 } as const
