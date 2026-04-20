@@ -1782,7 +1782,9 @@ export default {
     },
   },
   memory: {
+    kicker: 'Memory',
     title: 'Memory',
+    desc: 'What your Agent thinks about, remembers, and lets go.',
     selectAgent: 'Select Agent',
     selectAgentHint: 'Select an agent to view its memory',
     tabTimeline: 'Dream Timeline',

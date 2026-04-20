@@ -1792,7 +1792,9 @@ export default {
     },
   },
   memory: {
-    title: '记忆管理',
+    kicker: 'Memory',
+    title: '记忆',
+    desc: '你的 Agent 在想什么、记住了什么、遗忘了什么。',
     selectAgent: '选择 Agent',
     selectAgentHint: '请先选择一个 Agent 查看其记忆',
     tabTimeline: 'Dream 时间线',

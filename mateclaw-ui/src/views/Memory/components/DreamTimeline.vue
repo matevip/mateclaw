@@ -1,47 +1,54 @@
 <template>
   <div class="dream-timeline">
     <div v-if="store.loading" class="loading-state">
-      <el-skeleton :rows="5" animated />
+      <div class="skeleton-card mc-surface-card" v-for="i in 3" :key="i">
+        <el-skeleton :rows="2" animated />
+      </div>
     </div>
 
-    <el-empty v-else-if="store.reports.length === 0" :description="t('memory.noReports')" />
+    <div v-else-if="store.reports.length === 0" class="empty-state">
+      <div class="empty-icon">🌙</div>
+      <p>{{ t('memory.noReports') }}</p>
+    </div>
 
-    <div v-else class="timeline-list">
+    <div v-else class="timeline-cards">
       <div
         v-for="report in store.reports"
         :key="report.id"
-        class="timeline-item"
-        :class="{ active: selectedId === report.id }"
+        class="dream-card mc-surface-card"
+        :class="{ selected: selectedId === report.id }"
         @click="selectReport(report)"
       >
-        <div class="timeline-dot" :class="report.status.toLowerCase()" />
-        <div class="timeline-content">
-          <div class="timeline-header">
-            <el-tag :type="modeTagType(report.mode)" size="small">{{ report.mode }}</el-tag>
-            <span class="timeline-time">{{ formatTime(report.startedAt) }}</span>
-          </div>
-          <div class="timeline-meta">
-            <span v-if="report.topic" class="topic">{{ report.topic }}</span>
-            <span class="counts">
-              +{{ report.promotedCount }} / -{{ report.rejectedCount }} / {{ report.candidateCount }} candidates
-            </span>
-          </div>
-          <div v-if="report.llmReason" class="timeline-reason">{{ truncate(report.llmReason, 80) }}</div>
+        <div class="card-top">
+          <span class="status-dot" :class="report.status.toLowerCase()" />
+          <span class="card-mode">{{ report.mode }}</span>
+          <span class="card-time">{{ formatRelativeTime(report.startedAt) }}</span>
         </div>
+
+        <div v-if="report.topic" class="card-topic">{{ report.topic }}</div>
+
+        <div class="card-stats">
+          <span class="stat promoted">+{{ report.promotedCount }}</span>
+          <span class="stat rejected">-{{ report.rejectedCount }}</span>
+          <span class="stat total">{{ report.candidateCount }} candidates</span>
+        </div>
+
+        <p v-if="report.llmReason" class="card-reason">{{ truncate(report.llmReason, 120) }}</p>
       </div>
 
-      <div class="pagination-wrapper">
+      <div v-if="store.total > pageSize" class="pagination-wrap">
         <el-pagination
           v-model:current-page="currentPage"
           :page-size="pageSize"
           :total="store.total"
           layout="prev, pager, next"
+          small
           @current-change="onPageChange"
         />
       </div>
     </div>
 
-    <!-- Detail panel -->
+    <!-- Detail drawer -->
     <DreamReportPanel v-if="selectedId" :report="store.currentReport" @close="selectedId = null" />
   </div>
 </template>
@@ -79,14 +86,17 @@ function selectReport(report: DreamReportItem) {
   store.fetchReport(props.agentId, report.id)
 }
 
-function modeTagType(mode: string) {
-  return mode === 'FOCUSED' ? 'warning' : 'info'
-}
-
-function formatTime(isoStr: string) {
+function formatRelativeTime(isoStr: string) {
   if (!isoStr) return ''
   const d = new Date(isoStr)
-  return d.toLocaleString()
+  const now = new Date()
+  const diffMs = now.getTime() - d.getTime()
+  const diffH = Math.floor(diffMs / 3600000)
+  if (diffH < 1) return 'just now'
+  if (diffH < 24) return `${diffH}h ago`
+  const diffD = Math.floor(diffH / 24)
+  if (diffD < 7) return `${diffD}d ago`
+  return d.toLocaleDateString()
 }
 
 function truncate(str: string, max: number) {
@@ -96,72 +106,91 @@ function truncate(str: string, max: number) {
 
 <style scoped>
 .dream-timeline {
-  position: relative;
+  margin-top: 8px;
 }
-.timeline-list {
-  padding-left: 20px;
-  border-left: 2px solid var(--el-border-color-lighter);
+.timeline-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
-.timeline-item {
-  position: relative;
-  padding: 12px 16px;
-  margin-bottom: 8px;
-  border-radius: 8px;
+.dream-card {
+  padding: 16px 20px;
+  border-radius: 12px;
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
-.timeline-item:hover {
-  background-color: var(--el-fill-color-light);
+.dream-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
 }
-.timeline-item.active {
-  background-color: var(--el-color-primary-light-9);
+.dream-card.selected {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 2px var(--el-color-primary-light-8);
 }
-.timeline-dot {
-  position: absolute;
-  left: -27px;
-  top: 18px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--el-color-info);
-}
-.timeline-dot.success { background: var(--el-color-success); }
-.timeline-dot.failed { background: var(--el-color-danger); }
-.timeline-dot.skipped { background: var(--el-color-warning); }
-.timeline-header {
+.card-top {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.timeline-time {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
-.timeline-meta {
-  margin-top: 4px;
-  font-size: 13px;
-  color: var(--el-text-color-regular);
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--el-color-info-light-3);
 }
-.timeline-meta .topic {
+.status-dot.success { background: var(--el-color-success); }
+.status-dot.failed { background: var(--el-color-danger); }
+.status-dot.skipped { background: var(--el-color-warning); }
+.card-mode {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 11px;
+}
+.card-time { margin-left: auto; }
+.card-topic {
+  margin-top: 8px;
+  font-size: 15px;
   font-weight: 500;
-  margin-right: 8px;
+  color: var(--el-text-color-primary);
 }
-.timeline-meta .counts {
-  color: var(--el-text-color-secondary);
+.card-stats {
+  margin-top: 8px;
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+}
+.stat.promoted { color: var(--el-color-success); font-weight: 600; }
+.stat.rejected { color: var(--el-color-danger-light-3); }
+.stat.total { color: var(--el-text-color-secondary); }
+.card-reason {
+  margin-top: 6px;
   font-size: 12px;
-}
-.timeline-reason {
-  margin-top: 4px;
-  font-size: 12px;
   color: var(--el-text-color-secondary);
-  font-style: italic;
+  line-height: 1.4;
 }
-.pagination-wrapper {
+.pagination-wrap {
   margin-top: 16px;
   display: flex;
   justify-content: center;
 }
 .loading-state {
-  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
+.skeleton-card {
+  padding: 16px 20px;
+  border-radius: 12px;
+}
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 48px 0;
+  color: var(--el-text-color-placeholder);
+}
+.empty-icon { font-size: 32px; margin-bottom: 12px; }
 </style>
