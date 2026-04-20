@@ -1,21 +1,20 @@
 <template>
-  <transition name="slide-down">
+  <Transition name="slide-down">
     <div v-if="card" class="morning-card">
-      <div class="card-header">
-        <span class="card-icon">🌅</span>
-        <span class="card-title">{{ t('memory.morningCard.title') }}</span>
-        <el-button text size="small" @click="dismiss">{{ t('memory.morningCard.dismiss') }}</el-button>
+      <div class="morning-card__header">
+        <span class="morning-card__icon">🌅</span>
+        <span class="morning-card__title">{{ t('memory.morningCard.title') }}</span>
+        <button class="morning-card__close" @click="dismiss">&times;</button>
       </div>
-      <div class="card-body">
-        <el-tag :type="card.mode === 'FOCUSED' ? 'warning' : 'info'" size="small">{{ card.mode }}</el-tag>
-        <span v-if="card.topic" class="card-topic">{{ card.topic }}</span>
-        <p class="card-summary">
+      <div class="morning-card__body">
+        <span class="morning-card__mode">{{ card.mode === 'FOCUSED' ? t('memory.modeFocused') : t('memory.modeNightly') }}</span>
+        <span v-if="card.topic" class="morning-card__topic">{{ card.topic }}</span>
+        <p class="morning-card__summary">
           {{ t('memory.morningCard.promoted', { count: card.promotedCount }) }}
-          <span v-if="card.llmReason" class="card-reason">— {{ truncate(card.llmReason, 100) }}</span>
         </p>
       </div>
     </div>
-  </transition>
+  </Transition>
 </template>
 
 <script setup lang="ts">
@@ -31,60 +30,40 @@ onMounted(async () => {
   try {
     const res = await http.get(`/memory/${props.agentId}/dream/morning-card`)
     card.value = res.data
-  } catch {
-    // No card or error — silent
-  }
+  } catch { /* silent */ }
 })
 
 async function dismiss() {
   if (!card.value) return
-  try {
-    await http.post(`/memory/${props.agentId}/dream/morning-card/seen`, {
-      reportId: card.value.reportId,
-    })
-  } catch {
-    // Best effort
-  }
+  try { await http.post(`/memory/${props.agentId}/dream/morning-card/seen`, { reportId: card.value.reportId }) } catch {}
   card.value = null
-}
-
-function truncate(str: string, max: number) {
-  return str && str.length > max ? str.slice(0, max) + '...' : str
 }
 </script>
 
 <style scoped>
 .morning-card {
-  margin: 12px 0;
-  padding: 12px 16px;
-  background: var(--el-color-primary-light-9);
-  border: 1px solid var(--el-color-primary-light-7);
-  border-radius: 8px;
+  margin: 0 12px 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--mc-primary-bg);
+  border: 1px solid var(--mc-border-light);
 }
-.card-header {
+.morning-card__header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
-.card-icon { font-size: 18px; }
-.card-title { font-weight: 600; font-size: 14px; flex: 1; }
-.card-body {
-  margin-top: 8px;
-  font-size: 13px;
-  color: var(--el-text-color-regular);
+.morning-card__icon { font-size: 16px; }
+.morning-card__title { flex: 1; font-size: 13px; font-weight: 600; color: var(--mc-text-primary); }
+.morning-card__close {
+  background: none; border: none; font-size: 16px; color: var(--mc-text-tertiary);
+  cursor: pointer; line-height: 1;
 }
-.card-topic {
-  margin-left: 8px;
-  font-weight: 500;
-}
-.card-summary { margin: 4px 0 0; }
-.card-reason { color: var(--el-text-color-secondary); font-style: italic; }
+.morning-card__body { margin-top: 6px; font-size: 12px; color: var(--mc-text-secondary); }
+.morning-card__mode { font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
+.morning-card__topic { margin-left: 6px; font-weight: 500; }
+.morning-card__summary { margin: 4px 0 0; }
 
-.slide-down-enter-active, .slide-down-leave-active {
-  transition: all 0.3s ease;
-}
-.slide-down-enter-from, .slide-down-leave-to {
-  opacity: 0;
-  transform: translateY(-10px);
-}
+.slide-down-enter-active, .slide-down-leave-active { transition: all 0.25s ease; }
+.slide-down-enter-from, .slide-down-leave-to { opacity: 0; transform: translateY(-8px); }
 </style>
