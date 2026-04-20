@@ -44,6 +44,8 @@ public class MemoryLifecycleMediator {
         try {
             String context = memoryManager.prefetchAll(ctx.agentId(), ctx.userQuery());
             events.publishEvent(new TurnStartedEvent(ctx));
+            log.debug("[Memory] beforeLlmCall: agent={}, contextLen={}", ctx.agentId(),
+                    context != null ? context.length() : 0);
             return context;
         } catch (Exception e) {
             log.debug("[Memory] beforeLlmCall failed (non-fatal): {}", e.getMessage());
@@ -61,6 +63,8 @@ public class MemoryLifecycleMediator {
             memoryManager.syncAll(ctx.agentId(), ctx.conversationId(),
                     ctx.userQuery(), assistantReply);
             events.publishEvent(new TurnCompletedEvent(ctx, assistantReply));
+            log.debug("[Memory] afterLlmCall: agent={}, conv={}, replyLen={}", ctx.agentId(),
+                    ctx.conversationId(), assistantReply != null ? assistantReply.length() : 0);
         } catch (Exception e) {
             log.debug("[Memory] afterLlmCall failed (non-fatal): {}", e.getMessage());
         }
@@ -72,6 +76,7 @@ public class MemoryLifecycleMediator {
     public void onSessionEnd(Long agentId, String conversationId) {
         try {
             memoryManager.onSessionEnd(agentId, conversationId);
+            log.debug("[Memory] onSessionEnd: agent={}, conv={}", agentId, conversationId);
         } catch (Exception e) {
             log.debug("[Memory] onSessionEnd dispatch failed (non-fatal): {}", e.getMessage());
         }
