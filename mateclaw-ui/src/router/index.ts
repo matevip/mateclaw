@@ -33,6 +33,12 @@ const router = createRouter({
           component: () => import('@/views/Wiki/index.vue'),
           meta: { title: 'Wiki' },
         },
+        {
+          path: 'memory',
+          name: 'Memory',
+          component: () => import('@/views/Memory/index.vue'),
+          meta: { title: 'Memory' },
+        },
         // ==================== Connect ====================
         {
           path: 'channels',
