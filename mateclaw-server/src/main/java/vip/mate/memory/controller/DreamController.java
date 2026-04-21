@@ -152,8 +152,14 @@ public class DreamController {
                             .ge(MemoryRecallEntity::getLastRecalledAt, report.getStartedAt())
                             .le(MemoryRecallEntity::getLastRecalledAt, report.getFinishedAt())
                             .eq(MemoryRecallEntity::getDeleted, 0));
+            // Exact match on the section key (part after # in filename)
             boolean keyBelongsToReport = candidates.stream()
-                    .anyMatch(c -> c.getFilename() != null && c.getFilename().contains(decodedKey));
+                    .anyMatch(c -> {
+                        if (c.getFilename() == null) return false;
+                        int hash = c.getFilename().indexOf('#');
+                        String entryKey = hash >= 0 ? c.getFilename().substring(hash + 1) : c.getFilename();
+                        return entryKey.equals(decodedKey);
+                    });
             if (!keyBelongsToReport) {
                 return R.fail("Entry '" + decodedKey + "' does not belong to report " + reportId);
             }
