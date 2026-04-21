@@ -11,7 +11,9 @@ import vip.mate.common.result.R;
 import org.springframework.http.MediaType;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import vip.mate.memory.model.DreamReportEntity;
+import vip.mate.memory.model.MemoryRecallEntity;
 import vip.mate.memory.repository.DreamReportMapper;
+import vip.mate.memory.repository.MemoryRecallMapper;
 import vip.mate.memory.service.MorningCardService;
 import vip.mate.memory.service.MemoryHilService;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
@@ -32,6 +34,7 @@ import java.util.Map;
 public class DreamController {
 
     private final DreamReportMapper dreamReportMapper;
+    private final MemoryRecallMapper recallMapper;
     private final MorningCardService morningCardService;
     private final MemoryHilService hilService;
     private final DreamEventBroadcaster eventBroadcaster;
@@ -129,8 +132,10 @@ public class DreamController {
                               @PathVariable Long reportId,
                               @PathVariable String key,
                               @RequestBody Map<String, String> body) {
-        // Validate reportId belongs to this agent (0 = direct edit from MemoryBrowser)
+        String decodedKey = java.net.URLDecoder.decode(key, java.nio.charset.StandardCharsets.UTF_8);
+
         if (reportId != 0L) {
+            // Report-scoped edit: validate report belongs to agent AND key belongs to report
             DreamReportEntity report = dreamReportMapper.selectOne(
                     new LambdaQueryWrapper<DreamReportEntity>()
                             .eq(DreamReportEntity::getId, reportId)
@@ -139,12 +144,26 @@ public class DreamController {
             if (report == null) {
                 return R.fail("Report not found or does not belong to this agent");
             }
+            // Key must match a recall entry that was a candidate during this dream run
+            // (lastRecalledAt between report.startedAt and report.finishedAt)
+            List<MemoryRecallEntity> candidates = recallMapper.selectList(
+                    new LambdaQueryWrapper<MemoryRecallEntity>()
+                            .eq(MemoryRecallEntity::getAgentId, agentId)
+                            .ge(MemoryRecallEntity::getLastRecalledAt, report.getStartedAt())
+                            .le(MemoryRecallEntity::getLastRecalledAt, report.getFinishedAt())
+                            .eq(MemoryRecallEntity::getDeleted, 0));
+            boolean keyBelongsToReport = candidates.stream()
+                    .anyMatch(c -> c.getFilename() != null && c.getFilename().contains(decodedKey));
+            if (!keyBelongsToReport) {
+                return R.fail("Entry '" + decodedKey + "' does not belong to report " + reportId);
+            }
+        } else {
+            // Direct edit (reportId=0, from MemoryBrowser): only require section exists
+            if (!hilService.sectionExists(agentId, decodedKey)) {
+                return R.fail("Section '" + decodedKey + "' not found in MEMORY.md");
+            }
         }
-        // Validate key is an existing section in MEMORY.md (prevent arbitrary edits)
-        String decodedKey = java.net.URLDecoder.decode(key, java.nio.charset.StandardCharsets.UTF_8);
-        if (!hilService.sectionExists(agentId, decodedKey)) {
-            return R.fail("Section '" + decodedKey + "' not found in MEMORY.md");
-        }
+
         String newContent = body.get("content");
         if (newContent == null || newContent.isBlank()) {
             return R.fail("content is required");
