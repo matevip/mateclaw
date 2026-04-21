@@ -51,6 +51,7 @@ public class MemoryEmergenceService {
     private final DreamReportMapper dreamReportMapper;
     private final vip.mate.memory.archive.MemoryArchiveService archiveService;
     private final ApplicationEventPublisher eventPublisher;
+    private final vip.mate.memory.fact.contradiction.ContradictionDetector contradictionDetector;
 
     /**
      * Legacy signature — delegates to NIGHTLY mode for backward compatibility.
@@ -205,6 +206,14 @@ public class MemoryEmergenceService {
                     scoredCandidates.size(), promotedEntries, rejectedEntries, memoryDiff,
                     truncate(llmReason, 500));
             persistReport(report);
+
+            // Contradiction detection — synchronous step after persist (D11)
+            try {
+                contradictionDetector.detect(agentId, promotedEntries);
+            } catch (Exception ce) {
+                log.debug("[Memory] Contradiction detection failed (non-fatal): {}", ce.getMessage());
+            }
+
             return report;
 
         } catch (Exception e) {

@@ -119,6 +119,8 @@ public class FactProjectionBuilder {
             existing.setObjectValue(fact.objectValue());
             existing.setConfidence(fact.confidence());
             existing.setExtractedBy(fact.extractedBy());
+            // Apply trust time decay (half-life from config, default 60 days)
+            existing.setTrust(applyTimeDecay(existing.getTrust(), existing.getUpdateTime(), now));
             existing.setUpdateTime(now);
             existing.setDeleted(0); // un-delete if previously soft-deleted
             factMapper.updateById(existing);
@@ -139,5 +141,21 @@ public class FactProjectionBuilder {
             entity.setDeleted(0);
             factMapper.insert(entity);
         }
+    }
+
+    /**
+     * Apply exponential time decay to trust score.
+     * Formula: trust * 2^(-daysSinceLastUpdate / halfLifeDays)
+     * Clamped to [0, 1].
+     */
+    private double applyTimeDecay(Double currentTrust, LocalDateTime lastUpdate, LocalDateTime now) {
+        if (currentTrust == null) return 0.5;
+        if (lastUpdate == null) return currentTrust;
+        int halfLifeDays = properties.getFact().getTrustHalfLifeDays();
+        if (halfLifeDays <= 0) return currentTrust; // decay disabled
+        long daysDiff = java.time.Duration.between(lastUpdate, now).toDays();
+        if (daysDiff <= 0) return currentTrust;
+        double decayed = currentTrust * Math.pow(2.0, -(double) daysDiff / halfLifeDays);
+        return Math.max(0.0, Math.min(1.0, decayed));
     }
 }
