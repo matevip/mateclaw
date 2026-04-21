@@ -198,24 +198,24 @@ mate:
     upload-dir: ./data/wiki-uploads     # 上传文件存储目录
     max-scan-files: 500                 # 目录扫描最大文件数
     max-scan-file-size: 52428800        # 扫描时跳过大于此大小的文件（字节，默认 50MB）
-  # Dream v2 feature flags (all default off; enable per phase after staging validation)
+  # Dream v2 feature flags — production defaults after GA validation
   memory:
     # Phase 1: lifecycle mediator wiring
-    lifecycle-mediator-enabled: false
+    lifecycle-mediator-enabled: true
     dream:
-      focused-enabled: false
-      archive-enabled: false
+      focused-enabled: true
+      archive-enabled: true
       archive-keep-days: 30
       max-candidates-per-dream: 100
-    # Phase 2: SOUL auto-evolution and provider decorators (enable after Phase 1 GA)
-    soul-update-interval: 0
-    provider-retry-attempts: 1
-    provider-metrics-enabled: false
-    # Phase 3: fact projection (enable after Phase 2 GA)
+    # Phase 2: SOUL auto-evolution and provider decorators
+    soul-update-interval: 20                   # 20 writes trigger one SOUL.md LLM update (0 = off)
+    provider-retry-attempts: 1                 # 1 = no retry (enable when external providers added)
+    provider-metrics-enabled: false            # requires spring-boot-starter-actuator dependency
+    # Phase 3: fact projection
     fact:
-      projection-enabled: false
+      projection-enabled: true
       projection-rebuild-cron: "0 */30 * * * ?"
-      llm-extraction-enabled: false
-      contradiction-check-enabled: false
+      llm-extraction-enabled: false            # placeholder impl, enable after Phase 3 L4+
+      contradiction-check-enabled: false       # experimental simple detection, enable after LLM batch impl
       trust-half-life-days: 60
-      forget-enabled: false
+      forget-enabled: true
