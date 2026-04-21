@@ -101,8 +101,13 @@
 
         <!-- Right: Content panel -->
         <div class="memory-detail">
+          <!-- Memory tab -->
+          <template v-if="activeTab === 'memory' && selectedAgentId">
+            <MemoryBrowser :agent-id="selectedAgentId" />
+          </template>
+
           <!-- Facts tab -->
-          <template v-if="activeTab === 'facts' && selectedAgentId">
+          <template v-else-if="activeTab === 'facts' && selectedAgentId">
             <FactList :agent-id="selectedAgentId" />
           </template>
 
@@ -181,6 +186,7 @@ import { useAgentStore } from '@/stores/useAgentStore'
 import { useMemoryStore, type DreamReportItem } from '@/stores/useMemoryStore'
 import MorningCard from './components/MorningCard.vue'
 import FactList from './components/FactList.vue'
+import MemoryBrowser from './components/MemoryBrowser.vue'
 
 const { t } = useI18n()
 const agentStore = useAgentStore()
@@ -201,7 +207,7 @@ const dreamRunning = ref(false)
 
 const tabs = computed(() => [
   { key: 'timeline', label: t('memory.tabTimeline'), disabled: false },
-  { key: 'memory', label: t('memory.tabMemory'), disabled: true },
+  { key: 'memory', label: t('memory.tabMemory'), disabled: false },
   { key: 'facts', label: t('memory.tabFacts'), disabled: false },
 ])
 

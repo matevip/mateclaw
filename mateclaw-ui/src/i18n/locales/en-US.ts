@@ -1796,6 +1796,11 @@ export default {
     candidates: 'candidates',
     loadMore: 'Load more',
     retry: 'Retry',
+    memoryBrowser: {
+      header: 'Overview',
+      empty: 'No memory content yet',
+      userEdited: 'User edited',
+    },
     time: {
       justNow: 'just now',
       hoursAgo: '{n}h ago',

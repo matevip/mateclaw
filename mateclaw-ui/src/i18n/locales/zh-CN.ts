@@ -1806,6 +1806,11 @@ export default {
     candidates: '条候选',
     loadMore: '加载更多',
     retry: '重试',
+    memoryBrowser: {
+      header: '概述',
+      empty: '暂无记忆内容',
+      userEdited: '用户编辑',
+    },
     time: {
       justNow: '刚刚',
       hoursAgo: '{n}小时前',
