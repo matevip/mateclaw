@@ -129,7 +129,7 @@ public class DreamController {
                               @PathVariable Long reportId,
                               @PathVariable String key,
                               @RequestBody Map<String, String> body) {
-        // P2-5: Validate reportId belongs to this agent (0 = direct edit, skip validation)
+        // Validate reportId belongs to this agent (0 = direct edit from MemoryBrowser)
         if (reportId != 0L) {
             DreamReportEntity report = dreamReportMapper.selectOne(
                     new LambdaQueryWrapper<DreamReportEntity>()
@@ -140,11 +140,16 @@ public class DreamController {
                 return R.fail("Report not found or does not belong to this agent");
             }
         }
+        // Validate key is an existing section in MEMORY.md (prevent arbitrary edits)
+        String decodedKey = java.net.URLDecoder.decode(key, java.nio.charset.StandardCharsets.UTF_8);
+        if (!hilService.sectionExists(agentId, decodedKey)) {
+            return R.fail("Section '" + decodedKey + "' not found in MEMORY.md");
+        }
         String newContent = body.get("content");
         if (newContent == null || newContent.isBlank()) {
             return R.fail("content is required");
         }
-        hilService.editMemoryEntry(agentId, key, newContent);
+        hilService.editMemoryEntry(agentId, decodedKey, newContent);
         return R.ok(null);
     }
 

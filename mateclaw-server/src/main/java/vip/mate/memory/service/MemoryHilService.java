@@ -64,4 +64,14 @@ public class MemoryHilService {
         eventPublisher.publishEvent(new MemoryWriteEvent(agentId, "MEMORY.md", "user-edit", newContent));
         log.info("[HiL] User edited MEMORY.md section '{}' for agent={}", key, agentId);
     }
+
+    /**
+     * Check if a section heading exists in MEMORY.md.
+     * Used by DreamController to validate edit key before allowing write.
+     */
+    public boolean sectionExists(Long agentId, String key) {
+        WorkspaceFileEntity file = workspaceFileService.getFile(agentId, "MEMORY.md");
+        if (file == null || file.getContent() == null) return false;
+        return file.getContent().contains("## " + key);
+    }
 }
