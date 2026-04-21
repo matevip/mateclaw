@@ -23,6 +23,8 @@ public class PatternEntityExtractor implements EntityExtractor {
     private static final Pattern SECTION_HEADER = Pattern.compile("^## (.+)$", Pattern.MULTILINE);
     private static final Pattern KV_BULLET = Pattern.compile("^- \\*\\*(.+?)\\*\\*:\\s*(.+)$", Pattern.MULTILINE);
     private static final Pattern FORGOTTEN_MARKER = Pattern.compile("^> Forgotten:", Pattern.MULTILINE);
+    private static final Pattern FEEDBACK_HELPFUL = Pattern.compile("^> UserFeedback: HELPFUL", Pattern.MULTILINE);
+    private static final Pattern FEEDBACK_UNHELPFUL = Pattern.compile("^> UserFeedback: UNHELPFUL", Pattern.MULTILINE);
 
     @Override
     public List<ExtractedFact> extract(Long agentId, String filename, String content) {
@@ -38,6 +40,9 @@ public class PatternEntityExtractor implements EntityExtractor {
             // Skip forgotten sections (rfc-038 L3: projection excludes Forgotten metadata)
             if (FORGOTTEN_MARKER.matcher(section).find()) continue;
 
+            // Derive trust from UserFeedback metadata in this section
+            double trust = deriveTrust(section);
+
             // Extract key-value bullets: - **key**: value
             Matcher kvMatcher = KV_BULLET.matcher(section);
             while (kvMatcher.find()) {
@@ -45,7 +50,7 @@ public class PatternEntityExtractor implements EntityExtractor {
                 String value = kvMatcher.group(2).trim();
                 if (value.isBlank() || value.equals(":")) continue;
                 String sourceRef = filename + "#" + toSlug(key);
-                facts.add(new ExtractedFact(sourceRef, category, key, "is", value, 0.9, "pattern"));
+                facts.add(new ExtractedFact(sourceRef, category, key, "is", value, 0.9, trust, "pattern"));
             }
 
             // Extract section heading facts from structured files
@@ -61,12 +66,25 @@ public class PatternEntityExtractor implements EntityExtractor {
 
                 String firstLine = body.split("\n")[0].replaceAll("^[-*>]+\\s*", "").trim();
                 if (firstLine.length() >= 5) {
-                    facts.add(new ExtractedFact(sourceRef, category, heading, "has", firstLine, 0.8, "pattern"));
+                    facts.add(new ExtractedFact(sourceRef, category, heading, "has", firstLine, 0.8, trust, "pattern"));
                 }
             }
         }
 
         return facts;
+    }
+
+    /**
+     * Derive trust score from UserFeedback metadata in a section.
+     * Base 0.5, HELPFUL +0.1 each, UNHELPFUL -0.2 each, clamped [0,1].
+     */
+    private double deriveTrust(String section) {
+        double trust = 0.5;
+        Matcher helpful = FEEDBACK_HELPFUL.matcher(section);
+        while (helpful.find()) trust += 0.1;
+        Matcher unhelpful = FEEDBACK_UNHELPFUL.matcher(section);
+        while (unhelpful.find()) trust -= 0.2;
+        return Math.max(0.0, Math.min(1.0, trust));
     }
 
     private String inferCategory(String filename) {

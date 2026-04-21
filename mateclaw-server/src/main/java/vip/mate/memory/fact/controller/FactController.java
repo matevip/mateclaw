@@ -100,17 +100,14 @@ public class FactController {
                 content = content + "\n" + marker + "\n";
             }
             workspaceFileService.saveFile(agentId, filename, content);
+            // Rebuild projection from the UPDATED canonical content (not stale file object)
+            // Forgotten section will be skipped by PatternEntityExtractor
+            projectionBuilder.rebuildOne(agentId, filename, content);
         }
 
-        // Trigger projection rebuild — the forgotten fact will be excluded
-        // because FactProjectionBuilder skips sections with Forgotten: metadata
-        projectionBuilder.rebuildOne(agentId, filename,
-                file != null ? file.getContent() : "");
-
-        // Soft-delete the fact immediately (rebuild will also handle it)
-        fact.setDeleted(1);
-        fact.setUpdateTime(LocalDateTime.now());
-        factMapper.updateById(fact);
+        // Do NOT directly write mate_fact — let projection rebuild handle visibility.
+        // The rebuild will either skip the Forgotten section (removing the fact)
+        // or soft-delete it via deleteByAgentIdAndSourceRefNotIn.
 
         log.info("[Fact] Forgotten fact {} for agent={} by {}", factId, agentId, userId);
         return R.ok(null);
@@ -132,24 +129,35 @@ public class FactController {
             return R.fail("Fact not found");
         }
 
-        // Write feedback metadata to canonical source
+        // Write feedback metadata to the specific canonical section (not file tail)
         String sourceRef = fact.getSourceRef();
         String[] parts = sourceRef.split("#", 2);
         String filename = parts[0];
+        String sectionKey = parts.length > 1 ? parts[1] : null;
         WorkspaceFileEntity file = workspaceFileService.getFile(agentId, filename);
         if (file != null && file.getContent() != null) {
             String marker = "> UserFeedback: " + kind + " " + LocalDate.now();
-            workspaceFileService.saveFile(agentId, filename, file.getContent() + "\n" + marker + "\n");
+            String content = file.getContent();
+            if (sectionKey != null) {
+                String sectionHeader = "## " + sectionKey;
+                int idx = content.indexOf(sectionHeader);
+                if (idx >= 0) {
+                    int nextSection = content.indexOf("\n## ", idx + sectionHeader.length());
+                    int insertAt = nextSection > 0 ? nextSection : content.length();
+                    content = content.substring(0, insertAt) + "\n" + marker + "\n" + content.substring(insertAt);
+                } else {
+                    content = content + "\n" + marker + "\n";
+                }
+            } else {
+                content = content + "\n" + marker + "\n";
+            }
+            workspaceFileService.saveFile(agentId, filename, content);
+            // Rebuild projection from updated canonical — trust will be derived from metadata
+            projectionBuilder.rebuildOne(agentId, filename, content);
         }
 
-        // Adjust trust score
-        double delta = kind.equals("HELPFUL") ? 0.1 : -0.2;
-        double newTrust = Math.max(0.0, Math.min(1.0, (fact.getTrust() != null ? fact.getTrust() : 0.5) + delta));
-        fact.setTrust(newTrust);
-        fact.setUpdateTime(LocalDateTime.now());
-        factMapper.updateById(fact);
-
-        log.info("[Fact] Feedback {} on fact {} for agent={}, trust={}", kind, factId, agentId, newTrust);
+        // Do NOT directly write mate_fact.trust — let projection rebuild derive it from canonical metadata.
+        log.info("[Fact] Feedback {} on fact {} for agent={}", kind, factId, agentId);
         return R.ok(null);
     }
 

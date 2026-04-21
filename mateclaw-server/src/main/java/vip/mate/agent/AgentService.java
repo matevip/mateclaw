@@ -101,14 +101,14 @@ public class AgentService {
         memoryRecallTracker.trackRecalls(agentId, message);
         BaseAgent agent = getOrBuildAgent(agentId);
         return withLifecycleSync(agentId, message, conversationId,
-                () -> agent.chat(message, conversationId));
+                (msg, convId) -> agent.chat(msg, convId));
     }
 
     public Flux<String> chatStream(Long agentId, String message, String conversationId) {
         memoryRecallTracker.trackRecalls(agentId, message);
         BaseAgent agent = getOrBuildAgent(agentId);
         return withLifecycleFlux(agentId, message, conversationId,
-                () -> agent.chatStream(message, conversationId),
+                (msg, convId) -> agent.chatStream(msg, convId),
                 chunk -> chunk);
     }
 
@@ -141,7 +141,7 @@ public class AgentService {
 
         if (agent instanceof StructuredStreamCapable capable) {
             return withLifecycleFlux(agentId, message, conversationId,
-                    () -> capable.chatStructuredStream(message, conversationId,
+                    (msg, convId) -> capable.chatStructuredStream(msg, convId,
                             requesterId != null ? requesterId : "")
                             .doFinally(signal -> ThinkingLevelHolder.clear()),
                     StreamDelta::content);
@@ -150,7 +150,7 @@ public class AgentService {
         // 降级：不支持结构化流的 Agent，包装为纯内容流
         ThinkingLevelHolder.clear();
         return withLifecycleFlux(agentId, message, conversationId,
-                () -> agent.chatStream(message, conversationId)
+                (msg, convId) -> agent.chatStream(msg, convId)
                         .map(chunk -> new StreamDelta(chunk, null)),
                 StreamDelta::content);
     }
@@ -159,7 +159,7 @@ public class AgentService {
         memoryRecallTracker.trackRecalls(agentId, goal);
         BaseAgent agent = getOrBuildAgent(agentId);
         return withLifecycleSync(agentId, goal, conversationId,
-                () -> agent.execute(goal, conversationId));
+                (msg, convId) -> agent.execute(msg, convId));
     }
 
     /**
@@ -176,7 +176,7 @@ public class AgentService {
         memoryRecallTracker.trackRecalls(agentId, userMessage);
         BaseAgent agent = getOrBuildAgent(agentId);
         return withLifecycleSync(agentId, userMessage, conversationId,
-                () -> agent.chatWithReplay(userMessage, conversationId, toolCallPayload));
+                (msg, convId) -> agent.chatWithReplay(msg, convId, toolCallPayload));
     }
 
     /**
@@ -192,7 +192,7 @@ public class AgentService {
         memoryRecallTracker.trackRecalls(agentId, userMessage);
         BaseAgent agent = getOrBuildAgent(agentId);
         return withLifecycleFlux(agentId, userMessage, conversationId,
-                () -> agent.chatWithReplayStream(userMessage, conversationId, toolCallPayload,
+                (msg, convId) -> agent.chatWithReplayStream(msg, convId, toolCallPayload,
                         requesterId != null ? requesterId : ""),
                 StreamDelta::content);
     }
@@ -231,15 +231,20 @@ public class AgentService {
     /**
      * Wraps a synchronous agent call with lifecycle mediator hooks.
      * When lifecycleMediatorEnabled is off, runs plainInvoke directly (Phase 0 behavior).
+     *
+     * P1-1 fix: prefetchAll result is now prepended to userMessage as &lt;memory-context&gt; block.
+     * P1-4 fix: N/A for sync (no cancel/error signal issue).
      */
     private String withLifecycleSync(Long agentId, String message, String conversationId,
-                                     Supplier<String> plainInvoke) {
+                                     java.util.function.BiFunction<String, String, String> invoke) {
         if (!memoryProperties.isLifecycleMediatorEnabled()) {
-            return plainInvoke.get();
+            return invoke.apply(message, conversationId);
         }
         TurnContext ctx = new TurnContext(agentId, conversationId, conversationId, 0, message);
-        lifecycleMediator.beforeLlmCall(ctx);
-        String result = plainInvoke.get();
+        String memoryContext = lifecycleMediator.beforeLlmCall(ctx);
+        // Inject memory context into the user message (RFC-037 §3.3)
+        String enrichedMessage = injectMemoryContext(message, memoryContext);
+        String result = invoke.apply(enrichedMessage, conversationId);
         lifecycleMediator.afterLlmCall(ctx, result != null ? result : "");
         return result;
     }
@@ -247,24 +252,38 @@ public class AgentService {
     /**
      * Wraps a streaming agent call with lifecycle mediator hooks.
      * When lifecycleMediatorEnabled is off, runs plainInvoke directly (Phase 0 behavior).
+     *
+     * P1-1 fix: prefetchAll result is now prepended to userMessage.
+     * P1-4 fix: afterLlmCall only fires on COMPLETE signal, not on cancel/error.
      */
     private <T> Flux<T> withLifecycleFlux(Long agentId, String message, String conversationId,
-                                          Supplier<Flux<T>> plainInvoke,
+                                          java.util.function.BiFunction<String, String, Flux<T>> invoke,
                                           Function<T, String> contentExtractor) {
         if (!memoryProperties.isLifecycleMediatorEnabled()) {
-            return plainInvoke.get();
+            return invoke.apply(message, conversationId);
         }
         TurnContext ctx = new TurnContext(agentId, conversationId, conversationId, 0, message);
-        lifecycleMediator.beforeLlmCall(ctx);
+        String memoryContext = lifecycleMediator.beforeLlmCall(ctx);
+        String enrichedMessage = injectMemoryContext(message, memoryContext);
         StringBuilder reply = new StringBuilder();
-        return plainInvoke.get()
+        return invoke.apply(enrichedMessage, conversationId)
                 .doOnNext(item -> {
                     String text = contentExtractor.apply(item);
                     if (text != null) {
                         reply.append(text);
                     }
                 })
-                .doFinally(signal -> lifecycleMediator.afterLlmCall(ctx, reply.toString()));
+                .doOnComplete(() -> lifecycleMediator.afterLlmCall(ctx, reply.toString()))
+                .doOnError(e -> log.debug("[Memory] Stream error, skipping afterLlmCall: {}", e.getMessage()));
+    }
+
+    /**
+     * Prepend memory-context block to user message if non-empty.
+     * Does not pollute build-time system prompt snapshot.
+     */
+    private String injectMemoryContext(String message, String memoryContext) {
+        if (memoryContext == null || memoryContext.isBlank()) return message;
+        return memoryContext + "\n\n" + message;
     }
 
     // ==================== 内部方法 ====================

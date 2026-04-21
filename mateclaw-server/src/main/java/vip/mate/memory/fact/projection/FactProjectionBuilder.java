@@ -119,8 +119,9 @@ public class FactProjectionBuilder {
             existing.setObjectValue(fact.objectValue());
             existing.setConfidence(fact.confidence());
             existing.setExtractedBy(fact.extractedBy());
-            // Apply trust time decay (half-life from config, default 60 days)
-            existing.setTrust(applyTimeDecay(existing.getTrust(), existing.getUpdateTime(), now));
+            // Trust derived from canonical feedback metadata, then time-decayed
+            double baseTrust = fact.trust();
+            existing.setTrust(applyTimeDecay(baseTrust, existing.getUpdateTime(), now));
             existing.setUpdateTime(now);
             existing.setDeleted(0); // un-delete if previously soft-deleted
             factMapper.updateById(existing);
@@ -133,7 +134,7 @@ public class FactProjectionBuilder {
             entity.setPredicate(fact.predicate());
             entity.setObjectValue(fact.objectValue());
             entity.setConfidence(fact.confidence());
-            entity.setTrust(0.5);
+            entity.setTrust(fact.trust());
             entity.setUseCount(0);
             entity.setExtractedBy(fact.extractedBy());
             entity.setCreateTime(now);
