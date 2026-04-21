@@ -18,7 +18,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { http } from '@/api'
 
@@ -26,12 +26,13 @@ const props = defineProps<{ agentId: number }>()
 const { t } = useI18n()
 const card = ref<any>(null)
 
-onMounted(async () => {
+watch(() => props.agentId, async (id) => {
+  if (!id) { card.value = null; return }
   try {
-    const res = await http.get(`/memory/${props.agentId}/dream/morning-card`)
+    const res = await http.get(`/memory/${id}/dream/morning-card`)
     card.value = res.data
-  } catch { /* silent */ }
-})
+  } catch { card.value = null }
+}, { immediate: true })
 
 async function dismiss() {
   if (!card.value) return

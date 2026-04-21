@@ -1805,6 +1805,8 @@ export default {
       success: 'Success',
       failed: 'Failed',
       skipped: 'Skipped',
+      running: 'Running',
+      pending: 'Pending',
     },
     report: {
       mode: 'Mode',

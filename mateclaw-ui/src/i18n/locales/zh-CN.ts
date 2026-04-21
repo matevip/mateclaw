@@ -1815,6 +1815,8 @@ export default {
       success: '成功',
       failed: '失败',
       skipped: '跳过',
+      running: '运行中',
+      pending: '等待中',
     },
     report: {
       mode: '模式',

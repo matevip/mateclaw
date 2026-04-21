@@ -51,8 +51,10 @@ export const useMemoryStore = defineStore('memory', () => {
     try {
       const res = await http.get(`/memory/${agentId}/dream/reports/${reportId}`)
       currentReport.value = res.data
-    } catch {
+      error.value = null
+    } catch (e: any) {
       currentReport.value = null
+      error.value = e.message || 'Failed to load report'
     } finally {
       loading.value = false
     }
