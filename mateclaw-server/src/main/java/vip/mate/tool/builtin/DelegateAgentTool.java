@@ -40,7 +40,7 @@ public class DelegateAgentTool {
     private static final int MAX_DELEGATION_DEPTH = 3;
     private static final int MAX_RESULT_LENGTH = 4000;
     private static final int MAX_PARALLEL_CHILDREN = 3;
-    private static final int PARALLEL_TIMEOUT_SECONDS = 300; // 5 分钟
+    private static final int PARALLEL_TIMEOUT_SECONDS = 60;
 
     /** 子 Agent 禁用的工具：防递归 + 防副作用 */
     private static final Set<String> CHILD_DENIED_TOOLS = Set.of(

@@ -100,4 +100,15 @@ public class MessageContentPart {
         part.setText(jsonPayload);
         return part;
     }
+
+    /**
+     * Create a parse_error content part to surface content_parts deserialization failures
+     * instead of silently returning an empty list.
+     */
+    public static MessageContentPart parseError(String messageId, String cause) {
+        MessageContentPart part = new MessageContentPart();
+        part.setType("parse_error");
+        part.setText("[Message content parse failed] Message ID: " + messageId + " | Cause: " + cause);
+        return part;
+    }
 }

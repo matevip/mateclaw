@@ -95,7 +95,3 @@ deploy/.env
 CLAUDE.md
 .claude/settings.local.json
 .claude/plans/
-
-# Private internal dirs
-.codex/
-openspec/

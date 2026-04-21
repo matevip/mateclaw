@@ -143,6 +143,12 @@
           <span>{{ status === 'interrupted' ? $t('chat.interrupted') : $t('chat.stopped') }}</span>
         </div>
 
+        <!-- parse_error content block -->
+        <div v-if="parseErrorText" class="parse-error-card">
+          <el-icon class="parse-error-card__icon"><WarningFilled /></el-icon>
+          <span class="parse-error-card__text">{{ parseErrorText }}</span>
+        </div>
+
         <!-- 错误卡片 -->
         <div v-if="status === 'failed'" class="error-card">
           <div class="error-card__header">
@@ -438,6 +444,12 @@ const displayContent = computed(() => {
   // 有错误卡片时隐藏 [错误] 原始文本，避免重复展示
   if (status.value === 'failed' && errorInfo.value && text.startsWith('[错误]')) return ''
   return text
+})
+
+// --- parse_error detection ---
+const parseErrorText = computed(() => {
+  const errorPart = props.message.contentParts?.find(p => p.type === 'parse_error')
+  return errorPart?.text || ''
 })
 
 const renderedContent = computed(() => {
@@ -1080,6 +1092,31 @@ watch(isGenerating, (generating) => {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* ==================== parse_error card ==================== */
+.parse-error-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--mc-warning, #f59e0b) 8%, var(--mc-bg-elevated, #f8fafc));
+  border: 1px solid color-mix(in srgb, var(--mc-warning, #f59e0b) 25%, transparent);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--mc-text-secondary, #64748b);
+}
+
+.parse-error-card__icon {
+  flex-shrink: 0;
+  color: var(--mc-warning, #f59e0b);
+  margin-top: 1px;
+}
+
+.parse-error-card__text {
+  word-break: break-word;
 }
 
 /* ==================== 审批面板 ==================== */
