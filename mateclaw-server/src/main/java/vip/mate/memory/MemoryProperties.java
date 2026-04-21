@@ -138,5 +138,8 @@ public class MemoryProperties {
 
         /** Trust score half-life in days for time decay */
         private int trustHalfLifeDays = 60;
+
+        /** Enable UI Forget button on facts (Phase 3) */
+        private boolean forgetEnabled = false;
     }
 }

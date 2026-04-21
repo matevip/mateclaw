@@ -64,8 +64,8 @@ public class FactController {
     public R<Void> forgetFact(@PathVariable Long agentId,
                                @PathVariable Long factId,
                                Authentication auth) {
-        if (!properties.getFact().isProjectionEnabled()) {
-            return R.fail("Fact projection is disabled");
+        if (!properties.getFact().isForgetEnabled()) {
+            return R.fail(410, "Forget is disabled");
         }
 
         FactEntity fact = factMapper.selectById(factId);

@@ -218,3 +218,4 @@ mate:
       llm-extraction-enabled: false
       contradiction-check-enabled: false
       trust-half-life-days: 60
+      forget-enabled: false
