@@ -99,8 +99,15 @@
           </div>
         </div>
 
-        <!-- Right: Detail panel -->
+        <!-- Right: Content panel -->
         <div class="memory-detail">
+          <!-- Facts tab -->
+          <template v-if="activeTab === 'facts' && selectedAgentId">
+            <FactList :agent-id="selectedAgentId" />
+          </template>
+
+          <!-- Timeline tab detail -->
+          <template v-else-if="activeTab === 'timeline'">
           <!-- Inline dream input (replaces dialog) -->
           <Transition name="slide-down">
             <div v-if="dreamInputOpen" class="dream-input-area">
@@ -158,6 +165,7 @@
               <p>{{ t('memory.desc') }}</p>
             </div>
           </template>
+          </template><!-- /timeline tab -->
         </div>
       </div>
     </div>
@@ -172,6 +180,7 @@ import { http } from '@/api'
 import { useAgentStore } from '@/stores/useAgentStore'
 import { useMemoryStore, type DreamReportItem } from '@/stores/useMemoryStore'
 import MorningCard from './components/MorningCard.vue'
+import FactList from './components/FactList.vue'
 
 const { t } = useI18n()
 const agentStore = useAgentStore()
@@ -193,7 +202,7 @@ const dreamRunning = ref(false)
 const tabs = computed(() => [
   { key: 'timeline', label: t('memory.tabTimeline'), disabled: false },
   { key: 'memory', label: t('memory.tabMemory'), disabled: true },
-  { key: 'facts', label: t('memory.tabFacts'), disabled: true },
+  { key: 'facts', label: t('memory.tabFacts'), disabled: false },
 ])
 
 onMounted(async () => {
