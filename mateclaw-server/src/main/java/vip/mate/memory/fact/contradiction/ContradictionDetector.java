@@ -21,9 +21,10 @@ import java.util.Set;
  * Called as a synchronous step at the end of MemoryEmergenceService.consolidate
  * (rfc-038 §3.7, decision D11 — NOT an event listener).
  *
- * <p>Phase 3 L1: simple string-overlap detection between promoted entries
- * and existing facts with the same subject but different object values.
- * Full LLM batch judgment deferred to Phase 3 L4+.
+ * <p><b>EXPERIMENTAL</b> — Phase 3 L1 uses simple string-overlap detection
+ * (same subject, different object). False positives are expected.
+ * Gated behind {@code mate.memory.fact.contradiction-check-enabled=false} (default off).
+ * Full LLM batch judgment (using contradiction-batch.txt prompt) deferred to Phase 3 L4+.
  *
  * @author MateClaw Team
  */

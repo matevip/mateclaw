@@ -129,6 +129,17 @@ public class DreamController {
                               @PathVariable Long reportId,
                               @PathVariable String key,
                               @RequestBody Map<String, String> body) {
+        // P2-5: Validate reportId belongs to this agent (0 = direct edit, skip validation)
+        if (reportId != 0L) {
+            DreamReportEntity report = dreamReportMapper.selectOne(
+                    new LambdaQueryWrapper<DreamReportEntity>()
+                            .eq(DreamReportEntity::getId, reportId)
+                            .eq(DreamReportEntity::getAgentId, agentId)
+                            .eq(DreamReportEntity::getDeleted, 0));
+            if (report == null) {
+                return R.fail("Report not found or does not belong to this agent");
+            }
+        }
         String newContent = body.get("content");
         if (newContent == null || newContent.isBlank()) {
             return R.fail("content is required");
@@ -144,8 +155,8 @@ public class DreamController {
             if (principal instanceof vip.mate.auth.model.UserEntity user) {
                 return user.getId();
             }
-            // Fallback: use abs(hashCode) to avoid negative IDs, add offset to avoid collision with real IDs
-            return Math.abs((long) auth.getName().hashCode()) + 1_000_000_000L;
+            // No stable user ID available — refuse rather than fabricate
+            return null;
         } catch (Exception e) {
             return null;
         }
