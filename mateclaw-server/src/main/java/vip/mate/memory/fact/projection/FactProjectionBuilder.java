@@ -1,11 +1,13 @@
 package vip.mate.memory.fact.projection;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import vip.mate.memory.MemoryProperties;
 import vip.mate.memory.fact.extraction.CompositeEntityExtractor;
 import vip.mate.memory.fact.extraction.ExtractedFact;
+import vip.mate.memory.fact.model.FactEntity;
 import vip.mate.memory.fact.repository.FactMapper;
 import vip.mate.workspace.document.WorkspaceFileService;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
@@ -18,9 +20,10 @@ import java.util.List;
  * Rebuilds the fact projection from canonical sources.
  * <p>
  * Derived columns are overwritten; accumulated columns (use_count, last_used_at)
- * are preserved via MERGE/upsert keyed on (agent_id, source_ref).
+ * are preserved via select-then-update keyed on (agent_id, source_ref).
  * <p>
  * Only this class may write derived columns to mate_fact (core invariant).
+ * Uses MyBatis Plus CRUD (dialect-safe for both H2 and MySQL).
  *
  * @author MateClaw Team
  */
@@ -65,13 +68,11 @@ public class FactProjectionBuilder {
             allFacts.addAll(extractor.extract(agentId, "MEMORY.md", memoryFile.getContent()));
         }
 
-        // Upsert all extracted facts
+        // Upsert all extracted facts (dialect-safe)
         LocalDateTime now = LocalDateTime.now();
         List<String> keepRefs = new ArrayList<>();
         for (ExtractedFact fact : allFacts) {
-            factMapper.upsertDerivedH2(agentId, fact.sourceRef(), fact.category(),
-                    fact.subject(), fact.predicate(), fact.objectValue(),
-                    fact.confidence(), 0.5, fact.extractedBy(), now, now);
+            upsertDerived(agentId, fact, now);
             keepRefs.add(fact.sourceRef());
         }
 
@@ -93,11 +94,50 @@ public class FactProjectionBuilder {
         List<ExtractedFact> facts = extractor.extract(agentId, filename, content);
         LocalDateTime now = LocalDateTime.now();
         for (ExtractedFact fact : facts) {
-            factMapper.upsertDerivedH2(agentId, fact.sourceRef(), fact.category(),
-                    fact.subject(), fact.predicate(), fact.objectValue(),
-                    fact.confidence(), 0.5, fact.extractedBy(), now, now);
+            upsertDerived(agentId, fact, now);
         }
         log.debug("[FactProjection] rebuildOne: agent={}, file={}, facts={}", agentId, filename, facts.size());
         return facts.size();
+    }
+
+    /**
+     * Dialect-safe upsert: select by (agent_id, source_ref), then insert or update.
+     * Preserves accumulated columns (use_count, last_used_at) on update.
+     */
+    private void upsertDerived(Long agentId, ExtractedFact fact, LocalDateTime now) {
+        FactEntity existing = factMapper.selectOne(
+                new LambdaQueryWrapper<FactEntity>()
+                        .eq(FactEntity::getAgentId, agentId)
+                        .eq(FactEntity::getSourceRef, fact.sourceRef())
+                        .last("LIMIT 1"));
+
+        if (existing != null) {
+            // Update derived columns only; preserve accumulated columns
+            existing.setCategory(fact.category());
+            existing.setSubject(fact.subject());
+            existing.setPredicate(fact.predicate());
+            existing.setObjectValue(fact.objectValue());
+            existing.setConfidence(fact.confidence());
+            existing.setExtractedBy(fact.extractedBy());
+            existing.setUpdateTime(now);
+            existing.setDeleted(0); // un-delete if previously soft-deleted
+            factMapper.updateById(existing);
+        } else {
+            FactEntity entity = new FactEntity();
+            entity.setAgentId(agentId);
+            entity.setSourceRef(fact.sourceRef());
+            entity.setCategory(fact.category());
+            entity.setSubject(fact.subject());
+            entity.setPredicate(fact.predicate());
+            entity.setObjectValue(fact.objectValue());
+            entity.setConfidence(fact.confidence());
+            entity.setTrust(0.5);
+            entity.setUseCount(0);
+            entity.setExtractedBy(fact.extractedBy());
+            entity.setCreateTime(now);
+            entity.setUpdateTime(now);
+            entity.setDeleted(0);
+            factMapper.insert(entity);
+        }
     }
 }

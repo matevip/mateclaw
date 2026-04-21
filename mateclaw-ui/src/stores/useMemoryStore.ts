@@ -24,17 +24,23 @@ export const useMemoryStore = defineStore('memory', () => {
   const reports = ref<DreamReportItem[]>([])
   const total = ref(0)
   const loading = ref(false)
+  const error = ref<string | null>(null)
   const currentReport = ref<DreamReportItem | null>(null)
-  let eventSource: EventSource | null = null
+  let pollTimer: ReturnType<typeof setInterval> | null = null
 
   async function fetchReports(agentId: number, page = 1, size = 20) {
     loading.value = true
+    error.value = null
     try {
       const res = await http.get(`/memory/${agentId}/dream/reports`, {
         params: { page, size },
       })
       reports.value = res.data.records || []
       total.value = res.data.total || 0
+    } catch (e: any) {
+      error.value = e.message || 'Failed to load reports'
+      reports.value = []
+      total.value = 0
     } finally {
       loading.value = false
     }
@@ -45,46 +51,34 @@ export const useMemoryStore = defineStore('memory', () => {
     try {
       const res = await http.get(`/memory/${agentId}/dream/reports/${reportId}`)
       currentReport.value = res.data
+    } catch {
+      currentReport.value = null
     } finally {
       loading.value = false
     }
   }
 
   /**
-   * Subscribe to dream SSE events for an agent.
-   * Automatically refreshes the report list on new dream events.
+   * Poll for new dream events instead of SSE.
+   * SSE via EventSource doesn't support Authorization headers,
+   * causing 401 errors. Polling every 15s is sufficient for dream events.
    */
   function subscribeEvents(agentId: number) {
     unsubscribeEvents()
-    const token = localStorage.getItem('token')
-    const url = `/api/v1/memory/${agentId}/dream/events`
-    eventSource = new EventSource(url)
-
-    eventSource.addEventListener('dream.completed', (e) => {
-      // Refresh the report list to show the new dream
+    pollTimer = setInterval(() => {
       fetchReports(agentId, 1, 20)
-    })
-
-    eventSource.addEventListener('dream.failed', (e) => {
-      fetchReports(agentId, 1, 20)
-    })
-
-    eventSource.onerror = () => {
-      // Reconnect after 5s on error
-      unsubscribeEvents()
-      setTimeout(() => subscribeEvents(agentId), 5000)
-    }
+    }, 15000)
   }
 
   function unsubscribeEvents() {
-    if (eventSource) {
-      eventSource.close()
-      eventSource = null
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      pollTimer = null
     }
   }
 
   return {
-    reports, total, loading, currentReport,
+    reports, total, loading, error, currentReport,
     fetchReports, fetchReport,
     subscribeEvents, unsubscribeEvents,
   }

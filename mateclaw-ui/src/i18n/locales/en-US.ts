@@ -1795,6 +1795,7 @@ export default {
     modeNightly: 'Nightly',
     candidates: 'candidates',
     loadMore: 'Load more',
+    retry: 'Retry',
     time: {
       justNow: 'just now',
       hoursAgo: '{n}h ago',

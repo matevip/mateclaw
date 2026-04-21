@@ -139,14 +139,13 @@ public class DreamController {
 
     private Long resolveUserId(Authentication auth) {
         if (auth == null) return null;
-        // Resolve from auth principal — assumes user ID is accessible
         try {
             Object principal = auth.getPrincipal();
             if (principal instanceof vip.mate.auth.model.UserEntity user) {
                 return user.getId();
             }
-            // Fallback: use username hash as stable ID
-            return (long) auth.getName().hashCode();
+            // Fallback: use abs(hashCode) to avoid negative IDs, add offset to avoid collision with real IDs
+            return Math.abs((long) auth.getName().hashCode()) + 1_000_000_000L;
         } catch (Exception e) {
             return null;
         }

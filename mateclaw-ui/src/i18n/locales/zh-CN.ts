@@ -1805,6 +1805,7 @@ export default {
     modeNightly: '夜间',
     candidates: '条候选',
     loadMore: '加载更多',
+    retry: '重试',
     time: {
       justNow: '刚刚',
       hoursAgo: '{n}小时前',

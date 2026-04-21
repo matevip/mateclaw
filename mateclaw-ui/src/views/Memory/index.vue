@@ -63,6 +63,13 @@
             <template v-if="store.loading">
               <div class="skeleton-card" v-for="i in 4" :key="i"><div class="skeleton-line" /><div class="skeleton-line short" /></div>
             </template>
+            <template v-else-if="store.error">
+              <div class="empty-state error-state">
+                <div class="empty-icon">⚠️</div>
+                <p>{{ store.error }}</p>
+                <button class="retry-btn" @click="loadReports">{{ t('memory.retry') }}</button>
+              </div>
+            </template>
             <template v-else-if="store.reports.length === 0">
               <div class="empty-state">
                 <div class="empty-icon">🌙</div>
@@ -208,6 +215,7 @@ function selectAgent(agent: any) {
   selectedAgentId.value = agent.id
   agentDropdownOpen.value = false
   selectedReportId.value = null
+  currentPage.value = 1
   store.currentReport = null
 }
 
@@ -392,6 +400,12 @@ function fmtTime(iso: string) {
 .empty-state { display: flex; flex-direction: column; align-items: center; padding: 40px 0; color: var(--mc-text-tertiary); }
 .empty-icon { font-size: 28px; margin-bottom: 8px; }
 .empty-state p { font-size: 13px; }
+.error-state p { color: var(--mc-text-secondary); }
+.retry-btn {
+  margin-top: 8px; padding: 6px 16px; border: 1px solid var(--mc-border); border-radius: 8px;
+  background: transparent; font-size: 12px; color: var(--mc-text-secondary); cursor: pointer;
+}
+.retry-btn:hover { border-color: var(--mc-primary); color: var(--mc-primary); }
 
 /* ========== Right detail ========== */
 .memory-detail {

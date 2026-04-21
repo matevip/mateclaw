@@ -31,6 +31,7 @@ public class MorningCardService {
      * Get the morning card for a user+agent. Returns null if no unseen dream exists.
      */
     public Map<String, Object> getCardFor(Long userId, Long agentId) {
+        if (userId == null || agentId == null) return null;
         // Find the latest successful dream report for this agent
         DreamReportEntity latestReport = dreamReportMapper.selectOne(
                 new LambdaQueryWrapper<DreamReportEntity>()

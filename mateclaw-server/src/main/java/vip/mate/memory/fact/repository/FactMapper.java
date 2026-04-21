@@ -11,36 +11,13 @@ import java.util.List;
 
 /**
  * Fact mapper — limited write operations enforce the core invariant:
- * - Derived columns: only FactProjectionBuilder may write
+ * - Derived columns: only FactProjectionBuilder may write (via upsertDerived)
  * - Accumulated columns: only bumpUseCount may write
  *
  * @author MateClaw Team
  */
 @Mapper
 public interface FactMapper extends BaseMapper<FactEntity> {
-
-    /**
-     * Upsert derived columns by (agent_id, source_ref).
-     * Preserves accumulated columns (last_used_at, use_count).
-     */
-    @Update("""
-        MERGE INTO mate_fact (agent_id, source_ref, category, subject, predicate, object_value,
-                              confidence, trust, extracted_by, create_time, update_time, deleted)
-        KEY (agent_id, source_ref)
-        VALUES (#{agentId}, #{sourceRef}, #{category}, #{subject}, #{predicate}, #{objectValue},
-                #{confidence}, #{trust}, #{extractedBy}, #{createTime}, #{updateTime}, 0)
-        """)
-    void upsertDerivedH2(@Param("agentId") Long agentId,
-                         @Param("sourceRef") String sourceRef,
-                         @Param("category") String category,
-                         @Param("subject") String subject,
-                         @Param("predicate") String predicate,
-                         @Param("objectValue") String objectValue,
-                         @Param("confidence") Double confidence,
-                         @Param("trust") Double trust,
-                         @Param("extractedBy") String extractedBy,
-                         @Param("createTime") LocalDateTime createTime,
-                         @Param("updateTime") LocalDateTime updateTime);
 
     /**
      * Bump use_count and last_used_at for the given fact IDs.

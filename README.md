@@ -6,7 +6,7 @@
 
 # MateClaw
 
-<p align="center"><b>Your AI needs a Plan B.</b></p>
+<p align="center"><b>Your second brain</b></p>
 
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repo-black.svg?logo=github)](https://github.com/matevip/mateclaw)
 [![Documentation](https://img.shields.io/badge/Docs-Website-green.svg?logo=readthedocs&label=Docs)](https://claw.mate.vip/docs)

@@ -4,9 +4,9 @@
   <img src="mateclaw-ui/public/logo/mateclaw_logo_s.png" alt="MateClaw Logo" width="120">
 </p>
 
-# MateClaw
+# 太一（MateClaw）
 
-<p align="center"><b>AI 也该有 Plan B。</b></p>
+<p align="center"><b>你的超级大脑</b></p>
 
 [![GitHub 仓库](https://img.shields.io/badge/GitHub-仓库-black.svg?logo=github)](https://github.com/matevip/mateclaw)
 [![文档](https://img.shields.io/badge/文档-在线-green.svg?logo=readthedocs&label=Docs)](https://claw.mate.vip/docs)
