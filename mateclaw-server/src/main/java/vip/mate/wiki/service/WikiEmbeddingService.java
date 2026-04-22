@@ -47,6 +47,7 @@ public class WikiEmbeddingService {
     private final ModelConfigService modelConfigService;
     private final WikiKnowledgeBaseService kbService;
     private final SystemSettingMapper systemSettingMapper;
+    private final vip.mate.llm.service.ModelProviderService modelProviderService;
 
     /** 系统默认 embedding 模型的 mate_system_setting key */
     public static final String SYSTEM_SETTING_DEFAULT_EMBEDDING_ID = "embedding.default.model.id";
@@ -87,15 +88,24 @@ public class WikiEmbeddingService {
         if (defaultId != null) {
             ModelConfigEntity model = safeGetModel(defaultId);
             if (isUsable(model)) {
-                return new Resolved(factory.build(model), model.getModelName());
+                try {
+                    return new Resolved(factory.build(model), model.getModelName());
+                } catch (Exception e) {
+                    log.warn("[WikiEmbedding] System default embedding model {} build failed: {}", defaultId, e.getMessage());
+                }
+            } else {
+                log.warn("[WikiEmbedding] System default embedding model {} is unusable, falling back", defaultId);
             }
-            log.warn("[WikiEmbedding] System default embedding model {} is unusable, falling back", defaultId);
         }
 
         // 优先级 3：任意 enabled
         ModelConfigEntity anyEnabled = modelConfigService.findFirstEnabledEmbedding();
         if (isUsable(anyEnabled)) {
-            return new Resolved(factory.build(anyEnabled), anyEnabled.getModelName());
+            try {
+                return new Resolved(factory.build(anyEnabled), anyEnabled.getModelName());
+            } catch (Exception e) {
+                log.warn("[WikiEmbedding] Fallback embedding model {} build failed: {}", anyEnabled.getId(), e.getMessage());
+            }
         }
 
         log.warn("[WikiEmbedding] No usable embedding model configured. "
@@ -355,9 +365,17 @@ public class WikiEmbeddingService {
     }
 
     private boolean isUsable(ModelConfigEntity model) {
-        return model != null
-                && Boolean.TRUE.equals(model.getEnabled())
-                && "embedding".equals(model.getModelType());
+        if (model == null || !Boolean.TRUE.equals(model.getEnabled())
+                || !"embedding".equals(model.getModelType())) {
+            return false;
+        }
+        // Skip models whose provider lacks a valid API key (mirrors chat model path fix 341ad1f)
+        try {
+            return modelProviderService.isProviderConfigured(model.getProvider());
+        } catch (Exception e) {
+            log.debug("[WikiEmbedding] Provider check failed for model {}: {}", model.getId(), e.getMessage());
+            return false;
+        }
     }
 
     private Long readSystemDefaultEmbeddingId() {
