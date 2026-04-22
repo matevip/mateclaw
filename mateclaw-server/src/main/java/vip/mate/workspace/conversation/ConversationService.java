@@ -450,7 +450,8 @@ public class ConversationService {
             }
             switch (part.getType()) {
                 case "text" -> appendSegment(text, part.getText());
-                case "thinking", "tool_call", "parse_error" -> { /* skip — frontend reads these from contentParts directly */ }
+                case "thinking", "tool_call" -> { /* skip — frontend reads these from contentParts directly */ }
+                case "parse_error" -> appendSegment(text, part.getText());
                 case "file" -> appendSegment(text, "[附件] " + safe(part.getFileName()));
                 default -> appendSegment(text, part.getText());
             }
