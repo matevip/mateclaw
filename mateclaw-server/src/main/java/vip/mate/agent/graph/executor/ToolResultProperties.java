@@ -26,8 +26,8 @@ import java.util.Set;
  *   agent:
  *     tool-result:
  *       enabled: true
- *       per-result-threshold-chars: 4000
- *       per-turn-budget-chars: 16000
+ *       per-result-threshold-chars: 16000
+ *       per-turn-budget-chars: 32000
  *       preview-head-chars: 800
  *       storage-base-dir:
  * </pre>
@@ -39,10 +39,10 @@ public class ToolResultProperties {
     private boolean enabled = true;
 
     /** A single tool result larger than this is spilled to disk. */
-    private int perResultThresholdChars = 4000;
+    private int perResultThresholdChars = 16000;  // was 4000 — prevents WebSearch spill-to-disk
 
     /** Aggregate cap on combined response size in one tool turn. */
-    private int perTurnBudgetChars = 16000;
+    private int perTurnBudgetChars = 32000;  // was 16000 — headroom for multi-tool turns
 
     /** Number of leading characters kept inline as a preview after spilling. */
     private int previewHeadChars = 800;

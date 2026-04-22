@@ -167,8 +167,8 @@ mate:
     # the in-context preview points the agent at the spill file (read_file tool).
     tool-result:
       enabled: true
-      per-result-threshold-chars: 4000
-      per-turn-budget-chars: 16000
+      per-result-threshold-chars: 16000   # was 4000 — prevents WebSearch spill-to-disk
+      per-turn-budget-chars: 32000        # was 16000 — headroom for multi-tool turns
       preview-head-chars: 800
       storage-base-dir: ""
       # Retrieval-style tools that must NEVER be spilled. Spilling read_file's

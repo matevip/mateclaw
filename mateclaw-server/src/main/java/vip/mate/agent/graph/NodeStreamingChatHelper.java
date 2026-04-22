@@ -256,9 +256,23 @@ public class NodeStreamingChatHelper {
         }
     }
 
+    /**
+     * Broadcast a lightweight progress event so the frontend shows activity
+     * during silent LLM calls (e.g. triage). Sent as a "progress" SSE event.
+     */
+    public void broadcastProgress(String conversationId, String message) {
+        if (streamTracker == null || conversationId == null || conversationId.isEmpty()) {
+            return;
+        }
+        streamTracker.broadcastObject(conversationId, "progress",
+                Map.of("message", message != null ? message : ""));
+    }
+
     // ==================== 重试配置 ====================
 
     private static final int MAX_RETRIES = 5;
+    // For rate-limit and server-error: fail fast to failover chain.
+    private static final int MAX_RETRIES_RATE_LIMIT = 2;
     private static final long BACKOFF_BASE_MS = 3000;
     private static final long BACKOFF_CAP_MS = 60_000;
 
@@ -540,11 +554,22 @@ public class NodeStreamingChatHelper {
                 broadcastDelta(conversationId, "warning",
                         buildDeltaJson("⏱️ 请求频率受限，等待 " + (delay / 1000) + " 秒后重试（第 " + attempt + "/" + MAX_RETRIES + " 次）..."));
             }
-            try {
-                Thread.sleep(delay);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                return buildErrorResult("LLM 调用被中断", conversationId, phase);
+            // Poll stop flag every 100ms so user Stop is honored mid-backoff.
+            long remaining = delay;
+            while (remaining > 0) {
+                if (streamTracker != null && streamTracker.isStopRequested(conversationId)) {
+                    log.info("[{}] Stop requested during backoff — aborting retry: conversationId={}",
+                            phase, conversationId);
+                    throw new CancellationException("Stream stopped by user");
+                }
+                long slice = Math.min(100, remaining);
+                try {
+                    Thread.sleep(slice);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return buildErrorResult("LLM 调用被中断", conversationId, phase);
+                }
+                remaining -= slice;
             }
         }
 
@@ -731,10 +756,12 @@ public class NodeStreamingChatHelper {
                         conversationId, phase, errorType);
             }
 
-            // Rate limit / Server error: 重试
-            if (attempt < MAX_RETRIES && (errorType == ErrorType.RATE_LIMIT || errorType == ErrorType.SERVER_ERROR)) {
+            // Rate limit / Server error: retry with reduced limit for rate-limit/server-error
+            boolean isRateLimitOrServerError = errorType == ErrorType.RATE_LIMIT || errorType == ErrorType.SERVER_ERROR;
+            int effectiveMaxRetries = isRateLimitOrServerError ? MAX_RETRIES_RATE_LIMIT : MAX_RETRIES;
+            if (attempt < effectiveMaxRetries && isRateLimitOrServerError) {
                 log.warn("[{}] Retryable error (attempt {}/{}, type={}): {}",
-                        phase, attempt, MAX_RETRIES, errorType, error.getMessage());
+                        phase, attempt, effectiveMaxRetries, errorType, error.getMessage());
                 return null;  // 返回 null 触发重试
             }
 

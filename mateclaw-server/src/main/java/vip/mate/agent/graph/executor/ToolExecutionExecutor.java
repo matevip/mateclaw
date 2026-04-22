@@ -38,13 +38,10 @@ import java.util.concurrent.*;
 public class ToolExecutionExecutor {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    private static final ExecutorService TOOL_EXECUTOR = Executors.newFixedThreadPool(
-            Math.max(4, Runtime.getRuntime().availableProcessors()),
-            r -> {
-                Thread t = new Thread(r, "tool-executor");
-                t.setDaemon(true);
-                return t;
-            });
+    // JDK 21 virtual threads: no blocking stall for I/O-bound tools.
+    // Each tool invocation gets its own lightweight carrier thread.
+    private static final ExecutorService TOOL_EXECUTOR =
+            Executors.newVirtualThreadPerTaskExecutor();
 
     /**
      * Legacy hardcoded unsafe set, kept as a fallback when no

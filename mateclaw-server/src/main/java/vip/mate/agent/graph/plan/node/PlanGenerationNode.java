@@ -165,6 +165,12 @@ public class PlanGenerationNode implements NodeAction {
 
             Prompt prompt = new Prompt(promptMessages);
 
+            // Broadcast a lightweight progress token so the frontend shows activity
+            // during the silent triage call (typically 1-3 s).
+            if (streamingHelper != null) {
+                streamingHelper.broadcastProgress(conversationId, "分析中...");
+            }
+
             // Silent streaming call — structured JSON is parsed below; tokens are not forwarded to the client.
             NodeStreamingChatHelper.StreamResult result = streamingHelper.streamCallSilent(
                     chatModel, prompt, conversationId, "plan_generation");
