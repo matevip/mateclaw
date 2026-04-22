@@ -13,6 +13,9 @@ spring:
     multipart:
       max-file-size: 100MB
       max-request-size: 200MB
+  threads:
+    virtual:
+      enabled: true
   profiles:
     active: dev
 
@@ -54,6 +57,9 @@ spring:
           max-tokens: 4096
     # Spring AI 1.1.x 会话记忆配置（使用内嵌 H2 时无需额外配置）
     chat:
+      observations:
+        log-prompt: false
+        log-completion: false
       memory:
         repository:
           jdbc:
@@ -210,7 +216,7 @@ mate:
     # Phase 2: SOUL auto-evolution and provider decorators
     soul-update-interval: 20                   # 20 writes trigger one SOUL.md LLM update (0 = off)
     provider-retry-attempts: 1                 # 1 = no retry (enable when external providers added)
-    provider-metrics-enabled: false            # requires spring-boot-starter-actuator dependency
+    provider-metrics-enabled: false            # actuator dependency now present; enable when external providers added
     # Phase 3: fact projection
     fact:
       projection-enabled: true

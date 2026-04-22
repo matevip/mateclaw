@@ -67,6 +67,12 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
+        <!-- ===== Actuator — exposes Spring AI observation metrics (gen_ai.*) ===== -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
         <!-- ===== Spring AI Alibaba DashScope ===== -->
         <!--
             1.1.2.2 需单独指定版本，不在 BOM 中
