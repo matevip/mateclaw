@@ -172,6 +172,7 @@ public class PlanGenerationNode implements NodeAction {
             }
 
             // Silent streaming call — structured JSON is parsed below; tokens are not forwarded to the client.
+            long triageStartMs = System.currentTimeMillis();
             NodeStreamingChatHelper.StreamResult result = streamingHelper.streamCallSilent(
                     chatModel, prompt, conversationId, "plan_generation");
 
@@ -189,8 +190,18 @@ public class PlanGenerationNode implements NodeAction {
                 }
             }
 
+            long triageMs = System.currentTimeMillis() - triageStartMs;
+
             String llmResponse = result.text();
+            log.info("[PlanGeneration] Triage completed in {}ms", triageMs);
             log.debug("[PlanGeneration] LLM response: {}", llmResponse);
+
+            // D-6: emit triage perf summary
+            events.add(GraphEventPublisher.perfSummary("triage", Map.of(
+                    "triage_ms", triageMs,
+                    "prompt_tokens", result.promptTokens(),
+                    "completion_tokens", result.completionTokens()
+            )));
 
             String cleanedJson = cleanJsonResponse(llmResponse);
             Map<String, Object> parsed = objectMapper.readValue(cleanedJson, new TypeReference<>() {});

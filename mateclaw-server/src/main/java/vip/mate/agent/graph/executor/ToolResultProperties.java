@@ -38,10 +38,19 @@ public class ToolResultProperties {
     /** Master switch. When false, the executor falls back to plain truncation. */
     private boolean enabled = true;
 
-    /** A single tool result larger than this is spilled to disk. */
+    /**
+     * Layer 2 — a single tool result larger than this is spilled to disk.
+     * Note: Layer 1 hard truncation ({@code MAX_TOOL_RESULT_CHARS=8000} in
+     * {@link ToolExecutionExecutor}) runs before this threshold is evaluated,
+     * so only results that survive Layer 1 can trigger a spill.
+     */
     private int perResultThresholdChars = 16000;  // was 4000 — prevents WebSearch spill-to-disk
 
-    /** Aggregate cap on combined response size in one tool turn. */
+    /**
+     * Layer 3 — aggregate cap on combined response size in one tool turn.
+     * After all tools complete, the largest non-spilled responses are spilled
+     * in turn until the cumulative size fits this budget.
+     */
     private int perTurnBudgetChars = 32000;  // was 16000 — headroom for multi-tool turns
 
     /** Number of leading characters kept inline as a preview after spilling. */

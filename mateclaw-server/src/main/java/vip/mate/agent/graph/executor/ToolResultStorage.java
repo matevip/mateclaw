@@ -55,9 +55,17 @@ public class ToolResultStorage {
     /** Cached at construction; refreshed lazily if the underlying list mutates (rare). */
     private volatile java.util.Set<String> excludedToolsSnapshot;
 
+    /** D-6: monotonically increasing spill counter for observability. */
+    private final java.util.concurrent.atomic.AtomicLong spillCount = new java.util.concurrent.atomic.AtomicLong();
+
     public ToolResultStorage(ToolResultProperties props) {
         this.props = props;
         this.excludedToolsSnapshot = props.excludedToolsSet();
+    }
+
+    /** D-6: current cumulative spill count (monotonically increasing). */
+    public long getSpillCount() {
+        return spillCount.get();
     }
 
     /**
@@ -112,6 +120,8 @@ public class ToolResultStorage {
                     toolName, conversationId, ioe.getMessage());
             return result;
         }
+        long count = spillCount.incrementAndGet();
+        log.info("[ToolResultStorage] spill #{}: tool={} chars={} convId={}", count, toolName, result.length(), conversationId);
         return buildPreview(result, toolName, file);
     }
 

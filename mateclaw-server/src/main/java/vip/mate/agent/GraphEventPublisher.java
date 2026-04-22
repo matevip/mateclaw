@@ -27,6 +27,8 @@ public final class GraphEventPublisher {
     public static final String EVENT_STEP_STARTED = "plan_step_started";
     public static final String EVENT_STEP_COMPLETED = "plan_step_completed";
     public static final String EVENT_TOOL_APPROVAL_REQUESTED = "tool_approval_requested";
+    /** RFC-06 D-6: lightweight performance summary emitted per-phase. */
+    public static final String EVENT_PERF_SUMMARY = "perf_summary";
 
     /**
      * 事件记录
@@ -119,6 +121,22 @@ public final class GraphEventPublisher {
         data.put("findings", findings != null ? findings : List.of());
         data.put("timestamp", ts);
         return new GraphEvent(EVENT_TOOL_APPROVAL_REQUESTED, Map.copyOf(data), ts);
+    }
+
+    /**
+     * RFC-06 D-6: emit a lightweight performance summary for a phase.
+     * Consumers (dashboard, audit, _usage_final) can aggregate these
+     * to reconstruct per-turn latency profiles without full tracing.
+     *
+     * @param phase           e.g. "triage", "reasoning", "tool_execution"
+     * @param metrics         arbitrary key-value pairs (e.g. "retry_count", "backoff_wait_ms")
+     */
+    public static GraphEvent perfSummary(String phase, Map<String, Object> metrics) {
+        long ts = System.currentTimeMillis();
+        Map<String, Object> data = new java.util.HashMap<>(metrics);
+        data.put("phase", phase);
+        data.put("timestamp", ts);
+        return new GraphEvent(EVENT_PERF_SUMMARY, Map.copyOf(data), ts);
     }
 
     // ===== 提取方法 =====

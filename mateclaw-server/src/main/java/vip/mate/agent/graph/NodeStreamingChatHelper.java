@@ -271,7 +271,9 @@ public class NodeStreamingChatHelper {
     // ==================== 重试配置 ====================
 
     private static final int MAX_RETRIES = 5;
-    // For rate-limit and server-error: fail fast to failover chain.
+    // RATE_LIMIT: fail fast to failover chain — staying on the same
+    // provider during a rate-limit window wastes time without recovery.
+    // SERVER_ERROR keeps MAX_RETRIES (upstream flaps often self-heal).
     private static final int MAX_RETRIES_RATE_LIMIT = 2;
     private static final long BACKOFF_BASE_MS = 3000;
     private static final long BACKOFF_CAP_MS = 60_000;
@@ -406,9 +408,18 @@ public class NodeStreamingChatHelper {
             }
         }
 
+        // D-6: performance counters
+        int retryCount = 0;
+        long totalBackoffMs = 0;
+        int failoverCount = 0;
+        int llmCallCount = 0;
+        long callStartMs = System.currentTimeMillis();
+
         // 主模型重试循环
         StreamResult lastResult = null;
         if (!primarySkipped) for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            llmCallCount++;
+            if (attempt > 0) retryCount++;
             lastResult = doStreamCall(chatModel, prompt, conversationId, phase, broadcast, attempt);
             if (lastResult != null) {
                 // PTL: 不重试，直接返回给上层 Node 处理
@@ -462,6 +473,7 @@ public class NodeStreamingChatHelper {
                 if (lastResult.errorMessage() == null || lastResult.errorType() == ErrorType.NONE) {
                     recordPrimary(true);
                     addToPool(primaryProviderId);
+                    logPerfSummary(phase, conversationId, callStartMs, llmCallCount, retryCount, failoverCount);
                     return lastResult;
                 }
                 // Any other non-null errored result with a classified type that doStreamCall
@@ -469,6 +481,7 @@ public class NodeStreamingChatHelper {
                 // must exit — otherwise we silently spin through attempts and waste seconds
                 // per turn on unrecoverable errors like DashScope's "url error" / unknown model.
                 recordPrimary(false);
+                logPerfSummary(phase, conversationId, callStartMs, llmCallCount, retryCount, failoverCount);
                 return lastResult;
             }
             // lastResult == null 表示需要重试
@@ -509,6 +522,8 @@ public class NodeStreamingChatHelper {
                 broadcastDelta(conversationId, "warning",
                         buildDeltaJson("主模型不可用，正在切换到备选模型 (" + (i + 1) + "/" + fallbackChain.size() + ")..."));
             }
+            failoverCount++;
+            llmCallCount++;
             StreamResult fallbackResult = doStreamCall(fallback, prompt, conversationId,
                     phase + "_fallback_" + (i + 1), broadcast, 0);
             // Accept only fully successful fallbacks. Non-successful results (auth
@@ -519,6 +534,7 @@ public class NodeStreamingChatHelper {
                     && fallbackResult.errorMessage() == null) {
                 if (healthTracker != null) healthTracker.recordSuccess(entry.providerId());
                 addToPool(entry.providerId());
+                logPerfSummary(phase, conversationId, callStartMs, llmCallCount, retryCount, failoverCount);
                 return fallbackResult;
             }
             if (healthTracker != null) healthTracker.recordFailure(entry.providerId());
@@ -531,8 +547,17 @@ public class NodeStreamingChatHelper {
             }
         }
 
+        logPerfSummary(phase, conversationId, callStartMs, llmCallCount, retryCount, failoverCount);
         return lastResult != null ? lastResult
                 : buildErrorResult("LLM 调用失败，已达最大重试次数", conversationId, phase);
+    }
+
+    /** D-6: log a structured performance summary for the LLM call phase. */
+    private void logPerfSummary(String phase, String conversationId, long startMs,
+                                int llmCallCount, int retryCount, int failoverCount) {
+        long totalMs = System.currentTimeMillis() - startMs;
+        log.info("[{}] perf_summary: conversationId={} total_ms={} llm_call_count={} retry_count={} failover_count={}",
+                phase, conversationId, totalMs, llmCallCount, retryCount, failoverCount);
     }
 
     /**
@@ -756,13 +781,17 @@ public class NodeStreamingChatHelper {
                         conversationId, phase, errorType);
             }
 
-            // Rate limit / Server error: retry with reduced limit for rate-limit/server-error
-            boolean isRateLimitOrServerError = errorType == ErrorType.RATE_LIMIT || errorType == ErrorType.SERVER_ERROR;
-            int effectiveMaxRetries = isRateLimitOrServerError ? MAX_RETRIES_RATE_LIMIT : MAX_RETRIES;
-            if (attempt < effectiveMaxRetries && isRateLimitOrServerError) {
-                log.warn("[{}] Retryable error (attempt {}/{}, type={}): {}",
-                        phase, attempt, effectiveMaxRetries, errorType, error.getMessage());
-                return null;  // 返回 null 触发重试
+            // Rate limit / Server error: retryable, but with different budgets.
+            // RATE_LIMIT: cap at 2 retries then failover (RFC 06 D-2).
+            // SERVER_ERROR: keep full MAX_RETRIES — upstream flaps often self-heal.
+            if (errorType == ErrorType.RATE_LIMIT || errorType == ErrorType.SERVER_ERROR) {
+                int effectiveMaxRetries = (errorType == ErrorType.RATE_LIMIT)
+                        ? MAX_RETRIES_RATE_LIMIT : MAX_RETRIES;
+                if (attempt < effectiveMaxRetries) {
+                    log.warn("[{}] Retryable error (attempt {}/{}, type={}): {}",
+                            phase, attempt, effectiveMaxRetries, errorType, error.getMessage());
+                    return null;  // 返回 null 触发重试
+                }
             }
 
             // 不可重试或已耗尽重试

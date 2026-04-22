@@ -40,8 +40,10 @@ public class ToolExecutionExecutor {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     // JDK 21 virtual threads: no blocking stall for I/O-bound tools.
     // Each tool invocation gets its own lightweight carrier thread.
+    // Named threads (matching HookDispatcher convention) for log traceability.
     private static final ExecutorService TOOL_EXECUTOR =
-            Executors.newVirtualThreadPerTaskExecutor();
+            Executors.newThreadPerTaskExecutor(
+                    Thread.ofVirtual().name("tool-executor-", 0).factory());
 
     /**
      * Legacy hardcoded unsafe set, kept as a fallback when no
@@ -54,7 +56,21 @@ public class ToolExecutionExecutor {
             "browser_use", "BrowserUseTool", "write_file", "edit_file"
     );
 
-    /** 工具结果最大字符数（防止超长结果膨胀 ToolResponseMessage → 撑爆 LLM 上下文） */
+    /**
+     * Layer 1 — hard truncation cap applied to every tool result before it
+     * reaches ToolResultStorage (Layer 2 spill) or the LLM prompt.
+     *
+     * <p>Two-level budget chain (RFC-008 / RFC-06 D-5):
+     * <pre>
+     *   raw tool result
+     *     → truncateToolResult(..., MAX_TOOL_RESULT_CHARS=8000)   // Layer 1: hard cap
+     *     → persistIfOversized(..., perResultThresholdChars=16000) // Layer 2: spill to disk
+     *     → enforceTurnBudget(..., perTurnBudgetChars=32000)      // Layer 3: per-turn aggregate
+     * </pre>
+     * Layer 1 runs first and is intentionally kept at 8000 to prevent oversized
+     * results from inflating the prompt. Layers 2/3 thresholds are configured in
+     * {@link ToolResultProperties} and application.yml.
+     */
     private static final int MAX_TOOL_RESULT_CHARS = 8000;
 
     /** 尾部错误模式检测 */
@@ -376,6 +392,7 @@ public class ToolExecutionExecutor {
     private void executePreparedCalls(List<PreparedToolCall> preparedCalls,
                                        List<ToolResponseMessage.ToolResponse> allResponses,
                                        List<GraphEventPublisher.GraphEvent> events) {
+        long execStartMs = System.currentTimeMillis();
         if (!preparedCalls.isEmpty() && streamTracker != null) {
             String conversationId = preparedCalls.get(0).conversationId;
             String phase = classifyBatchPhase(preparedCalls);
@@ -398,6 +415,14 @@ public class ToolExecutionExecutor {
                 executeParallelBatch(batch, allResponses, events);
             }
         }
+
+        // D-6: emit tool execution perf summary
+        long toolExecMs = System.currentTimeMillis() - execStartMs;
+        events.add(GraphEventPublisher.perfSummary("tool_execution", Map.of(
+                "tool_exec_ms", toolExecMs,
+                "tool_count", preparedCalls.size(),
+                "batch_count", batches.size()
+        )));
     }
 
     /**
