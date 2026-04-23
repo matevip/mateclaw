@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Loading, Select, CloseBold, ArrowDown, Document, Setting } from '@element-plus/icons-vue'
+import { Loading, Select, CloseBold, ArrowDown, Document, Setting, Connection } from '@element-plus/icons-vue'
 import { useToolLabel } from '@/composables/useToolLabel'
 import type { MessageSegment } from '@/types'
 
@@ -17,7 +17,16 @@ watch(() => props.segment.status, (val) => {
   if (val !== 'running') expanded.value = false
 })
 
-const displayName = computed(() => getToolLabel(props.segment.toolName || ''))
+/** Delegation segments are identified by the → prefix injected in useChat.ts. */
+const isDelegation = computed(() => (props.segment.toolName || '').startsWith('→'))
+
+const displayName = computed(() => {
+  const raw = props.segment.toolName || ''
+  // Strip the → prefix for delegation segments so getToolLabel works cleanly,
+  // then prepend it back as a visual indicator.
+  if (isDelegation.value) return `→ ${getToolLabel(raw.slice(1).trim())}`
+  return getToolLabel(raw)
+})
 
 const truncatedArgs = computed(() => {
   const args = props.segment.toolArgs || ''
@@ -28,7 +37,9 @@ const truncatedArgs = computed(() => {
     const s = vals.join(', ')
     return s.length > 80 ? s.slice(0, 80) + '...' : s
   } catch {
-    return args.length > 80 ? args.slice(0, 80) + '...' : args
+    // Multi-line delegation progress — show first line only in collapsed view
+    const firstLine = args.split('\n')[0].trim()
+    return firstLine.length > 80 ? firstLine.slice(0, 80) + '...' : firstLine
   }
 })
 
@@ -56,7 +67,8 @@ const isRunning = computed(() => props.segment.status === 'running')
         <el-icon v-else :size="13"><CloseBold /></el-icon>
       </span>
       <span class="seg-tool__type-icon">
-        <el-icon v-if="isRead" :size="12"><Document /></el-icon>
+        <el-icon v-if="isDelegation" :size="12"><Connection /></el-icon>
+        <el-icon v-else-if="isRead" :size="12"><Document /></el-icon>
         <el-icon v-else :size="12"><Setting /></el-icon>
       </span>
       <span class="seg-tool__name">{{ displayName }}</span>

@@ -40,7 +40,13 @@ public class DelegateAgentTool {
     private static final int MAX_DELEGATION_DEPTH = 3;
     private static final int MAX_RESULT_LENGTH = 4000;
     private static final int MAX_PARALLEL_CHILDREN = 3;
-    private static final int PARALLEL_TIMEOUT_SECONDS = 60;
+    /**
+     * Per-child timeout — raised from 60 s to 120 s so that slow LLM models
+     * (kimi-code observed p99 ≈ 91 s) can complete before the parent gives up.
+     * The previous 60 s limit was structurally impossible to satisfy once any
+     * child called an LLM-backed tool.
+     */
+    private static final int PARALLEL_TIMEOUT_SECONDS = 120;
 
     /** 子 Agent 禁用的工具：防递归 + 防副作用 */
     private static final Set<String> CHILD_DENIED_TOOLS = Set.of(
@@ -203,6 +209,26 @@ public class DelegateAgentTool {
             CompletableFuture<ChildResult> future = CompletableFuture.supplyAsync(
                     () -> runSingleChild(p.index, p.agent, p.task, parentConversationId, p.childConvId),
                     DELEGATION_EXECUTOR);
+
+            // Broadcast per-child completion as soon as each child finishes
+            // — frontend can update that child's status without waiting for all children.
+            if (hasParent) {
+                final String parentConvIdFinal = parentConversationId;
+                future.whenComplete((result, ex) -> {
+                    if (!streamTracker.isRunning(parentConvIdFinal)) return;
+                    ChildResult r = (result != null) ? result
+                            : ChildResult.error(p.index, p.agent.getName(), ex != null ? ex.getMessage() : "Unknown error");
+                    streamTracker.broadcastObject(parentConvIdFinal, "delegation_child_complete", Map.of(
+                            "taskIndex", r.taskIndex,
+                            "childConversationId", p.childConvId,
+                            "childAgentName", r.agentName,
+                            "success", r.success,
+                            "durationMs", r.durationMs,
+                            "resultPreview", r.success ? truncate(r.result, 150)
+                                    : (r.error != null ? r.error : "error")));
+                });
+            }
+
             futures.put(p.index, future);
         }
 
@@ -243,14 +269,24 @@ public class DelegateAgentTool {
             if (p.stopRelay != null) p.stopRelay.run();
         }
 
-        // 7. 广播 delegation_end
+        // 7. 广播 delegation_end（含每个子任务的摘要，前端可用于展示分项结果）
         if (hasParent) {
+            List<Map<String, Object>> childResults = results.stream().map(r -> {
+                Map<String, Object> m = new java.util.LinkedHashMap<>();
+                m.put("taskIndex", r.taskIndex);
+                m.put("agentName", r.agentName);
+                m.put("success", r.success);
+                m.put("durationMs", r.durationMs);
+                if (!r.success && r.error != null) m.put("error", r.error);
+                return m;
+            }).toList();
             streamTracker.broadcastObject(parentConversationId, "delegation_end", Map.of(
                     "parallel", true,
                     "totalDurationMs", totalDurationMs,
                     "success", results.stream().allMatch(r -> r.success),
                     "completedCount", results.stream().filter(r -> r.success).count(),
-                    "totalCount", results.size()));
+                    "totalCount", results.size(),
+                    "childResults", childResults));
         }
 
         // 8. 构建返回结果

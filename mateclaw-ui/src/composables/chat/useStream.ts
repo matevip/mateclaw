@@ -43,6 +43,7 @@ export type SSEEventType =
   | 'delegation_start'
   | 'delegation_progress'
   | 'delegation_end'
+  | 'delegation_child_complete'
 
 export interface SSEEvent {
   type: SSEEventType

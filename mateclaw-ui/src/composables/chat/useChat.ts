@@ -636,18 +636,76 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   stream.on('delegation_progress', (data) => {
     if (isStaleEvent(data)) return
-    if (currentAssistantId.value && data.originalEvent === 'tool_call_started') {
-      const segs = currentSegments.value
-      // 按 childAgentName 匹配对应的 delegation segment（并行时多个）
-      const childName = data.childAgentName || ''
-      const delegSeg = segs.findLast((s: MessageSegment) =>
-        s.type === 'tool_call' && s.status === 'running' && s.toolName === `→ ${childName}`)
-        || segs.findLast((s: MessageSegment) => s.type === 'tool_call' && s.status === 'running' && s.toolName?.startsWith('→'))
-      if (delegSeg) {
-        const childData = typeof data.data === 'string' ? data.data : JSON.stringify(data.data)
-        delegSeg.toolArgs = (delegSeg.toolArgs || '') + '\n  [子任务] ' + childData
+    if (!currentAssistantId.value) return
+    const segs = currentSegments.value
+    const childName = data.childAgentName || ''
+    // Find the running delegation segment for this child (or fall back to any running delegation)
+    const delegSeg = segs.findLast((s: MessageSegment) =>
+      s.type === 'tool_call' && s.status === 'running' && s.toolName === `→ ${childName}`)
+      || segs.findLast((s: MessageSegment) => s.type === 'tool_call' && s.status === 'running' && s.toolName?.startsWith('→'))
+
+    if (!delegSeg) return
+
+    if (data.originalEvent === 'tool_call_started') {
+      // Child started a sub-tool — append activity hint so the user sees the child is working
+      const childData = data.data
+      const toolName = typeof childData === 'object' ? childData?.toolName : String(childData || '')
+      if (toolName) {
+        delegSeg.toolArgs = (delegSeg.toolArgs || '') + `\n  → ${toolName}`
+      }
+    } else if (data.originalEvent === 'tool_call_completed') {
+      // Child finished a sub-tool call — update the running hint
+      const childData = data.data
+      const toolName = typeof childData === 'object' ? childData?.toolName : String(childData || '')
+      const success = typeof childData === 'object' ? childData?.success !== false : true
+      if (toolName) {
+        // Replace last appended "→ toolName" with "✓/✗ toolName"
+        delegSeg.toolArgs = (delegSeg.toolArgs || '').replace(
+          new RegExp(`\\n  → ${toolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`),
+          `\n  ${success ? '✓' : '✗'} ${toolName}`)
+      }
+    } else if (data.originalEvent === 'phase') {
+      // Child entered a new phase (reasoning, executing_tool, etc.)
+      const phase = typeof data.data === 'object' ? data.data?.phase : String(data.data || '')
+      const phaseHints: Record<string, string> = {
+        reasoning: '…',
+        executing_tool: '→',
+        planning: '📋',
+        summarizing: '✍',
+      }
+      const hint = phaseHints[phase]
+      if (hint && !delegSeg.toolArgs?.endsWith(hint)) {
+        delegSeg.toolArgs = (delegSeg.toolArgs || '').trimEnd() + ' ' + hint
       }
     }
+    flushSegmentsToMessage()
+  })
+
+  // Per-child completion: fires as soon as each individual child agent finishes,
+  // before the overall delegation_end. Marks that child's segment done immediately
+  // so the user sees incremental progress rather than a bulk update at the end.
+  stream.on('delegation_child_complete', (data) => {
+    if (isStaleEvent(data)) return
+    if (!currentAssistantId.value) return
+    const segs = currentSegments.value
+    const childName = data.childAgentName || ''
+    const delegSeg = segs.findLast((s: MessageSegment) =>
+      s.type === 'tool_call' && s.status === 'running' && s.toolName === `→ ${childName}`)
+      || segs.findLast((s: MessageSegment) =>
+        s.type === 'tool_call' && s.status === 'running' && s.toolName?.startsWith('→'))
+    if (delegSeg) {
+      delegSeg.status = data.success ? 'completed' : 'error'
+      delegSeg.toolSuccess = data.success
+      // Append duration to args so the user sees how long each child took
+      if (data.durationMs) {
+        const durSec = Math.round(data.durationMs / 1000)
+        delegSeg.toolArgs = (delegSeg.toolArgs || '').trimEnd() + ` (${durSec}s)`
+      }
+      if (!data.success && data.resultPreview) {
+        delegSeg.toolResult = data.resultPreview
+      }
+    }
+    flushSegmentsToMessage()
   })
 
   stream.on('delegation_end', (data) => {
@@ -655,21 +713,42 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     if (currentAssistantId.value) {
       const segs = currentSegments.value
       if (data.parallel) {
-        // 并行模式：关闭所有 running 的 delegation segments
-        const totalMs = data.totalDurationMs ? Math.round(data.totalDurationMs / 1000) : 0
-        segs.filter((s: MessageSegment) => s.type === 'tool_call' && s.status === 'running' && s.toolName?.startsWith('→'))
-          .forEach((s: MessageSegment) => {
-            s.status = 'completed'
-            s.toolName = (s.toolName || '') + (data.success ? ' ✓' : ' ✗')
-          })
+        // Parallel mode: use per-child results if available (new backend),
+        // fall back to aggregate success flag for older backends.
+        if (Array.isArray(data.childResults) && data.childResults.length > 0) {
+          for (const cr of data.childResults) {
+            const agentName = cr.agentName || ''
+            const seg = segs.findLast((s: MessageSegment) =>
+              s.type === 'tool_call' &&
+              (s.status === 'running' || s.status === 'completed') &&
+              s.toolName?.includes(agentName))
+            if (seg && seg.status === 'running') {
+              // Segment not yet closed by delegation_child_complete (e.g. timed out child)
+              seg.status = cr.success ? 'completed' : 'error'
+              seg.toolSuccess = cr.success
+              if (cr.durationMs) {
+                const durSec = Math.round(cr.durationMs / 1000)
+                seg.toolArgs = (seg.toolArgs || '').trimEnd() + ` (${durSec}s)`
+              }
+            }
+          }
+        } else {
+          // Legacy fallback: mark all remaining running delegation segments with overall status
+          segs.filter((s: MessageSegment) =>
+            s.type === 'tool_call' && s.status === 'running' && s.toolName?.startsWith('→'))
+            .forEach((s: MessageSegment) => {
+              s.status = data.success ? 'completed' : 'error'
+            })
+        }
       } else {
-        // 单任务模式
-        const delegSeg = segs.findLast((s: MessageSegment) => s.type === 'tool_call' && s.status === 'running' && s.toolName?.startsWith('→'))
+        // Single-task mode
+        const delegSeg = segs.findLast((s: MessageSegment) =>
+          s.type === 'tool_call' && s.status === 'running' && s.toolName?.startsWith('→'))
         if (delegSeg) {
-          delegSeg.status = 'completed'
-          delegSeg.toolName = (delegSeg.toolName || '') + (data.success ? ' ✓' : ' ✗')
+          delegSeg.status = data.success ? 'completed' : 'error'
+          delegSeg.toolSuccess = data.success
           if (data.durationMs) {
-            delegSeg.toolArgs = (delegSeg.toolArgs || '') + `\n  耗时: ${Math.round(data.durationMs / 1000)}s`
+            delegSeg.toolArgs = (delegSeg.toolArgs || '').trimEnd() + ` (${Math.round(data.durationMs / 1000)}s)`
           }
         }
       }
