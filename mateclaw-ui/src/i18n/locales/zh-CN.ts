@@ -1326,6 +1326,9 @@ export default {
       enrichedRatio: '{enriched}/{total} 已链接',
       failedJobs: '{count} 个失败',
     },
+    noPages: '暂无页面',
+    noResults: '未找到匹配页面',
+    loadMore: '加载更多 {n} 条',
   },
   cronJobs: {
     kicker: '自动执行',

@@ -186,12 +186,33 @@ public class WikiController {
     // ==================== Raw Materials ====================
 
     @RequireWorkspaceRole("viewer")
-    @Operation(summary = "获取原始材料列表")
+    @Operation(summary = "获取原始材料列表（含每条材料生成的页面数）")
     @GetMapping("/knowledge-bases/{kbId}/raw")
-    public R<List<WikiRawMaterialEntity>> listRaw(@PathVariable Long kbId,
-                                                    @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+    public R<List<Map<String, Object>>> listRaw(@PathVariable Long kbId,
+                                                 @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyKBWorkspace(kbId, workspaceId);
-        return R.ok(rawService.listByKbId(kbId));
+        List<WikiRawMaterialEntity> raws = rawService.listByKbId(kbId);
+        List<Map<String, Object>> result = new java.util.ArrayList<>(raws.size());
+        for (WikiRawMaterialEntity raw : raws) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            // Serialize all entity fields via Jackson-friendly approach
+            item.put("id", raw.getId());
+            item.put("kbId", raw.getKbId());
+            item.put("title", raw.getTitle());
+            item.put("sourceType", raw.getSourceType());
+            item.put("processingStatus", raw.getProcessingStatus());
+            item.put("processingDetail", raw.getProcessingDetail());
+            item.put("progressPhase", raw.getProgressPhase());
+            item.put("progressDone", raw.getProgressDone());
+            item.put("progressTotal", raw.getProgressTotal());
+            item.put("contentHash", raw.getContentHash());
+            item.put("createTime", raw.getCreateTime());
+            item.put("updateTime", raw.getUpdateTime());
+            // Enriched field: page count derived from this raw material
+            item.put("pageCount", pageService.countBySourceRawId(kbId, raw.getId()));
+            result.add(item);
+        }
+        return R.ok(result);
     }
 
     @RequireWorkspaceRole("member")

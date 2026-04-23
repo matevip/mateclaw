@@ -65,6 +65,10 @@
             <span class="status-badge" :class="raw.processingStatus">
               {{ t(`wiki.status.${raw.processingStatus}`) }}
             </span>
+            <span v-if="raw.pageCount != null && raw.pageCount > 0" class="page-count-chip">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              {{ raw.pageCount }}
+            </span>
             <span
               v-if="raw.errorMessage && (raw.processingStatus === 'failed' || raw.processingStatus === 'partial')"
               class="error-hint" :title="raw.errorMessage"
@@ -482,6 +486,7 @@ async function handleScanDir() {
 .raw-item-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .raw-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .error-hint { font-size: 11px; color: var(--mc-danger); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-count-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 500; color: var(--mc-text-secondary); background: var(--mc-bg-sunken); border-radius: 9999px; padding: 2px 7px; }
 
 /* Two-phase digest progress bar (RFC-012 M2 v2 UI) */
 .raw-progress { display: flex; align-items: center; gap: 10px; padding-top: 2px; }

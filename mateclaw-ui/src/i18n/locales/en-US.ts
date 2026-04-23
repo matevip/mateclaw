@@ -1316,6 +1316,9 @@ export default {
       enrichedRatio: '{enriched}/{total} linked',
       failedJobs: '{count} failed',
     },
+    noPages: 'No pages yet',
+    noResults: 'No pages match your search',
+    loadMore: 'Load {n} more',
   },
   cronJobs: {
     kicker: 'Automation',

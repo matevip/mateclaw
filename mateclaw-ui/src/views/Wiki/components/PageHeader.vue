@@ -51,7 +51,7 @@ const props = defineProps<{
     version: number
     lastUpdatedBy: string
     content?: string | null
-    pageType?: string
+    pageType?: string | null
     sourceRawIds?: string
   }
 }>()

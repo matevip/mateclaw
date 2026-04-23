@@ -30,6 +30,8 @@ export interface WikiRawMaterial {
   progressPhase: string | null
   progressTotal: number
   progressDone: number
+  // Page count derived from sourceRawIds (injected by listRaw endpoint)
+  pageCount?: number
 }
 
 export interface WikiPage {
@@ -43,6 +45,7 @@ export interface WikiPage {
   sourceRawIds: string
   version: number
   lastUpdatedBy: string
+  pageType?: string | null
   createTime: string
   updateTime: string
 }

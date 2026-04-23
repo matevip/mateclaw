@@ -407,6 +407,18 @@ public class WikiPageService {
     }
 
     /**
+     * Count wiki pages derived from a specific raw material.
+     * Uses sourceRawIds JSON array field (e.g. "[123]" or "[123,456]").
+     */
+    public int countBySourceRawId(Long kbId, Long rawId) {
+        // Use LIKE search on sourceRawIds JSON — works for both single and multi-source pages
+        return Math.toIntExact(pageMapper.selectCount(
+                new LambdaQueryWrapper<WikiPageEntity>()
+                        .eq(WikiPageEntity::getKbId, kbId)
+                        .like(WikiPageEntity::getSourceRawIds, rawId.toString())));
+    }
+
+    /**
      * 从 Markdown 内容中提取 [[links]] 并返回 JSON 数组
      */
     String extractLinksAsJson(String content) {
