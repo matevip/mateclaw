@@ -72,6 +72,8 @@ public class WikiTool {
     @Tool(description = """
             Read a wiki page. Use maxChars to limit size (recommended: 3000-6000 for most tasks).
             Use sectionHeading to read only one section by its heading text.
+            The result includes a "sourceFiles" field listing the source documents this page was derived from.
+            When using content from this page in your answer, cite the page title and source files.
             """)
     public String wiki_read_page(
             @ToolParam(description = "Agent ID") Long agentId,
@@ -167,6 +169,8 @@ public class WikiTool {
     @Tool(description = """
             Search wiki pages. Returns snippet so you can judge relevance without reading the full page.
             Default topK=5 is sufficient for most queries.
+            Each result includes "slug" and "title" — use wiki_read_page to get full content.
+            When using wiki information in your answer, always cite the source page title.
             """)
     public String wiki_search_pages(
             @ToolParam(description = "Agent ID") Long agentId,
@@ -214,8 +218,9 @@ public class WikiTool {
 
     @Tool(description = """
             Chunk-level semantic search in the wiki knowledge base.
-            Returns raw text fragments closest to the query with similarity scores.
+            Returns raw text fragments closest to the query with similarity scores and source page title.
             Use when wiki_search_pages results are not specific enough.
+            When using retrieved content in your answer, cite the source page title shown in each result.
             """)
     public String wiki_semantic_search(
             @ToolParam(description = "Agent ID") Long agentId,

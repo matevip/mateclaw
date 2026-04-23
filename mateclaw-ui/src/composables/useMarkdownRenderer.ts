@@ -88,7 +88,7 @@ const markedInstance = new Marked({
 
 // 配置 DOMPurify — 允许 Markdown + 代码块复制按钮的标签和属性
 const purifyConfig = {
-  ADD_ATTR: ['target', 'rel', 'class', 'data-code', 'data-echarts-option', 'data-wiki-title', 'type', 'viewBox', 'fill', 'stroke', 'stroke-width', 'd', 'x', 'y', 'width', 'height', 'rx', 'ry', 'points'],
+  ADD_ATTR: ['target', 'rel', 'class', 'data-code', 'data-echarts-option', 'data-wiki-title', 'data-slug', 'type', 'viewBox', 'fill', 'stroke', 'stroke-width', 'd', 'x', 'y', 'width', 'height', 'rx', 'ry', 'points'],
   ADD_TAGS: ['input', 'button', 'svg', 'path', 'rect', 'polyline', 'circle', 'line', 'span'],
 }
 

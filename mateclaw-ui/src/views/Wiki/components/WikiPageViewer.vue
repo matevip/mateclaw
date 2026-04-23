@@ -99,9 +99,18 @@ const enrichToast = ref('')
 
 const renderedContent = computed(() => {
   if (!store.currentPage?.content) return ''
-  const content = store.currentPage.content.replace(/\[\[([^\]]+)\]\]/g, (_match, title) => {
-    const slug = title.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff\s-]/g, '').replace(/\s+/g, '-')
-    return `<a class="wiki-link" data-slug="${slug}" onclick="return false">${title}</a>`
+  // Build a lookup map: title (normalized) → slug, for resolving [[Title]] links
+  const titleToSlug = new Map<string, string>()
+  for (const p of store.pages) {
+    if (p.title && p.slug) {
+      titleToSlug.set(p.title.trim().toLowerCase(), p.slug)
+    }
+  }
+  const content = store.currentPage.content.replace(/\[\[([^\]]+)\]\]/g, (_match, raw) => {
+    const title = raw.trim()
+    // Prefer exact title match; fall back to slug-style guess
+    const slug = titleToSlug.get(title.toLowerCase()) ?? title.toLowerCase().replace(/\s+/g, '-')
+    return `<a class="wiki-link" data-slug="${slug}">${title}</a>`
   })
   return renderMarkdown(content)
 })

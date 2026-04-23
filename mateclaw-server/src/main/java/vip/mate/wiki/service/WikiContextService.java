@@ -49,7 +49,9 @@ public class WikiContextService {
         }
 
         StringBuilder sb = new StringBuilder("<wiki-relevant>\n");
-        sb.append("[Relevant wiki pages for this query. Use wiki_read_page(slug) for full content.]\n\n");
+        sb.append("[Relevant wiki pages for this query. Use wiki_read_page(slug) for full content. " +
+                "When using information from these pages in your answer, always cite the source page title, " +
+                "e.g. 「来源：[[页面标题]]」or「(来源：页面标题)」.]\n\n");
         int totalChars = 0;
         int maxChars = properties.getMaxContextChars();
 
