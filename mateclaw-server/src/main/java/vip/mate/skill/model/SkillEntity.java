@@ -84,6 +84,19 @@ public class SkillEntity {
      */
     private String securityScanStatus;
 
+    /**
+     * RFC-042 §2.3 — persisted JSON array of the last scan's findings
+     * ({@code [{ruleId,severity,category,title,description,filePath,
+     * lineNumber,snippet,remediation}]}). Populated by
+     * {@code SkillPackageResolver} after every scan so the admin UI can
+     * render "why blocked" without re-resolving.
+     */
+    @TableField(value = "security_scan_result", updateStrategy = FieldStrategy.ALWAYS)
+    private String securityScanResult;
+
+    /** RFC-042 §2.3 — wall-clock time of the last scan write-back. */
+    private LocalDateTime securityScanTime;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

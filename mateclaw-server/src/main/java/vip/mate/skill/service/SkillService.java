@@ -67,9 +67,15 @@ public class SkillService {
      * <p>RFC-042 §2.1 — replaces the unbounded {@code /skills} list. Filters
      * are all optional; empty or {@code null} means "no filter". Keyword
      * searches name / description / tags with LIKE.
+     *
+     * <p>{@code scanStatus} (RFC-042 §2.3.5) filters on {@code
+     * security_scan_status}: {@code "FAILED"} surfaces blocked skills so the
+     * admin can inspect findings and rescan, {@code "PASSED"} shows scanned
+     * clean rows, {@code null} / empty means no scan filter.
      */
     public IPage<SkillEntity> pageSkills(int page, int size, String keyword,
-                                          String skillType, Boolean enabled) {
+                                          String skillType, Boolean enabled,
+                                          String scanStatus) {
         Page<SkillEntity> pageParam = new Page<>(Math.max(page, 1), Math.max(size, 1));
         LambdaQueryWrapper<SkillEntity> wrapper = new LambdaQueryWrapper<>();
 
@@ -86,11 +92,33 @@ public class SkillService {
         if (enabled != null) {
             wrapper.eq(SkillEntity::getEnabled, enabled);
         }
+        if (scanStatus != null && !scanStatus.isBlank()) {
+            wrapper.eq(SkillEntity::getSecurityScanStatus, scanStatus.trim().toUpperCase());
+        }
 
         wrapper.orderByDesc(SkillEntity::getBuiltin)
                .orderByDesc(SkillEntity::getCreateTime);
 
         return skillMapper.selectPage(pageParam, wrapper);
+    }
+
+    /**
+     * Manually re-run security + dependency resolution for a single skill
+     * (RFC-042 §2.3.4). Triggered from the admin UI after the user fixes
+     * flagged code and wants an immediate verdict instead of waiting for
+     * the next refresh event.
+     *
+     * <p>The resolver itself persists the outcome — this method just kicks
+     * it and returns the reloaded row.
+     */
+    public SkillEntity rescanSecurity(Long id) {
+        SkillEntity skill = getSkill(id); // throws MateClawException if missing
+        if (runtimeService == null) {
+            throw new MateClawException("err.skill.runtime_unavailable",
+                    "Skill runtime not initialized yet; retry in a moment");
+        }
+        runtimeService.rescanSingle(skill);
+        return skillMapper.selectById(id);
     }
 
     /**

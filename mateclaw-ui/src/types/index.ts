@@ -212,6 +212,10 @@ export interface Skill {
   sourceConversationId?: string
   /** RFC-023: 安全扫描状态 (PASSED / FAILED / null) */
   securityScanStatus?: string
+  /** RFC-042 §2.3 — JSON-serialised SkillSecurityFinding[] from last scan */
+  securityScanResult?: string
+  /** RFC-042 §2.3 — wall-clock time of the last scan */
+  securityScanTime?: string
 }
 
 /** 运行时解析状态（来自 /runtime/status） */

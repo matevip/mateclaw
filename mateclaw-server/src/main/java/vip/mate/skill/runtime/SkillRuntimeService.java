@@ -105,6 +105,21 @@ public class SkillRuntimeService {
     }
 
     /**
+     * Rescan one skill on demand (RFC-042 §2.3.4) — runs the full resolver
+     * pipeline (content + security + dependency), which writes the updated
+     * scan result to DB as a side-effect, and then invalidates the active
+     * skills cache so subsequent reads reflect the new status.
+     */
+    public ResolvedSkill rescanSingle(SkillEntity skill) {
+        ResolvedSkill resolved = packageResolver.resolve(skill);
+        activeSkillsCache.invalidateAll();
+        log.info("Rescanned skill '{}' (id={}): status={}, blocked={}",
+                skill.getName(), skill.getId(),
+                skill.getSecurityScanStatus(), resolved.isSecurityBlocked());
+        return resolved;
+    }
+
+    /**
      * 根据名称查找 active skill
      */
     public ResolvedSkill findActiveSkill(String name) {

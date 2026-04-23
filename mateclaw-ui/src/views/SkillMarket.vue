@@ -49,10 +49,11 @@
             type="search"
             :placeholder="t('skills.search.placeholder')"
           />
-          <select v-model="query.enabledFilter" class="skill-status-filter" @change="onFilterChange">
+          <select v-model="query.statusFilter" class="skill-status-filter" @change="onFilterChange">
             <option value="">{{ t('skills.filter.all') }}</option>
-            <option value="true">{{ t('skills.filter.enabled') }}</option>
-            <option value="false">{{ t('skills.filter.disabled') }}</option>
+            <option value="enabled">{{ t('skills.filter.enabled') }}</option>
+            <option value="disabled">{{ t('skills.filter.disabled') }}</option>
+            <option value="scan_failed">{{ t('skills.filter.scanFailed') }}</option>
           </select>
         </div>
 
@@ -89,12 +90,19 @@
           <span v-if="skill.sourceConversationId" class="runtime-badge rt-synthesized" title="Auto-synthesized from conversation">
             🤖 AI
           </span>
-          <!-- Security Scan Status (RFC-023) -->
-          <span v-if="skill.securityScanStatus === 'FAILED'" class="runtime-badge rt-blocked">
-            🛡️ Scan Failed
-          </span>
+          <!-- Security Scan Status (RFC-023, expandable per RFC-042 §2.3) -->
+          <button
+            v-if="skill.securityScanStatus === 'FAILED'"
+            type="button"
+            class="runtime-badge rt-blocked scan-badge-button"
+            :aria-expanded="expandedFindings[String(skill.id)] ? 'true' : 'false'"
+            @click="toggleFindings(skill)"
+          >
+            🛡️ {{ t('skills.security.scanFailed') }}
+            <span class="scan-badge-chevron">{{ expandedFindings[String(skill.id)] ? '▾' : '▸' }}</span>
+          </button>
           <span v-else-if="skill.securityScanStatus === 'PASSED'" class="runtime-badge rt-ready">
-            ✓ Scanned
+            ✓ {{ t('skills.security.scanned') }}
           </span>
           <!-- Security Badge (runtime) -->
           <span v-if="getSecurityBadge(skill)" class="runtime-badge" :class="getSecurityBadge(skill)?.cls">
@@ -116,6 +124,52 @@
           {{ getSecurityFindingsSummary(skill) }}
         </div>
         <div v-if="getRuntimeError(skill)" class="runtime-error">{{ getRuntimeError(skill) }}</div>
+
+        <!-- RFC-042 §2.3 — persisted findings panel + rescan control -->
+        <div
+          v-if="skill.securityScanStatus === 'FAILED' && expandedFindings[String(skill.id)]"
+          class="scan-findings-panel"
+        >
+          <div class="scan-findings-header">
+            <span class="scan-findings-title">
+              {{ t('skills.security.findingsTitle') }}
+              <span v-if="skill.securityScanTime" class="scan-findings-time">
+                · {{ formatScanTime(skill.securityScanTime) }}
+              </span>
+            </span>
+            <button
+              class="scan-rescan-btn"
+              :disabled="rescanning[String(skill.id)]"
+              @click="rescanSkill(skill)"
+            >
+              {{ rescanning[String(skill.id)] ? t('skills.security.rescanning') : t('skills.security.rescan') }}
+            </button>
+          </div>
+          <ul v-if="parsedFindings(skill).length > 0" class="scan-findings-list">
+            <li
+              v-for="(f, idx) in parsedFindings(skill)"
+              :key="`${skill.id}-f-${idx}`"
+              class="scan-finding-item"
+              :class="`sev-${(f.severity || 'info').toLowerCase()}`"
+            >
+              <div class="scan-finding-head">
+                <span class="scan-finding-sev">[{{ f.severity || 'INFO' }}]</span>
+                <span class="scan-finding-id">{{ f.ruleId || f.category || '—' }}</span>
+                <span v-if="f.filePath" class="scan-finding-loc">
+                  {{ f.filePath }}<span v-if="f.lineNumber">:{{ f.lineNumber }}</span>
+                </span>
+              </div>
+              <div v-if="f.title" class="scan-finding-title">{{ f.title }}</div>
+              <div v-if="f.description" class="scan-finding-desc">{{ f.description }}</div>
+              <div v-if="f.remediation" class="scan-finding-fix">
+                {{ t('skills.security.fix') }}: {{ f.remediation }}
+              </div>
+            </li>
+          </ul>
+          <div v-else class="scan-findings-empty">
+            {{ t('skills.security.noPersistedFindings') }}
+          </div>
+        </div>
 
         <div class="skill-tags" v-if="skill.tags">
           <span v-for="tag in parseTags(skill.tags)" :key="tag" class="skill-tag">{{ tag }}</span>
@@ -154,9 +208,10 @@
           class="skill-pagination"
           v-model:current-page="query.page"
           v-model:page-size="query.size"
-          :page-sizes="[12, 24, 48]"
+          :page-sizes="[10, 20, 50]"
           :total="total"
-          layout="total, sizes, prev, pager, next"
+          :hide-on-single-page="false"
+          layout="total, sizes, prev, pager, next, jumper"
           background
           @size-change="onPageSizeChange"
           @current-change="loadSkills"
@@ -268,15 +323,19 @@ const editingSkill = ref<Skill | null>(null)
 const refreshing = ref(false)
 const showImportDialog = ref(false)
 
-/** Paginated query state — RFC-042 §2.1 */
+/** Paginated query state — RFC-042 §2.1 + §2.3.5 */
 const query = reactive({
   page: 1,
-  size: 24,
+  size: 10,
   keyword: '',
   skillType: 'all' as string,
-  /** '' = all, 'true' = enabled only, 'false' = disabled only (string to avoid tri-state checkbox quirks) */
-  enabledFilter: '' as string,
+  /** '' = all | 'enabled' | 'disabled' | 'scan_failed' (RFC-042 §2.3.5 unified status filter) */
+  statusFilter: '' as string,
 })
+
+/** Per-skill UI state for the RFC-042 §2.3 findings panel. */
+const expandedFindings = ref<Record<string, boolean>>({})
+const rescanning = ref<Record<string, boolean>>({})
 
 const categoryTabs = computed(() => [
   { label: t('skills.tabs.all'), value: 'all', icon: '🗂️' },
@@ -349,7 +408,11 @@ async function loadSkills() {
     const params: Record<string, unknown> = { page: query.page, size: query.size }
     if (query.keyword) params.keyword = query.keyword.trim()
     if (query.skillType && query.skillType !== 'all') params.skillType = query.skillType
-    if (query.enabledFilter !== '') params.enabled = query.enabledFilter === 'true'
+    // Map the single status filter onto the backend's two independent params:
+    // enabled (bool) and scanStatus (PASSED/FAILED). scan_failed implies any enabled state.
+    if (query.statusFilter === 'enabled') params.enabled = true
+    else if (query.statusFilter === 'disabled') params.enabled = false
+    else if (query.statusFilter === 'scan_failed') params.scanStatus = 'FAILED'
 
     const res: any = await skillApi.page(params)
     const data = res.data || {}
@@ -464,6 +527,60 @@ async function handleRefreshRuntime() {
     ElMessage.error(typeof e === 'string' ? e : e?.message || t('skills.refreshFailed'))
   } finally {
     refreshing.value = false
+  }
+}
+
+// ==================== RFC-042 §2.3 — persisted scan findings ====================
+
+/** Parse the DB-persisted JSON findings array. Returns [] on any parse error. */
+function parsedFindings(skill: Skill): SkillSecurityFinding[] {
+  const raw = skill.securityScanResult
+  if (!raw) return []
+  try {
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? (arr as SkillSecurityFinding[]) : []
+  } catch {
+    return []
+  }
+}
+
+function toggleFindings(skill: Skill) {
+  const key = String(skill.id)
+  expandedFindings.value = { ...expandedFindings.value, [key]: !expandedFindings.value[key] }
+}
+
+async function rescanSkill(skill: Skill) {
+  const key = String(skill.id)
+  rescanning.value = { ...rescanning.value, [key]: true }
+  try {
+    const res: any = await skillApi.rescan(skill.id)
+    const updated: Skill | undefined = res?.data
+    if (updated) {
+      // Patch the row in-place so the panel updates without a full page reload.
+      const idx = skills.value.findIndex(s => s.id === skill.id)
+      if (idx >= 0) skills.value.splice(idx, 1, { ...skills.value[idx], ...updated })
+      ElMessage.success(
+        updated.securityScanStatus === 'FAILED'
+          ? t('skills.security.rescanStillFailed')
+          : t('skills.security.rescanPassed')
+      )
+    }
+    // Refresh runtime status too so the in-memory badges stay in sync.
+    await loadRuntimeStatus()
+  } catch (e: any) {
+    ElMessage.error(typeof e === 'string' ? e : e?.message || t('skills.security.rescanFailed'))
+  } finally {
+    rescanning.value = { ...rescanning.value, [key]: false }
+  }
+}
+
+function formatScanTime(iso: string): string {
+  try {
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return iso
+    return d.toLocaleString()
+  } catch {
+    return iso
   }
 }
 
@@ -697,6 +814,107 @@ html.dark .skill-pagination :deep(.el-pagination .el-select .el-input__wrapper) 
 .skill-pagination :deep(.el-pagination .el-pagination__total),
 .skill-pagination :deep(.el-pagination .el-pagination__sizes) {
   margin-right: 12px;
+}
+
+/* RFC-042 §2.3 — security scan findings panel (frosted, non-EP) */
+.scan-badge-button {
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 8px;
+}
+.scan-badge-button:hover { filter: brightness(0.97); }
+.scan-badge-chevron { font-size: 10px; opacity: 0.75; }
+
+.scan-findings-panel {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 95, 86, 0.08);
+  border: 1px solid rgba(255, 95, 86, 0.22);
+  backdrop-filter: blur(8px) saturate(1.05);
+  -webkit-backdrop-filter: blur(8px) saturate(1.05);
+}
+html.dark .scan-findings-panel {
+  background: rgba(255, 95, 86, 0.12);
+  border-color: rgba(255, 95, 86, 0.28);
+}
+.scan-findings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.scan-findings-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mc-text-primary);
+}
+.scan-findings-time {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--mc-text-tertiary);
+}
+.scan-rescan-btn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--mc-text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+html.dark .scan-rescan-btn {
+  background: rgba(255, 255, 255, 0.08);
+}
+.scan-rescan-btn:hover:not(:disabled) {
+  background: var(--mc-primary);
+  color: #fff;
+}
+.scan-rescan-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.scan-findings-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.scan-finding-item {
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.45);
+  border-left: 3px solid var(--mc-border);
+  font-size: 12px;
+  line-height: 1.5;
+}
+html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
+.scan-finding-item.sev-critical { border-left-color: #d32f2f; }
+.scan-finding-item.sev-high     { border-left-color: #f57c00; }
+.scan-finding-item.sev-medium   { border-left-color: #fbc02d; }
+.scan-finding-item.sev-low      { border-left-color: #689f38; }
+.scan-finding-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+.scan-finding-sev { font-weight: 700; color: var(--mc-text-primary); }
+.scan-finding-id { color: var(--mc-text-secondary); }
+.scan-finding-loc { color: var(--mc-text-tertiary); }
+.scan-finding-title { font-weight: 600; margin-top: 3px; color: var(--mc-text-primary); }
+.scan-finding-desc { color: var(--mc-text-secondary); margin-top: 2px; }
+.scan-finding-fix  { color: var(--mc-text-secondary); margin-top: 4px; font-style: italic; }
+.scan-findings-empty {
+  font-size: 12px;
+  color: var(--mc-text-tertiary);
+  font-style: italic;
 }
 
 /* 技能网格 */
