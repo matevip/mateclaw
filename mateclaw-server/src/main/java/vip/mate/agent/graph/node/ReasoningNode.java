@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
@@ -174,14 +175,79 @@ public class ReasoningNode implements NodeAction {
         String systemPrompt = accessor.systemPrompt();
         List<Message> messages = accessor.messages();
 
-        // 消息列表膨胀防护
+        // Guard against runaway message list growth.
+        //
+        // CRITICAL: a naive head+tail cut can break the OpenAI-compatible protocol invariant
+        // that requires tool_call / tool_response pairs to be complete:
+        //
+        //   P0 (originally observed): AssistantMessage(tool_calls) falls into the dropped gap,
+        //      its ToolResponseMessage lands in the kept tail → provider sees an orphaned
+        //      ToolResponseMessage → kimi-code 400 "tool_call_id is not found".
+        //
+        //   P1 (symmetric): AssistantMessage(tool_calls) is kept in the head at the boundary,
+        //      its ToolResponseMessage falls into the dropped gap → provider sees an assistant
+        //      tool_call with no matching response → also a 400 on strict providers.
+        //
+        // Fix: perform the normal cut, then run an iterative bidirectional integrity pass until
+        // the list is stable:
+        //   • Remove any ToolResponseMessage whose parent AssistantMessage.tool_calls id was
+        //     dropped (P0).
+        //   • Remove any AssistantMessage whose tool_calls have no matching ToolResponseMessage
+        //     (P1).
+        // Iterate because a P1 removal could expose a new P0 orphan (and vice versa, though that
+        // is pathological in practice).  With ≤40 messages convergence is always fast.
+        // Dropping incomplete pairs is safe — prior iterations already processed those
+        // observations; the LLM needs the summary context, not the raw tool I/O.
         final int MAX_LOOP_MESSAGES = 40;
         if (messages.size() > MAX_LOOP_MESSAGES) {
             log.warn("[ReasoningNode] Messages list too large ({} messages), trimming to {} for conversation {}",
                     messages.size(), MAX_LOOP_MESSAGES, conversationId);
+            int headKeep = Math.min(4, messages.size());
+            int tailKeep = MAX_LOOP_MESSAGES - headKeep;
+            int tailStart = messages.size() - tailKeep;
+
             List<Message> trimmed = new ArrayList<>(MAX_LOOP_MESSAGES);
-            trimmed.addAll(messages.subList(0, Math.min(4, messages.size())));
-            trimmed.addAll(messages.subList(messages.size() - (MAX_LOOP_MESSAGES - 4), messages.size()));
+            trimmed.addAll(messages.subList(0, headKeep));
+            trimmed.addAll(messages.subList(tailStart, messages.size()));
+
+            // Iterative bidirectional integrity pass.
+            int totalRemoved = 0;
+            boolean changed;
+            do {
+                // Snapshot current tool_call ids and response ids.
+                Set<String> callIds = new java.util.HashSet<>();
+                Set<String> respIds = new java.util.HashSet<>();
+                for (Message m : trimmed) {
+                    if (m instanceof AssistantMessage am && am.getToolCalls() != null) {
+                        for (AssistantMessage.ToolCall tc : am.getToolCalls()) callIds.add(tc.id());
+                    }
+                    if (m instanceof ToolResponseMessage trm) {
+                        for (ToolResponseMessage.ToolResponse r : trm.getResponses()) respIds.add(r.id());
+                    }
+                }
+                int before = trimmed.size();
+                trimmed.removeIf(m -> {
+                    // P0: ToolResponseMessage whose parent tool_call was dropped
+                    if (m instanceof ToolResponseMessage trm) {
+                        return trm.getResponses().stream().anyMatch(r -> !callIds.contains(r.id()));
+                    }
+                    // P1: AssistantMessage whose tool_call has no ToolResponseMessage
+                    if (m instanceof AssistantMessage am && am.getToolCalls() != null
+                            && !am.getToolCalls().isEmpty()) {
+                        return am.getToolCalls().stream().anyMatch(tc -> !respIds.contains(tc.id()));
+                    }
+                    return false;
+                });
+                int removed = before - trimmed.size();
+                totalRemoved += removed;
+                changed = removed > 0;
+            } while (changed);
+
+            if (totalRemoved > 0) {
+                log.warn("[ReasoningNode] Removed {} message(s) with broken tool_call/response pairs "
+                        + "after trim (bidirectional integrity guard), conv={}", totalRemoved, conversationId);
+            }
+
             messages = trimmed;
         }
 

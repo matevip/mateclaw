@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Database bootstrap runner.
  * <p>
- * Executes schema.sql and tools-sync.sql on every startup.
+ * Loads seed data after Flyway migrations on every startup.
  * <p>
  * For data.sql (seed data with locale-specific content):
  * <ul>

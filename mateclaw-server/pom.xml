@@ -280,6 +280,17 @@
             <version>2.2.0</version>
         </dependency>
 
+        <!-- ===== Apache POI (in-process .docx generation) ===== -->
+        <!--
+            Used by DocxRenderTool to render Markdown into a .docx in-JVM,
+            replacing the Node.js docx-js subprocess (3-5 min cold install).
+        -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.4.1</version>
+        </dependency>
+
         <!-- ===== Database Migration (Flyway) ===== -->
         <dependency>
             <groupId>org.flywaydb</groupId>

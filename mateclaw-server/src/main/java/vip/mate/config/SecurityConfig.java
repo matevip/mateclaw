@@ -58,7 +58,9 @@ public class SecurityConfig {
                     "/api/v1/setup/**",
                     "/api/v1/channels/webhook/**",
                     "/api/v1/channels/webchat/**",
-                    "/api/v1/talk/ws"
+                    "/api/v1/talk/ws",
+                    // RFC-045: tool-generated files served via unguessable UUID + 10-min TTL
+                    "/api/v1/files/generated/**"
                 ).permitAll()
                 // 所有其他 API 接口需要认证
                 .requestMatchers("/api/**").authenticated()

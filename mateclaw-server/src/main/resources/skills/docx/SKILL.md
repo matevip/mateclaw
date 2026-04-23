@@ -19,8 +19,39 @@ platforms:
 
 # DOCX creation, editing, and analysis
 
+## Quick Start — Pick the Right Tool
+
+| Task | Recommended Tool |
+|------|------------------|
+| **Create** a new document (report / résumé / contract / memo) | `renderDocx()` — millisecond render, no subprocess |
+| **Edit** an existing .docx (content / formatting) | unpack → edit XML → pack workflow below |
+| Add tracked changes / comments | unpack → edit XML → pack workflow below |
+| GB/T 9704 official document | `writeGongwen()` (BmacClaw only) |
+
+### Create a new document (recommended path)
+
+Call the in-process Java tool — no Node.js install, no fork, no disk round-trip:
+
+```
+renderDocx(
+  markdown="# Title\n\nBody paragraph...",
+  filename="monthly-report",
+  pageSize="A4"
+)
+```
+
+Returns a clickable link of the form
+`[monthly-report.docx](/api/v1/files/generated/<uuid>)` valid for 10 minutes.
+The user clicks it to download — no follow-up Agent step needed.
+
+`renderDocx` supports headings (`#` `##` `###`), bold (`**text**`), bullet
+lists (`- item`), numbered lists (`1. item`), pipe-style tables, and plain
+paragraphs. For images, headers/footers, or precise OOXML control, fall back
+to the docx-js workflow below.
+
 ## Prerequisites
 
+- **python-docx** (`pip install python-docx`): direct structure reading and light editing (paragraphs, styles, tables)
 - **docx** (`npm install -g docx`): new document creation
 - **LibreOffice** (`soffice`): `.doc` -> `.docx` conversion, tracked-changes acceptance, and PDF export
 - **pandoc**: text extraction
@@ -50,6 +81,34 @@ python scripts/office/soffice.py --headless --convert-to docx document.doc
 
 ### Reading Content
 
+**Option A: python-docx (recommended for structured access)**
+
+Install: `pip install python-docx`. Gives direct access to paragraphs, styles, tables, and metadata without unpacking ZIP.
+
+```python
+from docx import Document
+
+doc = Document("document.docx")
+
+# Paragraphs with styles
+for para in doc.paragraphs:
+    print(f"[{para.style.name}] {para.text}")
+
+# Tables
+for i, table in enumerate(doc.tables):
+    print(f"Table {i+1}:")
+    for row in table.rows:
+        print([cell.text for cell in row.cells])
+
+# Inline styles within a paragraph
+for para in doc.paragraphs:
+    for run in para.runs:
+        print(f"  run: bold={run.bold} italic={run.italic} text={run.text!r}")
+```
+
+Use python-docx when you need to read or lightly modify content. Fall back to the unpack/XML workflow for complex structural changes.
+
+**Option B: pandoc (plain text extraction)**
 ```bash
 # Text extraction with tracked changes
 pandoc --track-changes=all document.docx -o output.md

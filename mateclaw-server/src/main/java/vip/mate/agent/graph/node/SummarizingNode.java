@@ -3,12 +3,16 @@ package vip.mate.agent.graph.node;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.anthropic.AnthropicChatModel;
+import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import vip.mate.agent.GraphEventPublisher;
 import vip.mate.agent.graph.NodeStreamingChatHelper;
 import vip.mate.agent.graph.state.MateClawStateAccessor;
@@ -101,9 +105,15 @@ public class SummarizingNode implements NodeAction {
         promptMessages.add(new SystemMessage(SYSTEM_PROMPT));
         promptMessages.add(new UserMessage(userPrompt));
 
+        // Summarization is mechanical text compression — disable thinking/reasoning to avoid
+        // inheriting the user's thinkingLevel=high from the model's default options.
+        // Without this override, a plain Prompt would inherit extended thinking from chatModel
+        // defaults, causing 100+ second delays for a task that needs no deep reasoning.
+        Prompt summarizePrompt = buildNoThinkingPrompt(promptMessages);
+
         // 流式调用 LLM，实时推送 content/thinking
         NodeStreamingChatHelper.StreamResult result = streamingHelper.streamCall(
-                chatModel, new Prompt(promptMessages), conversationId, "summarizing");
+                chatModel, summarizePrompt, conversationId, "summarizing");
 
         // 错误处理：摘要失败时用原始观察的前 500 字符作为 fallback
         if (result.hasFatalError()) {
@@ -179,6 +189,26 @@ public class SummarizingNode implements NodeAction {
                         "observationCount", observations.size(),
                         "summaryChars", summaryContent.length()))))
                 .build();
+    }
+
+    /**
+     * Build a Prompt with thinking/reasoning explicitly disabled.
+     * Summarization is mechanical compression — it never needs extended reasoning,
+     * and inheriting the user's thinkingLevel=high from model defaults wastes 100+ seconds.
+     */
+    private Prompt buildNoThinkingPrompt(List<Message> messages) {
+        ChatOptions opts;
+        if (chatModel instanceof AnthropicChatModel) {
+            opts = AnthropicChatOptions.builder()
+                    .thinking(org.springframework.ai.anthropic.api.AnthropicApi.ThinkingType.DISABLED, 0)
+                    .build();
+        } else {
+            // OpenAI / DashScope / other: omit reasoningEffort to disable chain-of-thought
+            OpenAiChatOptions oaiOpts = OpenAiChatOptions.builder().build();
+            oaiOpts.setStreamUsage(true);
+            opts = oaiOpts;
+        }
+        return new Prompt(messages, opts);
     }
 
     private void pushPhase(String conversationId, String phase, Map<String, Object> extra) {
