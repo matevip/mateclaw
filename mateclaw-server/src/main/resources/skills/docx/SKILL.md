@@ -1,6 +1,7 @@
 ---
 name: docx
-description: "Use this skill whenever the user wants to create, read, edit, or manipulate Word documents (.docx files). Triggers include: any mention of \"Word doc\", \"word document\", \".docx\", or requests to produce professional documents with formatting like tables of contents, headings, page numbers, or letterheads. Also use when extracting or reorganizing content from .docx files, inserting or replacing images in documents, performing find-and-replace in Word files, working with tracked changes or comments, or converting content into a polished Word document. If the user asks for a \"report\", \"memo\", \"letter\", \"template\", or similar deliverable as a Word or .docx file, use this skill. Do NOT use for PDFs, spreadsheets, or general coding tasks unrelated to document generation."
+version: "1.1.0"
+description: "Use this skill whenever the user wants to create, read, edit, or manipulate Word documents (.docx files). For CREATING new documents (report, memo, letter, résumé, contract from scratch), call the built-in tool `renderDocx` instead — it renders Markdown to .docx in milliseconds without forking Node.js. This skill remains authoritative for EDITING existing .docx (unpack/edit XML/pack), tracked changes, comments, image manipulation, find-and-replace, and conversions. Triggers include: \"Word doc\", \"word document\", \".docx\", or requests to edit/extract/restructure existing Word files. Do NOT use for PDFs, spreadsheets, or general coding tasks unrelated to document generation."
 dependencies:
   commands:
     - python3
