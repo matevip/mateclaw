@@ -258,7 +258,7 @@ export const modelApi = {
   addProviderModel: (providerId: string, data: any) =>
     http.post(`/models/${providerId}/models`, data),
   removeProviderModel: (providerId: string, modelId: string) =>
-    http.delete(`/models/${providerId}/models/${encodeURIComponent(modelId)}`),
+    http.delete(`/models/${providerId}/models`, { params: { modelId } }),
   getActive: () => http.get('/models/active'),
   setActive: (data: { providerId: string; model: string }) =>
     http.put('/models/active', data),
@@ -270,7 +270,7 @@ export const modelApi = {
   testConnection: (providerId: string) =>
     http.post(`/models/${providerId}/test-connection`),
   testModel: (providerId: string, modelId: string) =>
-    http.post(`/models/${providerId}/models/${encodeURIComponent(modelId)}/test`),
+    http.post(`/models/${providerId}/models/test`, null, { params: { modelId } }),
 
   // ==================== Embedding Model (RFC Embedding UI) ====================
   listByType: (modelType: 'chat' | 'embedding') =>

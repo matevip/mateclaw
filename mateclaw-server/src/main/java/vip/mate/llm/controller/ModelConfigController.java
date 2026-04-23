@@ -102,9 +102,9 @@ public class ModelConfigController {
     }
 
     @Operation(summary = "从 Provider 删除模型")
-    @DeleteMapping("/{providerId}/models/{modelId}")
+    @DeleteMapping("/{providerId}/models")
     public R<ProviderInfoDTO> removeProviderModel(@PathVariable String providerId,
-                                                  @PathVariable String modelId) {
+                                                  @RequestParam String modelId) {
         return R.ok(modelProviderService.removeModel(providerId, modelId));
     }
 
@@ -163,9 +163,9 @@ public class ModelConfigController {
     }
 
     @Operation(summary = "测试单个模型可用性")
-    @PostMapping("/{providerId}/models/{modelId}/test")
+    @PostMapping("/{providerId}/models/test")
     public R<TestResult> testModel(@PathVariable String providerId,
-                                    @PathVariable String modelId) {
+                                    @RequestParam String modelId) {
         return R.ok(modelDiscoveryService.testModel(providerId, modelId));
     }
 
