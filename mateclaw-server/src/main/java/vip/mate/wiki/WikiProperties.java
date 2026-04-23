@@ -33,12 +33,15 @@ public class WikiProperties {
     private int maxParallelRawMaterials = 3;
 
     /**
-     * 单个材料内 chunk 的并行处理数上限。
+     * Max parallel chunks within a single raw material.
      * <p>
-     * RFC-012 Change 1：从硬编码 3 提到 5，并暴露为配置项。默认总并发为
-     * maxParallelRawMaterials × maxParallelChunks = 15，仍在常见 60 RPM 限额下。
+     * RFC-047 P3: Changed from 5 to 1. Parallel chunks all share the same existingPagesIndex
+     * snapshot, so chunk N cannot see pages created by chunk N-1 — causing duplicate pages and
+     * stale-index collisions. Serializing chunks eliminates this class of bug. Document-level
+     * parallelism (maxParallelRawMaterials) is preserved, so overall throughput is unchanged
+     * for multi-document batches.
      */
-    private int maxParallelChunks = 5;
+    private int maxParallelChunks = 1;
 
     /**
      * 单个 chunk 内 phase B 阶段的 page 并行处理数上限。
@@ -85,6 +88,24 @@ public class WikiProperties {
     private long llmMaxTotalDurationMs = 240_000;
 
     /**
+     * RFC-047 P1: Max pages per BatchCreate LLM call.
+     * Pages planned by route are chunked into sub-batches of this size;
+     * a local liveIndex is updated between sub-batches so later pages can
+     * link to earlier ones created in the same chunk.
+     * Default 5: keeps output tokens per call predictable while covering
+     * the typical 3–5 creates per chunk in a single call.
+     */
+    private int batchCreatePageSize = 3;
+
+    /**
+     * RFC-047: Minimum chunk length (chars) for the chunk-fallback mechanism.
+     * If route returns 0 create+update entries and the chunk exceeds this threshold,
+     * an overview page is auto-injected so no substantial content is silently dropped.
+     * Chunks shorter than this (e.g. TOC lines, blank pages) are allowed to produce nothing.
+     */
+    private int chunkFallbackMinChars = 200;
+
+    /**
      * 是否启用两阶段消化（路由 → 逐页 merge）。
      * <p>
      * RFC-012 M2：true 时单 chunk 的 LLM 输出量大幅缩减，避免 nginx 60s 网关超时。
@@ -127,4 +148,20 @@ public class WikiProperties {
 
     /** Maximum characters for local repair single-page regeneration */
     private int localRepairMaxChars = 8000;
+
+    /**
+     * Whether to run a document-level analysis pass before routing.
+     * When enabled, a single LLM call produces a concept map (topics + key_concepts)
+     * that is injected into every chunk's route prompt, giving the router global
+     * awareness of the document structure and reducing concept omissions.
+     * Adds ~1 LLM call and 10-20s per raw material.
+     */
+    private boolean useDocumentAnalysis = true;
+
+    /**
+     * Max characters of document text fed to the analysis pass.
+     * Larger values improve coverage but increase prompt tokens.
+     * Default 15000 covers most documents while staying well within model limits.
+     */
+    private int documentAnalysisSampleChars = 15000;
 }

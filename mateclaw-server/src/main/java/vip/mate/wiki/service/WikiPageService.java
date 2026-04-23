@@ -249,6 +249,43 @@ public class WikiPageService {
     }
 
     /**
+     * RFC-047 P2: Paired source lineage entry (rawId + rawTitle snapshot at ingest time).
+     * Keyed by rawId; rawTitle is a snapshot — the raw may be renamed later but lineage stays accurate.
+     */
+    public record SourceEntry(long rawId, String rawTitle) {}
+
+    /**
+     * RFC-047 P2: Merge a (rawId, rawTitle) pair into a page's source lineage.
+     * Dual-writes to both sourceEntries (canonical) and sourceRawIds (legacy compat).
+     * Idempotent: no-ops if rawId already present.
+     */
+    @Transactional
+    public void mergeSourceLineage(Long pageId, Long rawId, String rawTitle) {
+        WikiPageEntity page = pageMapper.selectById(pageId);
+        if (page == null) return;
+
+        List<SourceEntry> entries = parseSourceEntries(page.getSourceEntries());
+        boolean entryExists = entries.stream().anyMatch(e -> e.rawId() == rawId);
+
+        List<Long> rawIds = parseSourceRawIds(page.getSourceRawIds());
+        boolean idExists = rawIds.contains(rawId);
+
+        if (!entryExists) {
+            entries.add(new SourceEntry(rawId, rawTitle != null ? rawTitle : ""));
+            page.setSourceEntries(toJson(entries));
+        }
+        if (!idExists) {
+            rawIds.add(rawId);
+            page.setSourceRawIds(toJson(rawIds));
+        }
+
+        if (!entryExists || !idExists) {
+            pageMapper.updateById(page);
+            evictSummaryCache(page.getKbId());
+        }
+    }
+
+    /**
      * 手动更新页面内容
      */
     @Transactional
@@ -347,13 +384,15 @@ public class WikiPageService {
             List<Long> sourceIds = parseSourceRawIds(page.getSourceRawIds());
             if (sourceIds.contains(rawId)) {
                 if (sourceIds.size() == 1) {
-                    // 独占页面：直接删除
                     delete(kbId, page.getSlug());
                     deleted++;
                 } else {
-                    // 多来源页面：仅移除该 rawId 引用
+                    // Multi-source page: remove this rawId from both sourceRawIds and sourceEntries
                     sourceIds.remove(rawId);
                     page.setSourceRawIds(toJson(sourceIds));
+                    List<SourceEntry> entries = parseSourceEntries(page.getSourceEntries());
+                    entries.removeIf(e -> e.rawId() == rawId);
+                    page.setSourceEntries(toJson(entries));
                     pageMapper.updateById(page);
                 }
             }
@@ -401,6 +440,15 @@ public class WikiPageService {
         if (json == null || json.isBlank()) return new ArrayList<>();
         try {
             return objectMapper.readValue(json, new TypeReference<List<Long>>() {});
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
+    }
+
+    private List<SourceEntry> parseSourceEntries(String json) {
+        if (json == null || json.isBlank()) return new ArrayList<>();
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<SourceEntry>>() {});
         } catch (Exception e) {
             return new ArrayList<>();
         }

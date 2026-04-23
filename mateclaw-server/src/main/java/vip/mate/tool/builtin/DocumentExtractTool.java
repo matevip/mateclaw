@@ -32,7 +32,7 @@ import java.util.zip.ZipInputStream;
 public class DocumentExtractTool {
 
     private static final int COMMAND_TIMEOUT_SECONDS = 30;
-    private static final int MAX_OUTPUT_LENGTH = 100000; // 100KB 限制
+    private static final int MAX_OUTPUT_LENGTH = 500000; // 500KB — CLOB column has no size limit
     private static final boolean IS_WINDOWS = System.getProperty("os.name", "")
             .toLowerCase(Locale.ROOT).contains("win");
 

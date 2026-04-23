@@ -42,6 +42,10 @@ public class WikiPageEntity {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String sourceRawIds;
 
+    /** RFC-047 P2: paired source lineage — JSON array of {rawId, rawTitle} objects. Canonical; dual-written with sourceRawIds. */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String sourceEntries;
+
     /** Page type: entity / concept / source / synthesis */
     private String pageType;
 
