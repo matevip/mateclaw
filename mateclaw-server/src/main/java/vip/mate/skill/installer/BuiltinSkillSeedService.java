@@ -139,6 +139,9 @@ public class BuiltinSkillSeedService implements ApplicationRunner {
         row.setIcon(stringFromFrontmatter(parsed, "icon", DEFAULT_ICON));
         row.setAuthor(stringFromFrontmatter(parsed, "author", DEFAULT_AUTHOR));
         row.setTags(tagsFromFrontmatter(parsed, parsed.getName()));
+        // RFC-042 §2.2 — optional bilingual display names from frontmatter.
+        row.setNameZh(stringFromFrontmatter(parsed, "nameZh", null));
+        row.setNameEn(stringFromFrontmatter(parsed, "nameEn", null));
         row.setConfigJson(buildConfigJson(parsed));
         LocalDateTime now = LocalDateTime.now();
         row.setCreateTime(now);
@@ -187,6 +190,19 @@ public class BuiltinSkillSeedService implements ApplicationRunner {
         String tags = tagsFromFrontmatter(parsed, null);
         if (tags != null && !Objects.equals(existing.getTags(), tags)) {
             existing.setTags(tags);
+            dirty = true;
+        }
+
+        // RFC-042 §2.2 — bilingual display names. Frontmatter wins; if silent,
+        // preserve whatever the SQL seed or a manual UI edit populated.
+        String nameZh = stringFromFrontmatter(parsed, "nameZh", null);
+        if (nameZh != null && !Objects.equals(existing.getNameZh(), nameZh)) {
+            existing.setNameZh(nameZh);
+            dirty = true;
+        }
+        String nameEn = stringFromFrontmatter(parsed, "nameEn", null);
+        if (nameEn != null && !Objects.equals(existing.getNameEn(), nameEn)) {
+            existing.setNameEn(nameEn);
             dirty = true;
         }
 

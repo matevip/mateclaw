@@ -66,7 +66,9 @@
             <span class="skill-icon">{{ skill.icon || getSkillIcon(skill.skillType) }}</span>
           </div>
           <div class="skill-meta">
-            <h3 class="skill-name">{{ skill.name }}</h3>
+            <h3 class="skill-name">{{ resolveSkillName(skill) }}</h3>
+            <!-- RFC-042 §2.2.4 — show the underlying slug below the i18n display name -->
+            <div v-if="hasI18nName(skill)" class="skill-slug">{{ skill.name }}</div>
             <div class="skill-meta-row">
               <span class="skill-type-badge" :class="getSkillTypeBadge(skill.skillType)">
                 {{ getSkillTypeLabel(skill.skillType) }}
@@ -240,6 +242,15 @@
               <input v-model="form.name" class="form-input" :placeholder="t('skills.placeholders.name')"
                 :disabled="isBuiltinEditing" />
             </div>
+            <!-- RFC-042 §2.2.6 — optional bilingual display names -->
+            <div class="form-group">
+              <label class="form-label">{{ t('skills.fields.nameZh') }}</label>
+              <input v-model="form.nameZh" class="form-input" :placeholder="t('skills.placeholders.nameZh')" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">{{ t('skills.fields.nameEn') }}</label>
+              <input v-model="form.nameEn" class="form-input" :placeholder="t('skills.placeholders.nameEn')" />
+            </div>
             <div class="form-group">
               <label class="form-label">{{ t('skills.fields.type') }}</label>
               <select v-model="form.skillType" class="form-input" :disabled="isBuiltinEditing">
@@ -312,8 +323,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { skillApi } from '@/api/index'
 import type { Skill, SkillRuntimeStatus, SkillSecurityFinding } from '@/types/index'
 import ImportHubDialog from '@/components/skill/ImportHubDialog.vue'
+import { useSkillName } from '@/composables/useSkillName'
 
 const { t } = useI18n()
+const { resolveSkillName, hasI18nName } = useSkillName()
 const skills = ref<Skill[]>([])
 const total = ref(0)
 const counts = ref<Record<string, number>>({})
@@ -346,6 +359,9 @@ const categoryTabs = computed(() => [
 
 const defaultForm = () => ({
   name: '',
+  // RFC-042 §2.2.6 — optional bilingual display names
+  nameZh: '',
+  nameEn: '',
   description: '',
   skillType: 'dynamic' as string,
   icon: '',
@@ -469,6 +485,8 @@ function openEditModal(skill: Skill) {
   editingSkill.value = skill
   form.value = {
     name: skill.name,
+    nameZh: skill.nameZh || '',
+    nameEn: skill.nameEn || '',
     description: skill.description || '',
     skillType: skill.skillType,
     icon: skill.icon || '',
@@ -942,7 +960,9 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 .bg-gray { background: var(--mc-bg-sunken); }
 .skill-icon { font-size: 20px; }
 .skill-meta { flex: 1; overflow: hidden; }
-.skill-name { font-size: 16px; font-weight: 700; color: var(--mc-text-primary); margin: 0 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skill-name { font-size: 16px; font-weight: 700; color: var(--mc-text-primary); margin: 0 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* RFC-042 §2.2 — slug printed under the i18n display name when they differ */
+.skill-slug { font-size: 11px; color: var(--mc-text-tertiary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .skill-meta-row { display: flex; align-items: center; gap: 6px; }
 .skill-type-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
 .badge-blue { background: var(--mc-primary-bg); color: var(--mc-primary); }

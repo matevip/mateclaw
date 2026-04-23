@@ -18,8 +18,22 @@ public class SkillEntity {
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;
 
-    /** 技能名称 */
+    /** 技能名称 — immutable slug, used as primary identifier */
     private String name;
+
+    /**
+     * RFC-042 §2.2 — locale-specific display name for zh-CN.
+     * {@code null} → UI falls back to {@code name}.
+     */
+    @TableField(value = "name_zh", updateStrategy = FieldStrategy.ALWAYS)
+    private String nameZh;
+
+    /**
+     * RFC-042 §2.2 — locale-specific display name for en-US.
+     * {@code null} → UI falls back to {@code name}.
+     */
+    @TableField(value = "name_en", updateStrategy = FieldStrategy.ALWAYS)
+    private String nameEn;
 
     /** 技能描述 */
     private String description;

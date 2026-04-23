@@ -194,7 +194,11 @@ export interface MessageContentPart {
 // ==================== 技能 ====================
 export interface Skill {
   id: string | number
+  /** Slug / immutable identifier */
   name: string
+  /** RFC-042 §2.2 — locale display names; null = fall back to `name` */
+  nameZh?: string
+  nameEn?: string
   description?: string
   skillType: string
   icon?: string

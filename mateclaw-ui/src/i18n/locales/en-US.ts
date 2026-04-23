@@ -1636,6 +1636,8 @@ export default {
     },
     fields: {
       name: 'Name',
+      nameZh: 'Chinese display name',
+      nameEn: 'English display name',
       type: 'Type',
       icon: 'Icon',
       version: 'Version',
@@ -1648,6 +1650,8 @@ export default {
     },
     placeholders: {
       name: 'Skill name',
+      nameZh: '可选 — 留空则显示原始 name',
+      nameEn: 'Optional — leave blank to show the slug',
       icon: '🛠️ (emoji or URL)',
       version: '1.0.0',
       author: 'Author name',
