@@ -91,9 +91,6 @@ deploy/nginx/ssl/*.pem
 # Deploy env
 deploy/.env
 
-# Private files excluded from opensource sync
-UPGRADING.md
-
 # Claude Code local settings
 CLAUDE.md
 .claude/settings.local.json

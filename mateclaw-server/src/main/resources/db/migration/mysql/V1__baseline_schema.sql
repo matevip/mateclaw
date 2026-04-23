@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS mate_model_provider (
     name                        VARCHAR(128) NOT NULL,
     api_key_prefix              VARCHAR(32),
     chat_model                  VARCHAR(64),
-    api_key                     VARCHAR(256),
+    api_key                     VARCHAR(512),
     base_url                    VARCHAR(512),
     generate_kwargs             TEXT,
     is_custom                   TINYINT(1)   NOT NULL DEFAULT 0,
