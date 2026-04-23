@@ -84,6 +84,15 @@ public class WikiProcessingService {
          * slug 注册为 winner，后到的 chunk 看到 winner 后会把内容写入 winner 对应的 page。
          */
         final ConcurrentHashMap<String, String> slugClaims = new ConcurrentHashMap<>();
+        /**
+         * Per-run merge dedup set: slugs that have already been successfully merged during
+         * this raw material processing run. Prevents the same page from being merged N times
+         * (once per chunk) when the document repeatedly references the same concept.
+         * <p>
+         * Merge is skipped (not just decremented from count) when a slug is already present.
+         * Uses ConcurrentHashMap as a concurrent set via putIfAbsent.
+         */
+        final ConcurrentHashMap<String, Boolean> mergedSlugs = new ConcurrentHashMap<>();
     }
 
     private final ConcurrentHashMap<Long, ProgressCounter> progressCounters = new ConcurrentHashMap<>();
@@ -566,6 +575,14 @@ public class WikiProcessingService {
         ProgressCounter pc = progressCounters.get(rawId);
 
         // ─── 阶段 A：路由 ───
+        // Rebuild existingPagesIndex fresh at route time so pages created by earlier chunks
+        // in this run are visible. This prevents the route from scheduling "create" for a
+        // concept that was already created by a previous chunk (which would be caught by
+        // savePageContent and converted to update, but wastes a merge LLM call).
+        // listSummaries uses a 5-min TTL cache that is evicted on every create/update, so
+        // this picks up changes from sequential chunks without an extra DB hit when nothing changed.
+        String freshIndex = buildExistingPagesIndex(kbId);
+
         String routeSystem = PromptLoader.loadPrompt("wiki/route-system");
         String routeUserTemplate = PromptLoader.loadPrompt("wiki/route-user");
         String documentMapSection = (documentMap != null && !documentMap.isBlank())
@@ -574,7 +591,7 @@ public class WikiProcessingService {
         String routeUser = routeUserTemplate
                 .replace("{config}", configContent)
                 .replace("{document_map_section}", documentMapSection)
-                .replace("{existing_pages}", existingPagesIndex)
+                .replace("{existing_pages}", freshIndex)
                 .replace("{raw_title}", rawTitle)
                 .replace("{raw_content}", textContent);
         Prompt routePrompt = new Prompt(List.of(
@@ -662,8 +679,23 @@ public class WikiProcessingService {
         List<CompletableFuture<Void>> createFutures = new ArrayList<>(0); // kept for allOf join below
 
         // ─── 阶段 B-2：并行 merge ───
-        List<CompletableFuture<Void>> mergeFutures = new ArrayList<>(updateSlugs.size());
+        // Dedup: skip slugs already merged in this run to prevent N-version churn on
+        // high-frequency reference pages (e.g. a herb mentioned in every chapter gets v1,
+        // not v19). The first chunk that merges a slug wins; later chunks skip it and
+        // adjust the shared total counter so progress stays consistent.
+        List<String> effectiveUpdateSlugs = new ArrayList<>();
         for (String slug : updateSlugs) {
+            if (pc != null && pc.mergedSlugs.putIfAbsent(slug, Boolean.TRUE) != null) {
+                // Already merged in a previous chunk — remove from total so progress bar stays accurate
+                pc.total.decrementAndGet();
+                log.debug("[Wiki] Phase B merge slug='{}' deduped (already merged this run), skipping", slug);
+            } else {
+                effectiveUpdateSlugs.add(slug);
+            }
+        }
+
+        List<CompletableFuture<Void>> mergeFutures = new ArrayList<>(effectiveUpdateSlugs.size());
+        for (String slug : effectiveUpdateSlugs) {
             final String mergeSlug = slug;
             mergeFutures.add(CompletableFuture.runAsync(() -> {
                 try {
@@ -1047,13 +1079,22 @@ public class WikiProcessingService {
 
         String configContent = kb.getConfigContent() != null ? kb.getConfigContent() : "";
         String mergeSystem = PromptLoader.loadPrompt("wiki/merge-page-system");
+        // Trim existing content to prevent context overflow on small models (qwen-turbo: 4096 tokens).
+        // Merging a 3000-char page + 30K chunk blows past the limit → truncated JSON → parse failure.
+        // 1800 chars ≈ ~600 tokens, leaving ample room for the chunk and response.
+        final int MAX_EXISTING_CHARS = 1800;
+        String rawExisting = existing.getContent() != null ? existing.getContent() : "";
+        String trimmedExisting = rawExisting.length() > MAX_EXISTING_CHARS
+                ? rawExisting.substring(0, MAX_EXISTING_CHARS) + "\n...(内容已截断，请基于以上内容合并新信息)"
+                : rawExisting;
+
         String mergeUserTemplate = PromptLoader.loadPrompt("wiki/merge-page-user");
         String mergeUser = mergeUserTemplate
                 .replace("{config}", configContent)
                 .replace("{page_slug}", existing.getSlug() != null ? existing.getSlug() : slug)
                 .replace("{page_title}", existing.getTitle() != null ? existing.getTitle() : "")
                 .replace("{page_last_updated_by}", existing.getLastUpdatedBy() != null ? existing.getLastUpdatedBy() : "ai")
-                .replace("{page_content}", existing.getContent() != null ? existing.getContent() : "")
+                .replace("{page_content}", trimmedExisting)
                 .replace("{raw_title}", raw.getTitle())
                 .replace("{raw_content}", chunkText);
         Prompt prompt = new Prompt(List.of(
