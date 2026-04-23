@@ -18,9 +18,8 @@ import vip.mate.agent.repository.AgentMapper;
 import vip.mate.cron.model.CronJobDTO;
 import vip.mate.cron.model.CronJobEntity;
 import vip.mate.cron.repository.CronJobMapper;
-import org.springframework.context.ApplicationEventPublisher;
 import vip.mate.exception.MateClawException;
-import vip.mate.memory.event.ConversationCompletedEvent;
+import vip.mate.memory.event.ConversationCompletionPublisher;
 import vip.mate.workspace.conversation.ConversationService;
 
 import java.time.LocalDateTime;
@@ -48,7 +47,7 @@ public class CronJobService implements ApplicationRunner {
     private final AgentMapper agentMapper;
     private final AgentService agentService;
     private final ConversationService conversationService;
-    private final ApplicationEventPublisher eventPublisher;
+    private final ConversationCompletionPublisher completionPublisher;
 
     private final ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
     private final ConcurrentHashMap<Long, ScheduledFuture<?>> scheduledTasks = new ConcurrentHashMap<>();
@@ -279,13 +278,7 @@ public class CronJobService implements ApplicationRunner {
             conversationService.saveMessage(conversationId, "assistant", result);
 
             // 发布对话完成事件
-            try {
-                int msgCount = conversationService.getMessageCount(conversationId);
-                eventPublisher.publishEvent(new ConversationCompletedEvent(
-                        job.getAgentId(), conversationId, userMessage, result, msgCount, "cron"));
-            } catch (Exception ex) {
-                log.debug("[Memory] Failed to publish ConversationCompletedEvent: {}", ex.getMessage());
-            }
+            completionPublisher.publish(job.getAgentId(), conversationId, userMessage, result, "cron");
 
             // 合并更新 lastRunTime + nextRunTime，单次 DB 写入
             updateRunTimes(job.getId(), job.getCronExpression(), job.getTimezone());

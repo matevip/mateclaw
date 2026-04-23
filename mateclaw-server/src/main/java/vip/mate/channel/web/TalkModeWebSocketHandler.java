@@ -10,6 +10,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 import vip.mate.agent.AgentService;
+import vip.mate.memory.event.ConversationCompletionPublisher;
 import vip.mate.stt.SttService;
 import vip.mate.tts.TtsService;
 import vip.mate.workspace.conversation.ConversationService;
@@ -48,6 +49,7 @@ public class TalkModeWebSocketHandler extends AbstractWebSocketHandler {
     private final TtsService ttsService;
     private final AgentService agentService;
     private final ConversationService conversationService;
+    private final ConversationCompletionPublisher completionPublisher;
     private final ObjectMapper objectMapper;
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
@@ -147,6 +149,10 @@ public class TalkModeWebSocketHandler extends AbstractWebSocketHandler {
 
             // 6. 保存助手回复
             conversationService.saveMessage(talkSession.conversationId, "assistant", reply, List.of());
+
+            // Publish conversation-completed event so memory extraction runs for voice turns too.
+            completionPublisher.publish(talkSession.agentId, talkSession.conversationId,
+                    transcript, reply, "talk");
 
             // 7. 推送文字回复
             sendJson(session, Map.of("type", "reply", "text", reply));

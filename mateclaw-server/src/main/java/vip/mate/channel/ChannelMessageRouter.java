@@ -10,8 +10,7 @@ import vip.mate.channel.model.ChannelEntity;
 import vip.mate.channel.notification.ApprovalNotificationService;
 import vip.mate.channel.service.ChannelService;
 import vip.mate.channel.web.ChatStreamTracker;
-import org.springframework.context.ApplicationEventPublisher;
-import vip.mate.memory.event.ConversationCompletedEvent;
+import vip.mate.memory.event.ConversationCompletionPublisher;
 import vip.mate.tts.TtsService;
 import vip.mate.workspace.conversation.ConversationService;
 import vip.mate.workspace.conversation.model.MessageContentPart;
@@ -50,7 +49,7 @@ public class ChannelMessageRouter {
     private final ChannelSessionStore channelSessionStore;
     private final ApprovalService approvalService;
     private final ApprovalNotificationService approvalNotificationService;
-    private final ApplicationEventPublisher eventPublisher;
+    private final ConversationCompletionPublisher completionPublisher;
     private final TtsService ttsService;
     private final ObjectMapper objectMapper;
     private final ChatStreamTracker streamTracker;
@@ -95,7 +94,7 @@ public class ChannelMessageRouter {
                                 ChannelSessionStore channelSessionStore,
                                 ApprovalService approvalService,
                                 ApprovalNotificationService approvalNotificationService,
-                                ApplicationEventPublisher eventPublisher,
+                                ConversationCompletionPublisher completionPublisher,
                                 TtsService ttsService,
                                 ObjectMapper objectMapper,
                                 ChatStreamTracker streamTracker) {
@@ -105,7 +104,7 @@ public class ChannelMessageRouter {
         this.channelSessionStore = channelSessionStore;
         this.approvalService = approvalService;
         this.approvalNotificationService = approvalNotificationService;
-        this.eventPublisher = eventPublisher;
+        this.completionPublisher = completionPublisher;
         this.ttsService = ttsService;
         this.objectMapper = objectMapper;
         this.streamTracker = streamTracker;
@@ -612,17 +611,13 @@ public class ChannelMessageRouter {
     }
 
     /**
-     * 发布对话完成事件（触发异步记忆提取），失败不影响正常流程
+     * Publish the conversation-completed event (triggers async memory extraction).
+     * Delegates to {@link ConversationCompletionPublisher} so the try/catch and
+     * messageCount lookup no longer live here.
      */
     private void publishConversationCompletedEvent(Long agentId, String conversationId,
                                                     String userMessage, String assistantReply) {
-        try {
-            int msgCount = conversationService.getMessageCount(conversationId);
-            eventPublisher.publishEvent(new ConversationCompletedEvent(
-                    agentId, conversationId, userMessage, assistantReply, msgCount, "channel"));
-        } catch (Exception e) {
-            log.debug("[Memory] Failed to publish ConversationCompletedEvent: {}", e.getMessage());
-        }
+        completionPublisher.publish(agentId, conversationId, userMessage, assistantReply, "channel");
     }
 
     // ==================== 流式处理（Web 渠道专用，不走队列） ====================

@@ -14,13 +14,12 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import org.springframework.context.ApplicationEventPublisher;
 import vip.mate.common.result.R;
 import vip.mate.agent.AgentService;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.approval.ApprovalService;
 import vip.mate.approval.PendingApproval;
-import vip.mate.memory.event.ConversationCompletedEvent;
+import vip.mate.memory.event.ConversationCompletionPublisher;
 import vip.mate.workspace.conversation.ConversationService;
 import vip.mate.workspace.conversation.model.MessageContentPart;
 import vip.mate.workspace.conversation.model.MessageEntity;
@@ -59,7 +58,7 @@ public class ChatController {
     private final ApprovalService approvalService;
     private final ChatStreamTracker streamTracker;
     private final ObjectMapper objectMapper;
-    private final ApplicationEventPublisher eventPublisher;
+    private final ConversationCompletionPublisher completionPublisher;
     private final Path uploadRoot = Paths.get("data", "chat-uploads");
 
     // 使用虚拟线程池处理 SSE（Java 17+ 兼容，Java 21 可用 Executors.newVirtualThreadPerTaskExecutor()）
@@ -464,13 +463,7 @@ public class ChatController {
                                 }
                                 // 发布对话完成事件（仅正常完成时，停止/中断不触发记忆提取）
                                 if (!wasStopped) {
-                                    try {
-                                        int msgCount = conversationService.getMessageCount(conversationId);
-                                        eventPublisher.publishEvent(new ConversationCompletedEvent(
-                                                agentId, conversationId, message, assistantText, msgCount, "web"));
-                                    } catch (Exception ex) {
-                                        log.debug("[Memory] Failed to publish ConversationCompletedEvent: {}", ex.getMessage());
-                                    }
+                                    completionPublisher.publish(agentId, conversationId, message, assistantText, "web");
                                 }
 
                                 if (isInterruptFollowup) {
@@ -806,14 +799,7 @@ public class ChatController {
         String promptText = buildPromptText(request.getMessage(), request.getContentParts());
         String response = agentService.chat(agentId, promptText, request.getConversationId());
         conversationService.saveMessage(request.getConversationId(), "assistant", response);
-        // 发布对话完成事件
-        try {
-            int msgCount = conversationService.getMessageCount(request.getConversationId());
-            eventPublisher.publishEvent(new ConversationCompletedEvent(
-                    agentId, request.getConversationId(), request.getMessage(), response, msgCount, "web"));
-        } catch (Exception ex) {
-            log.debug("[Memory] Failed to publish ConversationCompletedEvent: {}", ex.getMessage());
-        }
+        completionPublisher.publish(agentId, request.getConversationId(), request.getMessage(), response, "web");
         return R.ok(response);
     }
 
