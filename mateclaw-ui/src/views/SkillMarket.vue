@@ -34,16 +34,31 @@
         <!-- 分类 Tab -->
         <div class="category-tabs mc-surface-card">
           <button v-for="tab in categoryTabs" :key="tab.value" class="cat-tab"
-            :class="{ active: activeCategory === tab.value }" @click="activeCategory = tab.value">
+            :class="{ active: query.skillType === tab.value }" @click="onTabChange(tab.value)">
             <span class="cat-icon">{{ tab.icon }}</span>
             {{ tab.label }}
             <span class="cat-count">{{ getCategoryCount(tab.value) }}</span>
           </button>
         </div>
 
+        <!-- Search + status filter (RFC-042 §2.1) -->
+        <div class="skill-filter-bar mc-surface-card">
+          <input
+            v-model="query.keyword"
+            class="skill-search-input"
+            type="search"
+            :placeholder="t('skills.search.placeholder')"
+          />
+          <select v-model="query.enabledFilter" class="skill-status-filter" @change="onFilterChange">
+            <option value="">{{ t('skills.filter.all') }}</option>
+            <option value="true">{{ t('skills.filter.enabled') }}</option>
+            <option value="false">{{ t('skills.filter.disabled') }}</option>
+          </select>
+        </div>
+
         <!-- 技能列表 -->
-        <div class="skill-grid" v-if="filteredSkills.length > 0">
-          <div v-for="skill in filteredSkills" :key="skill.id" class="skill-card mc-surface-card"
+        <div class="skill-grid" v-if="skills.length > 0">
+          <div v-for="skill in skills" :key="skill.id" class="skill-card mc-surface-card"
         :class="{ disabled: !skill.enabled }">
         <div class="skill-header">
           <div class="skill-icon-wrap" :class="getSkillIconBg(skill.skillType)">
@@ -132,6 +147,20 @@
           <h3>{{ t('skills.empty') }}</h3>
           <p>{{ t('skills.emptyDesc') }}</p>
         </div>
+
+        <!-- Pagination (RFC-042 §2.1) -->
+        <el-pagination
+          v-if="total > 0"
+          class="skill-pagination"
+          v-model:current-page="query.page"
+          v-model:page-size="query.size"
+          :page-sizes="[12, 24, 48]"
+          :total="total"
+          layout="total, sizes, prev, pager, next"
+          background
+          @size-change="onPageSizeChange"
+          @current-change="loadSkills"
+        />
       </div>
     </div>
 
@@ -222,7 +251,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { skillApi } from '@/api/index'
@@ -231,12 +260,23 @@ import ImportHubDialog from '@/components/skill/ImportHubDialog.vue'
 
 const { t } = useI18n()
 const skills = ref<Skill[]>([])
+const total = ref(0)
+const counts = ref<Record<string, number>>({})
 const runtimeStatusMap = ref<Record<string, SkillRuntimeStatus>>({})
-const activeCategory = ref('all')
 const showModal = ref(false)
 const editingSkill = ref<Skill | null>(null)
 const refreshing = ref(false)
 const showImportDialog = ref(false)
+
+/** Paginated query state — RFC-042 §2.1 */
+const query = reactive({
+  page: 1,
+  size: 24,
+  keyword: '',
+  skillType: 'all' as string,
+  /** '' = all, 'true' = enabled only, 'false' = disabled only (string to avoid tri-state checkbox quirks) */
+  enabledFilter: '' as string,
+})
 
 const categoryTabs = computed(() => [
   { label: t('skills.tabs.all'), value: 'all', icon: '🗂️' },
@@ -263,14 +303,8 @@ const form = ref<any>(defaultForm())
 /** 是否正在编辑内置技能（限制可编辑字段） */
 const isBuiltinEditing = computed(() => editingSkill.value?.skillType === 'builtin')
 
-const filteredSkills = computed(() => {
-  if (activeCategory.value === 'all') return skills.value
-  return skills.value.filter(s => s.skillType === activeCategory.value)
-})
-
 function getCategoryCount(category: string) {
-  if (category === 'all') return skills.value.length
-  return skills.value.filter(s => s.skillType === category).length
+  return counts.value[category] ?? 0
 }
 
 function parseTags(tags: string): string[] {
@@ -281,20 +315,58 @@ function parseTags(tags: string): string[] {
 onMounted(loadAll)
 
 async function loadAll() {
-  await Promise.all([loadSkills(), loadRuntimeStatus()])
+  await Promise.all([loadSkills(), loadCounts(), loadRuntimeStatus()])
+}
+
+/** Coalesce keyword edits into one server call per 300ms so typing doesn't thrash. */
+let searchDebounce: ReturnType<typeof setTimeout> | null = null
+watch(() => query.keyword, () => {
+  if (searchDebounce) clearTimeout(searchDebounce)
+  searchDebounce = setTimeout(() => {
+    query.page = 1
+    loadSkills()
+  }, 300)
+})
+
+function onTabChange(tab: string) {
+  query.skillType = tab
+  query.page = 1
+  loadSkills()
+}
+
+function onFilterChange() {
+  query.page = 1
+  loadSkills()
+}
+
+function onPageSizeChange() {
+  query.page = 1
+  loadSkills()
 }
 
 async function loadSkills() {
   try {
-    const res: any = await skillApi.list()
-    skills.value = [...(res.data || [])].sort((a: Skill, b: Skill) => {
-      if (Boolean(b.builtin) !== Boolean(a.builtin)) {
-        return Number(Boolean(b.builtin)) - Number(Boolean(a.builtin))
-      }
-      return a.name.localeCompare(b.name)
-    })
+    const params: Record<string, unknown> = { page: query.page, size: query.size }
+    if (query.keyword) params.keyword = query.keyword.trim()
+    if (query.skillType && query.skillType !== 'all') params.skillType = query.skillType
+    if (query.enabledFilter !== '') params.enabled = query.enabledFilter === 'true'
+
+    const res: any = await skillApi.page(params)
+    const data = res.data || {}
+    skills.value = data.records || []
+    total.value = data.total || 0
   } catch (e) {
     skills.value = []
+    total.value = 0
+  }
+}
+
+async function loadCounts() {
+  try {
+    const res: any = await skillApi.counts()
+    counts.value = res.data || {}
+  } catch (e) {
+    counts.value = {}
   }
 }
 
@@ -537,6 +609,95 @@ function getSkillTypeLabel(type: string) {
 .cat-icon { font-size: 14px; }
 .cat-count { background: var(--mc-bg-sunken); color: var(--mc-text-secondary); padding: 1px 6px; border-radius: 10px; font-size: 11px; }
 .cat-tab.active .cat-count { background: rgba(217, 119, 87, 0.2); color: var(--mc-primary); }
+
+/* RFC-042 §2.1 — search + status filter bar (frosted glass) */
+.skill-filter-bar {
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  align-items: center;
+  backdrop-filter: blur(14px) saturate(1.1);
+  -webkit-backdrop-filter: blur(14px) saturate(1.1);
+}
+.skill-search-input,
+.skill-status-filter {
+  height: 34px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.45);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--mc-text-primary);
+  outline: none;
+  transition: background 0.18s, border-color 0.18s, box-shadow 0.18s;
+}
+html.dark .skill-search-input,
+html.dark .skill-status-filter {
+  background: rgba(255, 255, 255, 0.06);
+}
+.skill-search-input { flex: 1; padding: 0 12px; }
+.skill-status-filter { padding: 0 10px; cursor: pointer; min-width: 140px; }
+.skill-search-input:hover,
+.skill-status-filter:hover {
+  background: rgba(255, 255, 255, 0.65);
+}
+html.dark .skill-search-input:hover,
+html.dark .skill-status-filter:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.skill-search-input:focus,
+.skill-status-filter:focus {
+  border-color: rgba(217, 119, 87, 0.45);
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.12);
+}
+html.dark .skill-search-input:focus,
+html.dark .skill-status-filter:focus {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Pagination — strip Element Plus's heavy boxed look, blend with the glass surface */
+.skill-pagination { margin-top: 18px; display: flex; justify-content: center; }
+.skill-pagination :deep(.el-pagination) {
+  --el-pagination-bg-color: transparent;
+  --el-pagination-button-bg-color: transparent;
+  --el-pagination-hover-color: var(--mc-primary);
+  background: transparent;
+  font-weight: 500;
+  color: var(--mc-text-secondary);
+}
+.skill-pagination :deep(.el-pagination .btn-prev),
+.skill-pagination :deep(.el-pagination .btn-next),
+.skill-pagination :deep(.el-pagination .el-pager li),
+.skill-pagination :deep(.el-pagination .el-input__wrapper),
+.skill-pagination :deep(.el-pagination .el-select .el-input__wrapper) {
+  background: rgba(255, 255, 255, 0.45) !important;
+  box-shadow: none !important;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  transition: background 0.15s, border-color 0.15s;
+}
+html.dark .skill-pagination :deep(.el-pagination .btn-prev),
+html.dark .skill-pagination :deep(.el-pagination .btn-next),
+html.dark .skill-pagination :deep(.el-pagination .el-pager li),
+html.dark .skill-pagination :deep(.el-pagination .el-input__wrapper),
+html.dark .skill-pagination :deep(.el-pagination .el-select .el-input__wrapper) {
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+.skill-pagination :deep(.el-pagination .btn-prev:hover),
+.skill-pagination :deep(.el-pagination .btn-next:hover),
+.skill-pagination :deep(.el-pagination .el-pager li:hover) {
+  background: rgba(217, 119, 87, 0.12) !important;
+  color: var(--mc-primary);
+}
+.skill-pagination :deep(.el-pagination .el-pager li.is-active) {
+  background: var(--mc-primary) !important;
+  color: #fff;
+  border-color: transparent;
+}
+.skill-pagination :deep(.el-pagination .el-pagination__total),
+.skill-pagination :deep(.el-pagination .el-pagination__sizes) {
+  margin-right: 12px;
+}
 
 /* 技能网格 */
 .skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }

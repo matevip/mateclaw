@@ -144,7 +144,16 @@ export const conversationApi = {
 
 // ==================== Skill ====================
 export const skillApi = {
-  list: () => http.get('/skills'),
+  /** RFC-042 §2.1 — paginated skill listing with search/type/enabled filters */
+  page: (params: {
+    page?: number
+    size?: number
+    keyword?: string
+    skillType?: string
+    enabled?: boolean
+  } = {}) => http.get('/skills', { params }),
+  /** Tab count aggregate — returns { all, builtin, mcp, dynamic } */
+  counts: () => http.get('/skills/counts'),
   listEnabled: () => http.get('/skills/enabled'),
   get: (id: string | number) => http.get(`/skills/${id}`),
   create: (data: any) => http.post('/skills', data),

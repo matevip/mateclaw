@@ -1616,6 +1616,14 @@ export default {
       mcp: 'MCP',
       dynamic: '动态',
     },
+    search: {
+      placeholder: '搜索技能名称、描述或标签...',
+    },
+    filter: {
+      all: '全部状态',
+      enabled: '已启用',
+      disabled: '已禁用',
+    },
     empty: '暂无技能',
     emptyDesc: '添加技能以增强 Agent 的能力',
     noDescription: '暂无描述',

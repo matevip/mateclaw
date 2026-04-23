@@ -1,6 +1,8 @@
 package vip.mate.skill.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -12,6 +14,7 @@ import vip.mate.skill.workspace.SkillWorkspaceProperties;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -56,6 +59,53 @@ public class SkillService {
         return skillMapper.selectList(new LambdaQueryWrapper<SkillEntity>()
                 .orderByDesc(SkillEntity::getBuiltin)
                 .orderByDesc(SkillEntity::getCreateTime));
+    }
+
+    /**
+     * Paginated skill listing for the SkillMarket admin UI.
+     *
+     * <p>RFC-042 §2.1 — replaces the unbounded {@code /skills} list. Filters
+     * are all optional; empty or {@code null} means "no filter". Keyword
+     * searches name / description / tags with LIKE.
+     */
+    public IPage<SkillEntity> pageSkills(int page, int size, String keyword,
+                                          String skillType, Boolean enabled) {
+        Page<SkillEntity> pageParam = new Page<>(Math.max(page, 1), Math.max(size, 1));
+        LambdaQueryWrapper<SkillEntity> wrapper = new LambdaQueryWrapper<>();
+
+        if (keyword != null && !keyword.isBlank()) {
+            String kw = keyword.trim();
+            wrapper.and(w -> w
+                    .like(SkillEntity::getName, kw)
+                    .or().like(SkillEntity::getDescription, kw)
+                    .or().like(SkillEntity::getTags, kw));
+        }
+        if (skillType != null && !skillType.isBlank()) {
+            wrapper.eq(SkillEntity::getSkillType, skillType);
+        }
+        if (enabled != null) {
+            wrapper.eq(SkillEntity::getEnabled, enabled);
+        }
+
+        wrapper.orderByDesc(SkillEntity::getBuiltin)
+               .orderByDesc(SkillEntity::getCreateTime);
+
+        return skillMapper.selectPage(pageParam, wrapper);
+    }
+
+    /**
+     * Aggregate skill counts per {@code skill_type}, plus an {@code all}
+     * rollup. Feeds the SkillMarket tab badges without pulling every row.
+     */
+    public Map<String, Long> countByType() {
+        Map<String, Long> result = new LinkedHashMap<>();
+        result.put("all", skillMapper.selectCount(null));
+        for (String type : List.of("builtin", "mcp", "dynamic")) {
+            result.put(type, skillMapper.selectCount(
+                    new LambdaQueryWrapper<SkillEntity>()
+                            .eq(SkillEntity::getSkillType, type)));
+        }
+        return result;
     }
 
     /**

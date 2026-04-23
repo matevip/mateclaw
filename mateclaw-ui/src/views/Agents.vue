@@ -488,7 +488,9 @@ async function openEditModal(agent: Agent) {
   // Load available skills/tools/providers and current bindings in parallel
   try {
     const [skillsRes, toolsRes, providersRes, boundSkillsRes, boundToolsRes, providerPrefsRes] = await Promise.all([
-      skillApi.list(),
+      // RFC-042: /skills is now paginated; binding dropdown only needs enabled skills,
+      // so listEnabled() is both semantically correct and shape-stable (returns array).
+      skillApi.listEnabled(),
       toolApi.list(),
       modelApi.listProviders(),
       agentBindingApi.listSkills(agent.id),

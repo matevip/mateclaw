@@ -1606,6 +1606,14 @@ export default {
       mcp: 'MCP',
       dynamic: 'Dynamic',
     },
+    search: {
+      placeholder: 'Search by name, description, or tags...',
+    },
+    filter: {
+      all: 'All statuses',
+      enabled: 'Enabled',
+      disabled: 'Disabled',
+    },
     empty: 'No skills found',
     emptyDesc: 'Add skills to enhance your agents\' capabilities',
     noDescription: 'No description',
