@@ -1,6 +1,5 @@
 package vip.mate;
 
-import com.baomidou.mybatisplus.annotation.DbType;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor;
 import org.mybatis.spring.annotation.MapperScan;
@@ -33,12 +32,17 @@ public class MateClawApplication {
     }
 
     /**
-     * MyBatis Plus 分页插件
+     * MyBatis Plus pagination plugin.
+     *
+     * <p>DbType is auto-detected from the JDBC connection at runtime rather
+     * than hardcoded. Hardcoding H2 here meant the MySQL deployment used
+     * the H2 dialect for the count query, which silently returned 0 —
+     * frontends saw records but total=0 and couldn't paginate (RFC-042 P0).
      */
     @Bean
     public MybatisPlusInterceptor mybatisPlusInterceptor() {
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
-        interceptor.addInnerInterceptor(new PaginationInnerInterceptor(DbType.H2));
+        interceptor.addInnerInterceptor(new PaginationInnerInterceptor());
         return interceptor;
     }
 }
