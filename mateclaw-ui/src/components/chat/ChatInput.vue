@@ -64,7 +64,7 @@
           <el-icon><WarningFilled /></el-icon>
         </span>
         <span class="approval-bar__label">{{ t('chat.approvalAllow') }}</span>
-        <span class="approval-bar__tool">{{ pendingApproval.toolName }}</span>
+        <span class="approval-bar__tool">{{ getToolLabel(pendingApproval.toolName) }}</span>
         <span class="approval-bar__label">{{ t('chat.approvalExecute') }}</span>
       </div>
       <div class="approval-bar__actions">
@@ -203,6 +203,7 @@
 import { ref, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CloseBold, MagicStick, Microphone, Paperclip, Promotion, Select, Timer, WarningFilled } from '@element-plus/icons-vue'
+import { useToolLabel } from '@/composables/useToolLabel'
 import type { ChatAttachment, PendingApprovalMeta, StreamPhase, QueuedMessage } from '@/types'
 
 interface Props {
@@ -272,6 +273,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const { getToolLabel } = useToolLabel()
 
 // 内部状态
 const containerRef = ref<HTMLElement | null>(null)

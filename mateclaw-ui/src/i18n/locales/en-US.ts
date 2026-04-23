@@ -1865,4 +1865,79 @@ export default {
       skipped: 'Nothing to consolidate',
     },
   },
+  // Tool display labels consumed by useToolLabel() — keys must mirror zh-CN.ts exactly.
+  // Unknown tools (MCP / custom skills) fall back to humanizeToolName() and are not listed here.
+  toolLabels: {
+    // Delegation
+    delegateToAgent: 'Delegate to Agent',
+    delegateParallel: 'Parallel Delegation',
+    listAvailableAgents: 'List Agents',
+
+    // Wiki
+    wiki_search_pages: 'Search Knowledge Base',
+    wiki_semantic_search: 'Semantic Search KB',
+    wiki_read_page: 'Read KB Page',
+    wiki_list_pages: 'List KB Pages',
+    wiki_related_pages: 'Find Related Pages',
+    wiki_trace_source: 'Trace Knowledge Source',
+    wiki_create_page: 'Create KB Page',
+    wiki_delete_page: 'Delete KB Page',
+    wiki_enrich_page: 'Enrich KB Page',
+    wiki_explain_relation: 'Explain Relation',
+
+    // Web search
+    search: 'Web Search',
+
+    // Memory
+    recall_structured: 'Recall Memory',
+    remember_structured: 'Save Memory',
+    forget_structured: 'Clear Memory',
+    fact_probe: 'Probe Facts',
+    fact_related: 'Query Related Facts',
+    fact_list_contradictions: 'Check Contradictions',
+    session_search: 'Search Sessions',
+    read_workspace_memory_file: 'Read Memory File',
+    write_workspace_memory_file: 'Write Memory File',
+    edit_workspace_memory_file: 'Edit Memory File',
+    list_workspace_memory_files: 'List Memory Files',
+
+    // Files & shell
+    read_file: 'Read File',
+    execute_shell_command: 'Execute Command',
+    extract_document_text: 'Extract Document',
+    extract_pdf_text: 'Extract PDF',
+    extract_docx_text: 'Extract Document',
+    detect_file_type: 'Detect File Type',
+    readMateClawDoc: 'Read System Docs',
+
+    // Generative
+    image_generate: 'Generate Image',
+    video_generate: 'Generate Video',
+    music_generate: 'Generate Music',
+
+    // Data
+    query_datasource: 'Query Datasource',
+    execute_sql: 'Execute SQL',
+
+    // Browser
+    browser_use: 'Browser Action',
+
+    // Cron
+    create_cron_job: 'Create Cron Job',
+    list_cron_jobs: 'List Cron Jobs',
+    toggle_cron_job: 'Toggle Cron Job',
+    delete_cron_job: 'Delete Cron Job',
+
+    // Time
+    getCurrentDateTime: 'Get Current Time',
+    getCurrentTime: 'Get Current Time',
+    getCurrentDate: 'Get Current Date',
+
+    // Skills
+    skill_manage: 'Manage Skills',
+    runSkillScript: 'Run Skill',
+    listSkillFiles: 'List Skill Files',
+    listAvailableSkills: 'List Skills',
+    readSkillFile: 'Read Skill File',
+  },
 } as const

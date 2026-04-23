@@ -1875,4 +1875,79 @@ export default {
       skipped: '没有需要整合的内容',
     },
   },
+  // Tool display labels consumed by useToolLabel() — keys must mirror en-US.ts exactly.
+  // Unknown tools (MCP / custom skills) fall back to humanizeToolName() and are not listed here.
+  toolLabels: {
+    // Delegation
+    delegateToAgent: '委派给智能体',
+    delegateParallel: '并行委派',
+    listAvailableAgents: '列出可用智能体',
+
+    // Wiki
+    wiki_search_pages: '搜索知识库',
+    wiki_semantic_search: '语义检索知识库',
+    wiki_read_page: '读取知识库页面',
+    wiki_list_pages: '列出知识库页面',
+    wiki_related_pages: '查找相关页面',
+    wiki_trace_source: '溯源知识库',
+    wiki_create_page: '创建知识库页面',
+    wiki_delete_page: '删除知识库页面',
+    wiki_enrich_page: '丰富知识库页面',
+    wiki_explain_relation: '解释关联关系',
+
+    // Web search
+    search: '联网搜索',
+
+    // Memory
+    recall_structured: '检索记忆',
+    remember_structured: '保存记忆',
+    forget_structured: '清除记忆',
+    fact_probe: '探查事实',
+    fact_related: '查询关联事实',
+    fact_list_contradictions: '检查矛盾事实',
+    session_search: '搜索会话',
+    read_workspace_memory_file: '读取记忆文件',
+    write_workspace_memory_file: '写入记忆文件',
+    edit_workspace_memory_file: '编辑记忆文件',
+    list_workspace_memory_files: '列出记忆文件',
+
+    // Files & shell
+    read_file: '读取文件',
+    execute_shell_command: '执行命令',
+    extract_document_text: '提取文档内容',
+    extract_pdf_text: '提取 PDF 内容',
+    extract_docx_text: '提取文档内容',
+    detect_file_type: '识别文件类型',
+    readMateClawDoc: '查阅系统文档',
+
+    // Generative
+    image_generate: '生成图片',
+    video_generate: '生成视频',
+    music_generate: '生成音乐',
+
+    // Data
+    query_datasource: '查询数据源',
+    execute_sql: '执行 SQL',
+
+    // Browser
+    browser_use: '浏览器操作',
+
+    // Cron
+    create_cron_job: '创建定时任务',
+    list_cron_jobs: '查看定时任务',
+    toggle_cron_job: '启停定时任务',
+    delete_cron_job: '删除定时任务',
+
+    // Time
+    getCurrentDateTime: '获取当前时间',
+    getCurrentTime: '获取当前时间',
+    getCurrentDate: '获取当前日期',
+
+    // Skills
+    skill_manage: '管理技能',
+    runSkillScript: '运行技能',
+    listSkillFiles: '列出技能文件',
+    listAvailableSkills: '列出可用技能',
+    readSkillFile: '读取技能文件',
+  },
 } as const

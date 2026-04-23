@@ -89,7 +89,7 @@
                     <el-icon v-else-if="tc.success !== false" class="tc-icon--success"><Select /></el-icon>
                     <el-icon v-else class="tc-icon--error"><CloseBold /></el-icon>
                   </span>
-                  <span class="tool-call__name">{{ tc.name }}</span>
+                  <span class="tool-call__name">{{ getToolLabel(tc.name) }}</span>
                   <span class="tool-call__args" v-if="tc.arguments">{{ truncateArgs(tc.arguments) }}</span>
                 </div>
               </div>
@@ -108,13 +108,13 @@
         <div v-if="pendingApproval" class="approval-inline">
           <el-icon class="approval-inline__icon"><WarningFilled /></el-icon>
           <span v-if="pendingApproval.status === 'pending_approval'" class="approval-inline__text">
-            {{ $t('chat.approvalWaiting') }} <code>{{ pendingApproval.toolName }}</code>
+            {{ $t('chat.approvalWaiting') }} <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
           </span>
           <span v-else-if="pendingApproval.status === 'approved'" class="approval-inline__text approval-inline--approved">
-            {{ $t('chat.approved') }}: <code>{{ pendingApproval.toolName }}</code>
+            {{ $t('chat.approved') }}: <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
           </span>
           <span v-else class="approval-inline__text approval-inline--denied">
-            {{ $t('chat.denied') }}: <code>{{ pendingApproval.toolName }}</code>
+            {{ $t('chat.denied') }}: <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
           </span>
         </div>
 
@@ -279,6 +279,7 @@ import {
 } from '@element-plus/icons-vue'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { useAuthenticatedAttachment } from '@/composables/useAuthenticatedAttachment'
+import { useToolLabel } from '@/composables/useToolLabel'
 import { http } from '@/api'
 import TypingCursor from './TypingCursor.vue'
 import BrowserTimeline from './BrowserTimeline.vue'
@@ -293,6 +294,7 @@ import type { ChatErrorInfo } from '@/types/chatError'
 
 const { renderMarkdown } = useMarkdownRenderer()
 const { t } = useI18n()
+const { getToolLabel } = useToolLabel()
 const { blobUrls, loadAllImages, loadAllVideos, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
 
 interface Props {

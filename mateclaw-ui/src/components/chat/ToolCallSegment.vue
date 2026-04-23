@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { Loading, Select, CloseBold, ArrowDown, Document, Setting } from '@element-plus/icons-vue'
+import { useToolLabel } from '@/composables/useToolLabel'
 import type { MessageSegment } from '@/types'
 
 const props = defineProps<{
   segment: MessageSegment
 }>()
+
+const { getToolLabel } = useToolLabel()
 
 const expanded = ref(props.segment.status === 'running')
 
@@ -14,7 +17,7 @@ watch(() => props.segment.status, (val) => {
   if (val !== 'running') expanded.value = false
 })
 
-const displayName = computed(() => (props.segment.toolName || '').replace(/_/g, ' '))
+const displayName = computed(() => getToolLabel(props.segment.toolName || ''))
 
 const truncatedArgs = computed(() => {
   const args = props.segment.toolArgs || ''
