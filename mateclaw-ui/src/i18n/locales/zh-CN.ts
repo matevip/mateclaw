@@ -1232,6 +1232,9 @@ export default {
     config: '处理配置',
     searchPages: '搜索页面...',
     dropFiles: '拖拽文件到此处或点击上传',
+    dropToUpload: '松开即开始上传',
+    uploading: '上传中…',
+    uploadFailed: '上传失败：{name}',
     addText: '添加文本',
     noRawMaterials: '暂无原始材料',
     reprocess: '重新处理',
@@ -1254,6 +1257,7 @@ export default {
     saving: '保存中...',
     status: {
       active: '启用',
+      uploading: '上传中',
       processing: '处理中',
       error: '错误',
       pending: '待处理',
@@ -1263,6 +1267,7 @@ export default {
     },
     progress: {
       preparing: '准备中…',
+      uploading: '上传 {pct}%',
     },
     jobStage: {
       queued: '排队中',

@@ -135,10 +135,10 @@ export const useWikiStore = defineStore('wiki', () => {
     return raw
   }
 
-  async function uploadRawFile(kbId: number, file: File) {
+  async function uploadRawFile(kbId: number, file: File, onProgress?: (pct: number) => void) {
     const formData = new FormData()
     formData.append('file', file)
-    const res: any = await wikiApi.uploadRaw(kbId, formData)
+    const res: any = await wikiApi.uploadRaw(kbId, formData, onProgress)
     const raw = res.data || res
     // Dedup: if backend returned an existing record, replace it in the list instead of adding a duplicate
     const existingIdx = rawMaterials.value.findIndex(r => r.id === raw.id)

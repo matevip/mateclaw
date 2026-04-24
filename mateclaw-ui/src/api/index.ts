@@ -422,9 +422,12 @@ export const wikiApi = {
   listRaw: (kbId: number) => http.get(`/wiki/knowledge-bases/${kbId}/raw`),
   addRawText: (kbId: number, data: { title: string; content: string }) =>
     http.post(`/wiki/knowledge-bases/${kbId}/raw/text`, data),
-  uploadRaw: (kbId: number, formData: FormData) =>
+  uploadRaw: (kbId: number, formData: FormData, onProgress?: (pct: number) => void) =>
     http.post(`/wiki/knowledge-bases/${kbId}/raw/upload`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: onProgress
+        ? (e) => { if (e.total) onProgress(Math.round((e.loaded / e.total) * 100)) }
+        : undefined,
     }),
   deleteRaw: (kbId: number, rawId: number) =>
     http.delete(`/wiki/knowledge-bases/${kbId}/raw/${rawId}`),

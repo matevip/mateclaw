@@ -1222,6 +1222,9 @@ export default {
     config: 'Config',
     searchPages: 'Search pages...',
     dropFiles: 'Drop files here or click to upload',
+    dropToUpload: 'Release to upload',
+    uploading: 'Uploading…',
+    uploadFailed: 'Upload failed: {name}',
     addText: 'Add Text',
     noRawMaterials: 'No raw materials yet',
     reprocess: 'Reprocess',
@@ -1244,6 +1247,7 @@ export default {
     saving: 'Saving...',
     status: {
       active: 'ACTIVE',
+      uploading: 'UPLOADING',
       processing: 'PROCESSING',
       error: 'ERROR',
       pending: 'PENDING',
@@ -1253,6 +1257,7 @@ export default {
     },
     progress: {
       preparing: 'Preparing…',
+      uploading: 'Uploading {pct}%',
     },
     jobStage: {
       queued: 'Queued',
