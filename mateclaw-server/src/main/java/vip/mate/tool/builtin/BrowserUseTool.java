@@ -72,6 +72,8 @@ public class BrowserUseTool {
         Default is headless. Use headed=true with action=start for a visible window.
         Typical flow: start → open(url) → snapshot → click/type → stop.
         If start fails, run action=diagnose for a full report of what's missing and how to fix it.
+        When web_search is unavailable (no Serper/Tavily API key), use this tool to fetch content directly:
+        e.g. action=open url=https://news.google.com/search?q=... then action=snapshot to read the page.
 
         Supported actions:
         - start: Launch a new browser (tries system Chrome, system Edge, then Playwright bundled). Optional headed=true.
@@ -283,7 +285,26 @@ public class BrowserUseTool {
         JSONObject result = new JSONObject();
         result.set("ok", "healthy".equals(report.overall()) || "warning".equals(report.overall()));
         result.set("overall", report.overall());
-        result.set("findings", JSONUtil.parseArray(JSONUtil.toJsonStr(report.findings())));
+
+        // Hutool's JSONUtil reflects on JavaBean-style getters and does not recognise
+        // Java record accessors (r.id() vs r.getId()), so toJsonStr(record) yields {}.
+        // Build the array by hand to keep the payload useful to the LLM.
+        JSONArray findingsArr = new JSONArray();
+        for (BrowserDiagnosticsService.Finding f : report.findings()) {
+            JSONObject fo = new JSONObject();
+            fo.set("id", f.id());
+            fo.set("status", f.status() != null ? f.status().name() : null);
+            fo.set("message", f.message());
+            if (f.data() != null && !f.data().isEmpty()) {
+                fo.set("data", f.data());
+            }
+            if (f.advice() != null) {
+                fo.set("advice", f.advice());
+            }
+            findingsArr.add(fo);
+        }
+        result.set("findings", findingsArr);
+
         result.set("advice", report.advice());
         result.set("summary", BrowserDiagnosticsService.summarise(report));
         return JSONUtil.toJsonPrettyStr(result);
