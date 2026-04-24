@@ -23,21 +23,42 @@ public class ModelInfoDTO {
     private String probeError;
 
     /**
-     * RFC-049 PR-1-UI: whether this model's {@code ModelFamily} accepts the
-     * {@code reasoning_effort} parameter. Derived from the model name on the
-     * server side so the frontend can gray out the "thinking depth" selector
-     * for chat-type models that don't support thinking — a product contract,
-     * not a runtime toggle.
-     *
-     * <p>{@code true} only for the OpenAI reasoning family (gpt-5*, o1*, o3*, o4*).
+     * RFC-049 PR-1-UI (narrow): whether this model's {@code ModelFamily} accepts the
+     * OpenAI {@code reasoning_effort} parameter specifically. True <em>only</em> for
+     * the OpenAI reasoning family (gpt-5, o1, o3, o4 variants). Retained for callers
+     * that need to know parameter-level compatibility; the UI "deep thinking" toggle
+     * should use {@link #supportsThinking} instead.
      */
     private boolean supportsReasoningEffort;
+
+    /**
+     * RFC-049 PR-1-UI (broad): whether this model supports <em>any</em> form of
+     * deep thinking — either OpenAI-style via {@code reasoning_effort}, provider-
+     * native (Kimi K2.x, DeepSeek-Reasoner, qwen-thinking), or Anthropic extended
+     * thinking (Claude family). This is what the UI "deep thinking" toggle reads.
+     *
+     * <p>Derived from the model name so every construction site stays consistent.
+     */
+    private boolean supportsThinking;
 
     public ModelInfoDTO(String id, String name) {
         this.id = id;
         this.name = name;
-        // RFC-049 PR-1-UI: derived from id (the model name) so every construction
-        // site populates the capability consistently.
         this.supportsReasoningEffort = ModelFamily.detect(id).supportsReasoningEffort();
+        this.supportsThinking = computeSupportsThinking(id);
+    }
+
+    /**
+     * Thinking capability at the product level (what the UI toggle should reflect):
+     * any model family that has a thinking mode, regardless of how it is triggered
+     * (parameter vs. model-native vs. Anthropic extended thinking).
+     */
+    private static boolean computeSupportsThinking(String modelName) {
+        if (modelName == null || modelName.isBlank()) return false;
+        ModelFamily family = ModelFamily.detect(modelName);
+        if (family.isThinking()) return true;  // OPENAI_REASONING / KIMI_THINKING / DEEPSEEK_REASONER / GENERIC_THINKING
+        // Anthropic Claude supports extended thinking via AnthropicChatOptions.thinking;
+        // ModelFamily doesn't model non-OpenAI-compatible providers so match by name.
+        return modelName.toLowerCase().contains("claude");
     }
 }

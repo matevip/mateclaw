@@ -587,13 +587,17 @@ export interface ProviderModelInfo {
   /** Short error message when probeOk=false */
   probeError?: string
   /**
-   * RFC-049 PR-1-UI: whether the model's `ModelFamily` accepts the
-   * `reasoning_effort` parameter. Derived server-side from the model name;
-   * true only for the OpenAI reasoning family (gpt-5, o1, o3, o4 variants).
-   * Used by the thinking-depth selector to gray itself out on non-reasoning
-   * models.
+   * RFC-049 PR-1-UI (narrow): whether the model accepts the OpenAI
+   * `reasoning_effort` parameter. True only for OpenAI reasoning family.
    */
   supportsReasoningEffort?: boolean
+  /**
+   * RFC-049 PR-1-UI (broad): whether the model supports any form of deep
+   * thinking (OpenAI reasoning_effort, Kimi/DeepSeek native thinking,
+   * Anthropic extended thinking). This is the field the UI "thinking depth"
+   * toggle should gate on.
+   */
+  supportsThinking?: boolean
 }
 
 export interface ProviderInfo {
