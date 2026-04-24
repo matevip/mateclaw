@@ -432,7 +432,8 @@ export const wikiApi = {
     http.post(`/wiki/knowledge-bases/${kbId}/raw/${rawId}/reprocess`),
 
   // Wiki Pages
-  listPages: (kbId: number) => http.get(`/wiki/knowledge-bases/${kbId}/pages`),
+  listPages: (kbId: number, rawId?: number) =>
+    http.get(`/wiki/knowledge-bases/${kbId}/pages`, rawId != null ? { params: { rawId } } : undefined),
   getPage: (kbId: number, slug: string) =>
     http.get(`/wiki/knowledge-bases/${kbId}/pages/${encodeURIComponent(slug)}`),
   updatePage: (kbId: number, slug: string, content: string) =>

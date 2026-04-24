@@ -675,7 +675,7 @@ public class WikiProcessingService {
         // ─── Phase B-1: BatchCreate (RFC-047 P1) ───
         // One LLM call for all N creates instead of N individual calls.
         // batchCreatePages handles sub-batching, liveIndex updates, and progress counting.
-        batchCreatePages(kb, raw, textContent, existingPagesIndex, createMetas, created, pc);
+        batchCreatePages(kb, raw, textContent, existingPagesIndex, createMetas, created, pc, documentMap);
         List<CompletableFuture<Void>> createFutures = new ArrayList<>(0); // kept for allOf join below
 
         // ─── 阶段 B-2：并行 merge ───
@@ -754,7 +754,7 @@ public class WikiProcessingService {
     private int batchCreatePages(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw,
                                    String chunkText, String existingPagesIndex,
                                    List<JsonNode> createMetas, AtomicInteger created,
-                                   ProgressCounter pc) {
+                                   ProgressCounter pc, String documentMap) {
         if (createMetas.isEmpty()) return 0;
         Long kbId = kb.getId();
         Long rawId = raw.getId();
@@ -779,8 +779,12 @@ public class WikiProcessingService {
 
             String batchSystem = PromptLoader.loadPrompt("wiki/batch-create-system");
             String batchUserTemplate = PromptLoader.loadPrompt("wiki/batch-create-user");
+            String docMapSection = (documentMap != null && !documentMap.isBlank())
+                    ? "## 文档全局概念地图（预分析结果，供页面内容生成参考）\n\n```json\n" + documentMap + "\n```\n"
+                    : "";
             String batchUser = batchUserTemplate
                     .replace("{config}", configContent)
+                    .replace("{document_map_section}", docMapSection)
                     .replace("{existing_pages}", liveIndex.toString())
                     .replace("{pages_to_create}", metasJson.toString())
                     .replace("{raw_title}", raw.getTitle())
@@ -820,6 +824,7 @@ public class WikiProcessingService {
                 String title = pageJson.path("title").asText("");
                 String content = pageJson.path("content").asText("");
                 String pageSummary = pageJson.path("summary").asText("");
+                String pageType = pageJson.path("page_type").asText("");
                 if (content.isBlank()) {
                     log.info("[Wiki] BatchCreate: blank content for slug='{}', retrying individually", slug);
                     final String blankSlug = slug;
@@ -869,7 +874,7 @@ public class WikiProcessingService {
                 boolean wasCreated = false;
                 boolean ok = false;
                 try {
-                    wasCreated = savePageContent(kb, raw, slug, title, content, pageSummary);
+                    wasCreated = savePageContent(kb, raw, slug, title, content, pageSummary, pageType);
                     if (wasCreated) {
                         created.incrementAndGet();
                         totalCreated++;
@@ -991,6 +996,12 @@ public class WikiProcessingService {
      */
     private boolean savePageContent(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw,
                                      String slug, String title, String content, String pageSummary) {
+        return savePageContent(kb, raw, slug, title, content, pageSummary, null);
+    }
+
+    private boolean savePageContent(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw,
+                                     String slug, String title, String content, String pageSummary,
+                                     String pageType) {
         Long kbId = kb.getId();
         Long rawId = raw.getId();
 
@@ -1037,7 +1048,7 @@ public class WikiProcessingService {
 
         String sourceRawIds = "[" + rawId + "]";
         try {
-            WikiPageEntity created = pageService.createPage(kbId, slug, title, content, pageSummary, sourceRawIds);
+            WikiPageEntity created = pageService.createPage(kbId, slug, title, content, pageSummary, sourceRawIds, pageType);
             pageService.mergeSourceLineage(created.getId(), rawId, raw.getTitle());
             log.info("[Wiki] Phase B create page slug='{}' done (created)", slug);
             citationService.buildCitationsAsync(created.getId(), kbId);

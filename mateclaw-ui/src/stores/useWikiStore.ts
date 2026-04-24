@@ -58,6 +58,10 @@ export const useWikiStore = defineStore('wiki', () => {
   const currentPage = ref<WikiPage | null>(null)
   const loading = ref(false)
 
+  // Raw material filter state
+  const selectedRawId = ref<number | null>(null)
+  const totalPageCount = ref(0)
+
   async function fetchKnowledgeBases() {
     loading.value = true
     try {
@@ -98,9 +102,20 @@ export const useWikiStore = defineStore('wiki', () => {
     rawMaterials.value = res.data || []
   }
 
-  async function fetchPages(kbId: number) {
-    const res: any = await wikiApi.listPages(kbId)
+  async function fetchPages(kbId: number, rawId?: number | null) {
+    const res: any = await wikiApi.listPages(kbId, rawId ?? undefined)
     pages.value = res.data || []
+    if (!rawId) totalPageCount.value = pages.value.length
+  }
+
+  async function filterPagesByRaw(kbId: number, rawId: number) {
+    selectedRawId.value = rawId
+    await fetchPages(kbId, rawId)
+  }
+
+  async function clearRawFilter(kbId: number) {
+    selectedRawId.value = null
+    await fetchPages(kbId)
   }
 
   async function loadPage(kbId: number, slug: string) {
@@ -150,12 +165,16 @@ export const useWikiStore = defineStore('wiki', () => {
     pages,
     currentPage,
     loading,
+    selectedRawId,
+    totalPageCount,
     fetchKnowledgeBases,
     selectKB,
     createKB,
     deleteKB,
     fetchRawMaterials,
     fetchPages,
+    filterPagesByRaw,
+    clearRawFilter,
     loadPage,
     addRawText,
     uploadRawFile,

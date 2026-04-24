@@ -298,11 +298,13 @@ public class WikiController {
     // ==================== Wiki Pages ====================
 
     @RequireWorkspaceRole("viewer")
-    @Operation(summary = "获取 Wiki 页面列表")
+    @Operation(summary = "获取 Wiki 页面列表（可按原始材料过滤）")
     @GetMapping("/knowledge-bases/{kbId}/pages")
     public R<List<WikiPageEntity>> listPages(@PathVariable Long kbId,
+                                              @RequestParam(required = false) Long rawId,
                                               @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyKBWorkspace(kbId, workspaceId);
+        if (rawId != null) return R.ok(pageService.listBySourceRawId(kbId, rawId));
         return R.ok(pageService.listByKbId(kbId));
     }
 

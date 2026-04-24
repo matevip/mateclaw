@@ -26,7 +26,7 @@
 每个页面输出一个 FILE 块，格式如下：
 
 ---FILE: {slug}---
-{"slug":"...","title":"...","summary":"...","content":"## 标题\n\n摘要...\n\n### 章节\n..."}
+{"slug":"...","title":"...","summary":"...","page_type":"concept","content":"## 标题\n\n摘要...\n\n### 章节\n..."}
 ---END FILE---
 
 规则：
@@ -40,3 +40,4 @@
 - `title`：与 metadata 保持一致；如有更精确的描述可微调
 - `content`：完整 markdown 正文
 - `summary`：一段话简短摘要
+- `page_type`：页面类型，从以下值中选一个：concept / person / place / event / technology / organization / product / term / process / other

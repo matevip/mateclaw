@@ -180,11 +180,22 @@ public class WikiPageService {
     }
 
     /**
-     * 创建新 Wiki 页面
+     * Create a new wiki page (without explicit pageType)
      */
     @Transactional
     public WikiPageEntity createPage(Long kbId, String slug, String title, String content,
                                       String summary, String sourceRawIds) {
+        return createPage(kbId, slug, title, content, summary, sourceRawIds, null);
+    }
+
+    /**
+     * Create a new wiki page with explicit pageType classification.
+     * pageType is stored lowercase (concept / person / place / event / technology /
+     * organization / product / term / process / other).
+     */
+    @Transactional
+    public WikiPageEntity createPage(Long kbId, String slug, String title, String content,
+                                      String summary, String sourceRawIds, String pageType) {
         WikiPageEntity entity = new WikiPageEntity();
         entity.setKbId(kbId);
         entity.setSlug(slug);
@@ -195,9 +206,26 @@ public class WikiPageService {
         entity.setSourceRawIds(sourceRawIds);
         entity.setVersion(1);
         entity.setLastUpdatedBy("ai");
+        if (pageType != null && !pageType.isBlank()) {
+            entity.setPageType(pageType.toLowerCase());
+        }
         pageMapper.insert(entity);
         evictSummaryCache(kbId);
         return entity;
+    }
+
+    /**
+     * List pages derived from a specific raw material (for UI sidebar filtering).
+     * Uses a LIKE search on sourceRawIds JSON field — cheap and dialect-agnostic.
+     */
+    public List<WikiPageEntity> listBySourceRawId(Long kbId, Long rawId) {
+        List<WikiPageEntity> pages = pageMapper.selectList(
+                new LambdaQueryWrapper<WikiPageEntity>()
+                        .eq(WikiPageEntity::getKbId, kbId)
+                        .like(WikiPageEntity::getSourceRawIds, rawId.toString())
+                        .orderByAsc(WikiPageEntity::getTitle));
+        pages.forEach(p -> p.setContent(null));
+        return pages;
     }
 
     /**

@@ -245,11 +245,11 @@ watch(open, async (isOpen) => {
 .model-dropdown-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  z-index: 4000;
 }
 
 .model-dropdown {
-  z-index: 2001;
+  z-index: 4001;
   min-width: 280px;
   max-width: 360px;
   background: var(--mc-bg-elevated);

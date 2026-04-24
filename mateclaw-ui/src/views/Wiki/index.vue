@@ -96,8 +96,15 @@
                 </button>
               </div>
 
+              <!-- Raw material filter banner -->
+              <div v-if="store.selectedRawId" class="filter-banner">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 3H2l8 9.46V19l4 2V12.46L22 3z"/></svg>
+                {{ t('wiki.filteredByRaw') }}
+                <button class="filter-clear-btn" @click="store.clearRawFilter(store.currentKB!.id)">✕</button>
+              </div>
+
               <!-- Grouped page list -->
-              <div class="page-list" v-if="!pageSearch">
+              <div class="page-list" v-if="!pageSearch" ref="pageListEl" @scroll="onPageListScroll">
                 <div v-for="group in groupedPages" :key="group.type" class="page-group">
                   <button
                     class="group-header"
@@ -132,13 +139,13 @@
                         </div>
                       </div>
                     </div>
-                    <!-- Load more within group -->
+                    <!-- Load more within group (visible when more items exist) -->
                     <button
-                      v-if="groupPageLimit[group.type] < group.pages.length"
+                      v-if="(groupPageLimit[group.type] || PAGE_STEP) < group.pages.length"
                       class="load-more-btn"
                       @click.stop="loadMoreGroup(group.type)"
                     >
-                      {{ t('wiki.loadMore', { n: Math.min(PAGE_STEP, group.pages.length - groupPageLimit[group.type]) }) }}
+                      {{ t('wiki.loadMore', { n: Math.min(PAGE_STEP, group.pages.length - (groupPageLimit[group.type] || PAGE_STEP)) }) }}
                     </button>
                   </div>
                 </div>
@@ -211,6 +218,10 @@
                 </div>
               </div>
 
+              <div v-if="activeTab === 'graph'" class="tab-content tab-content--graph">
+                <WikiGraphView :pages="store.pages" @open-page="openPage" />
+              </div>
+
               <div v-if="activeTab === 'config'" class="tab-content tab-content--config">
                 <WikiConfig />
               </div>
@@ -242,16 +253,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWikiStore } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
 import RawMaterialPanel from './components/RawMaterialPanel.vue'
 import WikiPageViewer from './components/WikiPageViewer.vue'
 import WikiConfig from './components/WikiConfig.vue'
+import WikiGraphView from './components/WikiGraphView.vue'
 
 const { t } = useI18n()
 const store = useWikiStore()
+const pageListEl = ref<HTMLElement | null>(null)
 
 // KB health stats
 interface KBStats {
@@ -310,23 +323,12 @@ function paginatedGroupPages(group: { type: string; pages: any[] }) {
   return group.pages.slice(0, limit)
 }
 
-// Type label mapping (matches backend WikiProcessingService route output)
-const TYPE_LABELS: Record<string, string> = {
-  concept: 'Concepts',
-  person: 'People',
-  place: 'Places',
-  event: 'Events',
-  technology: 'Technology',
-  organization: 'Organizations',
-  product: 'Products',
-  term: 'Terms',
-  process: 'Processes',
-  other: 'Other',
-}
-
 function formatGroupLabel(type: string): string {
-  if (!type) return TYPE_LABELS.other
-  return TYPE_LABELS[type.toLowerCase()] || (type.charAt(0).toUpperCase() + type.slice(1))
+  if (!type) return t('wiki.pageTypes.other')
+  const key = `wiki.pageTypes.${type.toLowerCase()}`
+  const translated = t(key)
+  // If i18n key not found it returns the key itself; fall back to capitalised type
+  return translated === key ? (type.charAt(0).toUpperCase() + type.slice(1)) : translated
 }
 
 // Type sort order
@@ -406,6 +408,7 @@ async function handleBatchDelete() {
 const tabs = computed(() => [
   { key: 'raw', label: t('wiki.rawMaterials') },
   { key: 'pages', label: t('wiki.pages') },
+  { key: 'graph', label: t('wiki.graph.tab') },
   { key: 'config', label: t('wiki.config') },
 ])
 
@@ -425,6 +428,23 @@ async function handleCreateKB() {
   showCreateKB.value = false
   newKBName.value = ''
   newKBDesc.value = ''
+}
+
+// Infinite scroll: when the page-list container scrolls near the bottom,
+// auto-load more items for the last non-fully-expanded group.
+function onPageListScroll() {
+  const el = pageListEl.value
+  if (!el) return
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 60) {
+    // Find the first group that still has hidden pages and load more
+    for (const group of groupedPages.value) {
+      const limit = groupPageLimit[group.type] || PAGE_STEP
+      if (limit < group.pages.length) {
+        loadMoreGroup(group.type)
+        break
+      }
+    }
+  }
 }
 
 onMounted(() => {
@@ -638,6 +658,31 @@ onMounted(() => {
 
 .empty-hint { font-size: 13px; color: var(--mc-text-tertiary); padding: 12px 4px; }
 
+.filter-banner {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  background: var(--mc-primary-bg);
+  border: 1px solid rgba(217,109,70,0.2);
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--mc-primary);
+  font-weight: 500;
+}
+.filter-clear-btn {
+  margin-left: auto;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--mc-primary);
+  font-size: 11px;
+  padding: 0 2px;
+  opacity: 0.7;
+  line-height: 1;
+}
+.filter-clear-btn:hover { opacity: 1; }
+
 /* Content area */
 .wiki-content { flex: 1; overflow: hidden; min-width: 0; padding: 16px; display: flex; flex-direction: column; min-height: 0; }
 .wiki-content-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -647,6 +692,7 @@ onMounted(() => {
 .tab-btn.active { color: var(--mc-primary); background: var(--mc-bg-elevated); box-shadow: 0 1px 4px rgba(0,0,0,0.08); font-weight: 600; }
 .tab-content { flex: 1; min-height: 0; overflow-y: auto; padding-right: 2px; }
 .tab-content--config { overflow: hidden; padding-right: 0; }
+.tab-content--graph { overflow: hidden; padding: 0; }
 
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 200px; color: var(--mc-text-tertiary); text-align: center; }
 .empty-state p { font-size: 14px; }

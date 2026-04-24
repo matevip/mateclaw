@@ -55,7 +55,13 @@
       <div v-if="store.rawMaterials.length === 0" class="empty-hint">
         {{ t('wiki.noRawMaterials') }}
       </div>
-      <div v-for="raw in store.rawMaterials" :key="raw.id" class="raw-item">
+      <div
+        v-for="raw in store.rawMaterials"
+        :key="raw.id"
+        class="raw-item"
+        :class="{ 'raw-item--active': store.selectedRawId === raw.id }"
+        @click="toggleRawFilter(raw.id)"
+      >
         <div class="raw-item-row">
           <div class="raw-item-info">
             <span class="raw-item-title">{{ raw.title }}</span>
@@ -410,6 +416,16 @@ async function processAll() {
   setTimeout(() => { store.fetchRawMaterials(kbId) }, 5000)
 }
 
+function toggleRawFilter(rawId: number) {
+  if (!store.currentKB) return
+  const kbId = store.currentKB.id
+  if (store.selectedRawId === rawId) {
+    store.clearRawFilter(kbId)
+  } else {
+    store.filterPagesByRaw(kbId, rawId)
+  }
+}
+
 async function handleScanDir() {
   if (!store.currentKB || !dirPath.value.trim()) return
   scanning.value = true
@@ -476,8 +492,9 @@ async function handleScanDir() {
 .raw-list-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--mc-text-tertiary); margin-bottom: 4px; }
 .empty-hint { text-align: center; padding: 24px 0; font-size: 14px; color: var(--mc-text-tertiary); }
 
-.raw-item { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: linear-gradient(180deg, var(--mc-bg-elevated), var(--mc-bg-muted)); border: 1px solid var(--mc-border-light); border-radius: 14px; font-size: 13px; transition: border-color 0.15s, transform 0.15s; }
+.raw-item { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: linear-gradient(180deg, var(--mc-bg-elevated), var(--mc-bg-muted)); border: 1px solid var(--mc-border-light); border-radius: 14px; font-size: 13px; transition: border-color 0.15s, transform 0.15s; cursor: pointer; }
 .raw-item:hover { border-color: var(--mc-border); transform: translateY(-1px); }
+.raw-item--active { border-color: var(--mc-primary) !important; background: var(--mc-primary-bg) !important; transform: translateY(-1px); }
 .raw-item-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
 .raw-item-info { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
