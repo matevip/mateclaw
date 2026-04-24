@@ -249,6 +249,8 @@ public class ModelProviderService {
         List<ModelInfoDTO> extraModels = new ArrayList<>();
         if (models != null) {
             for (ModelConfigEntity model : models) {
+                // RFC-049 PR-1-UI: ModelInfoDTO(id, name) derives supportsReasoningEffort
+                // from id via ModelFamily — no extra wiring needed here.
                 ModelInfoDTO info = new ModelInfoDTO(model.getModelName(), model.getName());
                 if (Boolean.TRUE.equals(model.getBuiltin())) {
                     builtinModels.add(info);
