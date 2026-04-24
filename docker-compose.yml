@@ -71,6 +71,8 @@ services:
       SERPER_API_KEY: ${SERPER_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-}
       MATECLAW_CORS_ALLOWED_ORIGINS: ${MATECLAW_CORS_ALLOWED_ORIGINS:-}
+      # SearXNG: tell the app where to reach the sidecar container
+      SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://searxng:8080}
     ports:
       - "18080:18088"   # host:container — app listens on 18088 inside the container
     volumes:

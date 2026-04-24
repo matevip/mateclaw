@@ -64,6 +64,18 @@ public class SystemSettingService {
 
     private final SystemSettingMapper systemSettingMapper;
 
+    /**
+     * Resolve the SearXNG base URL: DB value takes priority; fall back to the
+     * {@code SEARXNG_BASE_URL} environment variable so Docker deployments work
+     * out-of-the-box without manual configuration in the UI.
+     */
+    private String resolveSearxngBaseUrl() {
+        String dbValue = getValue(SEARXNG_BASE_URL_KEY, "");
+        if (dbValue != null && !dbValue.isBlank()) return dbValue;
+        String envValue = System.getenv("SEARXNG_BASE_URL");
+        return (envValue != null && !envValue.isBlank()) ? envValue : "";
+    }
+
     public SystemSettingsDTO getSettings() {
         SystemSettingsDTO dto = new SystemSettingsDTO();
         dto.setLanguage(getValue(LANGUAGE_KEY, "zh-CN"));
@@ -79,7 +91,7 @@ public class SystemSettingService {
         dto.setTavilyBaseUrl(getValue(TAVILY_BASE_URL_KEY, "https://api.tavily.com/search"));
         // Keyless provider 配置
         dto.setDuckduckgoEnabled(Boolean.parseBoolean(getValue(DUCKDUCKGO_ENABLED_KEY, "true")));
-        dto.setSearxngBaseUrl(getValue(SEARXNG_BASE_URL_KEY, ""));
+        dto.setSearxngBaseUrl(resolveSearxngBaseUrl());
         // API Key 脱敏回显
         dto.setSerperApiKeyMasked(maskApiKey(getValue(SERPER_API_KEY_KEY, "")));
         dto.setTavilyApiKeyMasked(maskApiKey(getValue(TAVILY_API_KEY_KEY, "")));
@@ -153,7 +165,7 @@ public class SystemSettingService {
         dto.setTavilyApiKey(getValue(TAVILY_API_KEY_KEY, ""));
         dto.setTavilyBaseUrl(getValue(TAVILY_BASE_URL_KEY, "https://api.tavily.com/search"));
         dto.setDuckduckgoEnabled(Boolean.parseBoolean(getValue(DUCKDUCKGO_ENABLED_KEY, "true")));
-        dto.setSearxngBaseUrl(getValue(SEARXNG_BASE_URL_KEY, ""));
+        dto.setSearxngBaseUrl(resolveSearxngBaseUrl());
         return dto;
     }
 
