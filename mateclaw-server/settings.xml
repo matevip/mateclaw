@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven mirror settings for Docker build.
+  Routes all repository requests through Aliyun Maven mirror to avoid
+  network timeouts when building inside containers in China.
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                              http://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <mirrors>
+    <mirror>
+      <id>aliyun-public</id>
+      <mirrorOf>central</mirrorOf>
+      <name>Aliyun Public Repository</name>
+      <url>https://maven.aliyun.com/repository/public</url>
+    </mirror>
+    <mirror>
+      <id>aliyun-spring</id>
+      <mirrorOf>spring-milestones,spring-snapshots</mirrorOf>
+      <name>Aliyun Spring Repository</name>
+      <url>https://maven.aliyun.com/repository/spring</url>
+    </mirror>
+  </mirrors>
+</settings>

@@ -21,8 +21,9 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./mateclaw-server/src/main/resources/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
-      - ./mateclaw-server/src/main/resources/db/data.sql:/docker-entrypoint-initdb.d/02-data.sql
+    # Schema and seed data are managed by Flyway on application startup.
+    # Do NOT mount legacy schema.sql / data.sql here — Flyway creates all
+    # tables from V1 baseline and applies incremental migrations automatically.
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
@@ -71,7 +72,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-}
       MATECLAW_CORS_ALLOWED_ORIGINS: ${MATECLAW_CORS_ALLOWED_ORIGINS:-}
     ports:
-      - "18080:18080"
+      - "18080:18088"   # host:container — app listens on 18088 inside the container
     volumes:
       - server_data:/app/data
 

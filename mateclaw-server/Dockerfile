@@ -1,16 +1,21 @@
-# 多阶段构建
+# Multi-stage build
 FROM maven:3.9-eclipse-temurin-21 AS builder
 
-# 先构建并安装 plugin-api 到本地 Maven 缓存
+# Inject mirror settings to avoid Maven Central timeouts in restricted networks
+COPY mateclaw-server/settings.xml /root/.m2/settings.xml
+
+# Build and install plugin-api into the local Maven cache first
 WORKDIR /plugin-api
 COPY mateclaw-plugin-api/pom.xml ./pom.xml
 COPY mateclaw-plugin-api/src ./src
 RUN mvn install -DskipTests -q
 
-# 再构建 mateclaw-server
+# Pre-fetch mateclaw-server dependencies (uses mirror, so this won't hang)
 WORKDIR /build
 COPY mateclaw-server/pom.xml .
 RUN mvn dependency:go-offline -q
+
+# Build the final JAR
 COPY mateclaw-server/src ./src
 RUN mvn package -DskipTests -q
 
