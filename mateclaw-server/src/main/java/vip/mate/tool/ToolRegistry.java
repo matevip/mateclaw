@@ -168,20 +168,61 @@ public class ToolRegistry {
     }
 
     /**
-     * Returns the set of runtime tool function names — i.e. the exact identifiers
-     * LLMs and skill manifests use to reference tools (the @Tool method name, the
-     * MCP tool name, or the registered plugin tool name).
-     *
-     * <p>Use this for dependency / availability checks instead of querying the
-     * {@code mate_tool} table directly: the DB overlay stores class/bean names,
-     * which do not match the function-name vocabulary skills declare against.
+     * Returns every runtime identifier by which a currently-enabled tool can be
+     * referenced — SKILL.md authors use all three conventions interchangeably:
+     * <ul>
+     *   <li>{@code @Tool} function name (e.g. {@code browser_use}, {@code runSkillScript})</li>
+     *   <li>Spring bean name (e.g. {@code browserUseTool}, {@code skillScriptTool})</li>
+     *   <li>MCP tool id / plugin tool name (routed via {@code ToolCallbackProvider})</li>
+     * </ul>
+     * Returning the union lets {@link vip.mate.skill.runtime.SkillDependencyChecker}
+     * accept whichever convention a skill happens to declare.
      */
     public Set<String> availableFunctionNames() {
         Set<String> names = new java.util.HashSet<>();
-        AgentToolSet toolSet = getEnabledToolSet();
-        for (ToolCallback cb : toolSet.callbacks()) {
-            names.add(cb.getToolDefinition().name());
+
+        Set<String> disabledBeanNames = toolMapper.selectList(
+                new LambdaQueryWrapper<ToolEntity>()
+                        .eq(ToolEntity::getEnabled, false)
+                        .isNotNull(ToolEntity::getBeanName)
+        ).stream().map(ToolEntity::getBeanName).collect(Collectors.toSet());
+
+        // 1. @Tool beans — register both the bean name and every function name exposed.
+        Map<String, Object> beans = applicationContext.getBeansWithAnnotation(Component.class);
+        for (Map.Entry<String, Object> entry : beans.entrySet()) {
+            String beanName = entry.getKey();
+            Object bean = entry.getValue();
+            if (disabledBeanNames.contains(beanName)) continue;
+            boolean hasToolMethod = java.util.Arrays.stream(bean.getClass().getMethods())
+                    .anyMatch(m -> m.isAnnotationPresent(Tool.class));
+            if (!hasToolMethod) continue;
+            names.add(beanName);
+            for (ToolCallback cb : ToolCallbacks.from(bean)) {
+                names.add(cb.getToolDefinition().name());
+            }
         }
+
+        // 2. MCP providers — only function names exist here.
+        Map<String, ToolCallbackProvider> providers = applicationContext.getBeansOfType(ToolCallbackProvider.class);
+        for (ToolCallbackProvider provider : providers.values()) {
+            ToolCallback[] cbs = provider.getToolCallbacks();
+            if (cbs == null) continue;
+            for (ToolCallback cb : cbs) {
+                names.add(cb.getToolDefinition().name());
+            }
+        }
+
+        // 3. Plugin-registered tools — evaluate availability lazily so disabled plugins drop out.
+        for (PluginToolEntry entry : pluginTools) {
+            try {
+                if (Boolean.TRUE.equals(entry.availabilityCheck().get())) {
+                    names.add(entry.callback().getToolDefinition().name());
+                }
+            } catch (Exception ignored) {
+                // Unreachable plugin tools don't contribute to the set.
+            }
+        }
+
         return names;
     }
 
