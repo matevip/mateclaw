@@ -81,24 +81,42 @@ public class SearXNGSearchProvider implements SearchProvider {
             urlBuilder.append("&time_range=").append(searchQuery.freshness().toLowerCase());
         }
 
-        String response = HttpUtil.createGet(urlBuilder.toString())
+        var resp = HttpUtil.createGet(urlBuilder.toString())
                 .header("Accept", "application/json")
                 .timeout(15000)
-                .execute()
-                .body();
+                .execute();
+        int status = resp.getStatus();
+        String response = resp.body();
+        String contentType = resp.header("Content-Type");
 
-        log.debug("SearXNG result for '{}': length={}", searchQuery.query(), response != null ? response.length() : 0);
-        return parseResponse(response, searchQuery.resolvedCount());
+        log.debug("SearXNG response for '{}': status={}, contentType={}, length={}",
+                searchQuery.query(), status, contentType, response != null ? response.length() : 0);
+        return parseResponse(response, status, contentType, searchQuery.resolvedCount(), urlBuilder.toString());
     }
 
-    private List<SearchResult> parseResponse(String response, int limit) {
+    private List<SearchResult> parseResponse(String response, int status, String contentType,
+                                             int limit, String requestUrl) {
         List<SearchResult> results = new ArrayList<>();
-        if (response == null || response.isBlank()) return results;
+        if (response == null || response.isBlank()) {
+            log.warn("SearXNG returned empty body (status={}, url={})", status, requestUrl);
+            return results;
+        }
+        if (status >= 400) {
+            log.warn("SearXNG returned HTTP {} — preview: {}", status, preview(response));
+            return results;
+        }
+        if (contentType != null && !contentType.contains("json")) {
+            // Most common cause: settings.yml has no `json` under search.formats
+            // or the Limiter plugin rewrote the response to HTML.
+            log.warn("SearXNG did not return JSON (contentType={}). Check settings.yml has search.formats including 'json' and server.limiter: false. Preview: {}",
+                    contentType, preview(response));
+            return results;
+        }
 
         try {
             JSONObject json = JSONUtil.parseObj(response);
             JSONArray items = json.getJSONArray("results");
-            if (items == null) return results;
+            if (items == null || items.isEmpty()) return results;
 
             limit = Math.min(items.size(), limit);
             for (int i = 0; i < limit; i++) {
@@ -114,9 +132,15 @@ public class SearXNGSearchProvider implements SearchProvider {
                         .build());
             }
         } catch (Exception e) {
-            log.warn("SearXNG 结果解析失败: {}", e.getMessage());
+            log.warn("SearXNG parse failed: {} — preview: {}", e.getMessage(), preview(response));
         }
         return results;
+    }
+
+    private static String preview(String body) {
+        if (body == null) return "";
+        String flat = body.replaceAll("\\s+", " ").trim();
+        return flat.length() > 200 ? flat.substring(0, 200) + "..." : flat;
     }
 
     private String extractDomain(String url) {

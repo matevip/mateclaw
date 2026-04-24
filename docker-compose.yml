@@ -31,18 +31,30 @@ services:
       timeout: 5s
       retries: 5
 
-  # SearXNG 搜索引擎（keyless 搜索 provider，零配置可用）
+  # SearXNG 搜索引擎（keyless 搜索 provider）
+  #
+  # ⚠️ deploy/searxng/settings.yml is bind-mounted because the upstream image
+  # ships with JSON format disabled and the anti-bot Limiter plugin enabled —
+  # both of which would silently break mateclaw's SearXNGSearchProvider.
+  # Do NOT remove that bind mount.
   searxng:
     image: searxng/searxng:latest
     container_name: mateclaw-searxng
     restart: unless-stopped
     environment:
       - SEARXNG_BASE_URL=http://searxng:8080
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-mateclaw-dev-searxng-secret-change-me}
+      - UWSGI_WORKERS=2
+      - UWSGI_THREADS=4
     volumes:
       - searxng_data:/etc/searxng
+      # This override MUST be mounted AFTER the named volume so it shadows
+      # the image's default settings.yml (enables JSON, disables limiter).
+      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
     ports:
       - "8088:8080"
     healthcheck:
+      # Healthz needs json format, so this also doubles as an integration check.
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
       interval: 30s
       timeout: 5s
