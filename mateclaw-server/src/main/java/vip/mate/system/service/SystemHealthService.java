@@ -8,6 +8,7 @@ import vip.mate.exception.MateClawException;
 import vip.mate.llm.model.ProviderInfoDTO;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.llm.service.ModelProviderService;
+import vip.mate.tool.browser.BrowserDiagnosticsService;
 import vip.mate.tool.mcp.model.McpServerEntity;
 import vip.mate.tool.mcp.runtime.McpClientManager;
 import vip.mate.tool.mcp.runtime.McpClientManager.ConnectionResult;
@@ -34,6 +35,7 @@ public class SystemHealthService {
     private final McpClientManager mcpClientManager;
     private final McpServerService mcpServerService;
     private final DatabaseBootstrapRunner bootstrapRunner;
+    private final BrowserDiagnosticsService browserDiagnostics;
 
     public HealthResponse check() {
         List<HealthCheck> checks = new ArrayList<>();
@@ -49,6 +51,9 @@ public class SystemHealthService {
 
         // 4. Database initialization check
         checks.add(checkDatabase());
+
+        // 5. Browser launch pre-flight (common failure source on fresh win/linux hosts)
+        checks.add(checkBrowser());
 
         // Determine overall status
         String overall = "healthy";
@@ -159,6 +164,28 @@ public class SystemHealthService {
                 "Database not initialized",
                 new HealthAction("Setup", "/setup")
         );
+    }
+
+    private HealthCheck checkBrowser() {
+        try {
+            BrowserDiagnosticsService.Report report = browserDiagnostics.run();
+            String status = switch (report.overall()) {
+                case "healthy" -> "healthy";
+                case "warning" -> "warning";
+                default -> "error";
+            };
+            String message = "healthy".equals(report.overall())
+                    ? "Browser launch ready"
+                    : String.join(" | ", report.advice());
+            HealthAction action = "healthy".equals(report.overall())
+                    ? null
+                    : new HealthAction("Diagnose", "/api/v1/system/browser-health");
+            return new HealthCheck("browser", status, message, action);
+        } catch (Exception e) {
+            log.warn("Browser diagnostics failed: {}", e.getMessage());
+            return new HealthCheck("browser", "warning",
+                    "Browser diagnostics failed: " + e.getMessage(), null);
+        }
     }
 
     // ==================== Response Records ====================
