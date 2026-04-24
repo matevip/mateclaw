@@ -168,6 +168,24 @@ public class ToolRegistry {
     }
 
     /**
+     * Returns the set of runtime tool function names — i.e. the exact identifiers
+     * LLMs and skill manifests use to reference tools (the @Tool method name, the
+     * MCP tool name, or the registered plugin tool name).
+     *
+     * <p>Use this for dependency / availability checks instead of querying the
+     * {@code mate_tool} table directly: the DB overlay stores class/bean names,
+     * which do not match the function-name vocabulary skills declare against.
+     */
+    public Set<String> availableFunctionNames() {
+        Set<String> names = new java.util.HashSet<>();
+        AgentToolSet toolSet = getEnabledToolSet();
+        for (ToolCallback cb : toolSet.callbacks()) {
+            names.add(cb.getToolDefinition().name());
+        }
+        return names;
+    }
+
+    /**
      * 获取数据库中的工具配置列表（全部）
      */
     public List<ToolEntity> listToolEntities() {
