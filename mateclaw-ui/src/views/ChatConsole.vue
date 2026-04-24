@@ -252,6 +252,7 @@
         @deny="handleDeny"
         :enable-talk-mode="!!selectedAgentId"
         :thinking-enabled="thinkingEnabled"
+        :thinking-supported="currentModelSupportsReasoningEffort"
         @toggle-thinking="thinkingEnabled = !thinkingEnabled"
         @talk="showTalkMode = true"
       />
@@ -633,6 +634,26 @@ const currentRuntimeModel = computed(() => {
     return `${defaultModel.value.name} (${defaultModel.value.modelName})`
   }
   return currentAgent.value?.modelName || 'default'
+})
+
+/**
+ * RFC-049 PR-1-UI: whether the active runtime model supports `reasoning_effort`.
+ * Drives the enable/disable state of the thinking-depth toggle in ChatInput:
+ * chat-type models that don't support thinking must not honor the "deep thinking"
+ * selection (product contract — UI reflects the backend gate).
+ *
+ * Source of truth: ProviderModelInfo.supportsReasoningEffort (set by backend via
+ * ModelFamily.detect(modelName) in ModelInfoDTO).
+ */
+const currentModelSupportsReasoningEffort = computed<boolean>(() => {
+  const providerId = activeModels.value?.activeLlm?.providerId
+  const modelName = activeModels.value?.activeLlm?.model
+  if (!providerId || !modelName) return false
+  const provider = providers.value.find((p) => p.id === providerId)
+  if (!provider) return false
+  const all = [...(provider.models || []), ...(provider.extraModels || [])]
+  const hit = all.find((m) => m.id === modelName || m.name === modelName)
+  return Boolean(hit?.supportsReasoningEffort)
 })
 
 const userInitial = computed(() => (localStorage.getItem('username') || 'U').charAt(0).toUpperCase())

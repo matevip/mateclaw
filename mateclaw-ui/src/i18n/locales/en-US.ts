@@ -165,6 +165,7 @@ export default {
     messagePlaceholder: 'Type a message... (Enter to send, Shift+Enter for new line)',
     thinkingOn: 'Deep thinking enabled',
     thinkingOff: 'Click to enable deep thinking',
+    thinkingUnsupported: 'Current model does not support deep thinking',
     subtitle: 'Your intelligent AI assistant powered by Spring AI Alibaba',
     // Queue related
     queuedSending: 'Sending queued message...',

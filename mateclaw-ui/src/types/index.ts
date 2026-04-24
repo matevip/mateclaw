@@ -586,6 +586,14 @@ export interface ProviderModelInfo {
   probeOk?: boolean
   /** Short error message when probeOk=false */
   probeError?: string
+  /**
+   * RFC-049 PR-1-UI: whether the model's `ModelFamily` accepts the
+   * `reasoning_effort` parameter. Derived server-side from the model name;
+   * true only for the OpenAI reasoning family (gpt-5, o1, o3, o4 variants).
+   * Used by the thinking-depth selector to gray itself out on non-reasoning
+   * models.
+   */
+  supportsReasoningEffort?: boolean
 }
 
 export interface ProviderInfo {

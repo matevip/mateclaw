@@ -165,6 +165,7 @@ export default {
     messagePlaceholder: '输入消息... (Enter 发送, Shift+Enter 换行)',
     thinkingOn: '深度思考已开启',
     thinkingOff: '点击开启深度思考',
+    thinkingUnsupported: '当前模型不支持深度思考',
     subtitle: '基于 Spring AI Alibaba 的智能 AI 助手',
     // 排队相关
     queuedSending: '正在发送排队消息...',
