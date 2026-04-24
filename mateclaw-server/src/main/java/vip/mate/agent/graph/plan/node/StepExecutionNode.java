@@ -11,7 +11,6 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.util.StringUtils;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -119,20 +118,20 @@ public class StepExecutionNode implements NodeAction {
 
         try {
             while (toolCallCount < MAX_TOOL_CALLS_PER_STEP) {
-                ChatOptions options;
+                // PR-2 (RFC-049 §2.3.4): always use OpenAiChatOptions so the relay
+                // producer in NodeStreamingChatHelper.doStreamCall can attach the
+                // user-token. Using ToolCallingChatOptions when reasoningEffort is
+                // null (e.g. DeepSeek-Reasoner whose thinking is model-inherent,
+                // or Kimi-K2.5) would bypass the relay and multi-round tool-calls
+                // would 400 again.
+                OpenAiChatOptions oaiOpts = OpenAiChatOptions.builder()
+                        .toolCallbacks(toolSet.callbacks())
+                        .build();
                 if (StringUtils.hasText(reasoningEffort)) {
-                    OpenAiChatOptions oaiOpts = OpenAiChatOptions.builder()
-                            .toolCallbacks(toolSet.callbacks())
-                            .reasoningEffort(reasoningEffort)
-                            .build();
-                    oaiOpts.setInternalToolExecutionEnabled(false);
-                    options = oaiOpts;
-                } else {
-                    options = ToolCallingChatOptions.builder()
-                            .toolCallbacks(toolSet.callbacks())
-                            .internalToolExecutionEnabled(false)
-                            .build();
+                    oaiOpts.setReasoningEffort(reasoningEffort);
                 }
+                oaiOpts.setInternalToolExecutionEnabled(false);
+                ChatOptions options = oaiOpts;
 
                 NodeStreamingChatHelper.StreamResult result = streamingHelper.streamCall(
                         chatModel, new Prompt(messages, options), conversationId,

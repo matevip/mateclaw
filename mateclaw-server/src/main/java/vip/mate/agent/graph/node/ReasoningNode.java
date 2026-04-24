@@ -58,6 +58,13 @@ public class ReasoningNode implements NodeAction {
     private final ChatModel chatModel;
     private final List<ToolCallback> toolCallbacks;
     private final String reasoningEffort;
+    /**
+     * PR-1.2 (RFC-049 L1-B): Whether the bound model's {@code ModelFamily} accepts
+     * {@code reasoning_effort}. Drives the capability gate in
+     * {@link #resolveEffectiveReasoningEffort()} so that a front-end {@code ThinkingLevelHolder}
+     * override is dropped on chat-type models that cannot honor it.
+     */
+    private final boolean supportsReasoningEffort;
     private final NodeStreamingChatHelper streamingHelper;
     private final ConversationWindowManager conversationWindowManager;
     private final ChatStreamTracker streamTracker;
@@ -86,9 +93,31 @@ public class ReasoningNode implements NodeAction {
                          ConversationWindowManager conversationWindowManager,
                          ChatStreamTracker streamTracker, int maxOutputTokens,
                          vip.mate.wiki.service.WikiContextService wikiContextService) {
+        // Backward-compatible delegate. Callers that have not migrated to the explicit
+        // supportsReasoningEffort parameter inherit the pre-PR-1 behavior: treat the bound
+        // model as supporting reasoning_effort iff reasoningEffort was resolved to a non-null
+        // value at construction time. New callers (AgentGraphBuilder) should use the
+        // 9-arg constructor below.
+        this(chatModel, toolSet, reasoningEffort, reasoningEffort != null,
+                streamingHelper, conversationWindowManager, streamTracker,
+                maxOutputTokens, wikiContextService);
+    }
+
+    /**
+     * PR-1.2 (RFC-049): Primary constructor with explicit {@code supportsReasoningEffort}
+     * capability flag — avoids inferring capability from {@code reasoningEffort == null},
+     * which fails for a future "supports but not auto-enabled" scenario.
+     */
+    public ReasoningNode(ChatModel chatModel, AgentToolSet toolSet, String reasoningEffort,
+                         boolean supportsReasoningEffort,
+                         NodeStreamingChatHelper streamingHelper,
+                         ConversationWindowManager conversationWindowManager,
+                         ChatStreamTracker streamTracker, int maxOutputTokens,
+                         vip.mate.wiki.service.WikiContextService wikiContextService) {
         this.chatModel = chatModel;
         this.toolCallbacks = toolSet.callbacks();
         this.reasoningEffort = reasoningEffort;
+        this.supportsReasoningEffort = supportsReasoningEffort;
         this.streamingHelper = streamingHelper;
         this.conversationWindowManager = conversationWindowManager;
         this.streamTracker = streamTracker;
@@ -120,6 +149,7 @@ public class ReasoningNode implements NodeAction {
         this.chatModel = chatModel;
         this.toolCallbacks = toolCallbacks;
         this.reasoningEffort = null;
+        this.supportsReasoningEffort = false;
         this.streamingHelper = null;
         this.conversationWindowManager = null;
         this.streamTracker = null;
@@ -520,11 +550,23 @@ public class ReasoningNode implements NodeAction {
      * 解析有效的 reasoningEffort。
      * 优先级：ThinkingLevelHolder（请求级） > 构造时的 reasoningEffort（Agent/模型默认）。
      * "off" 会清除 reasoningEffort（返回 null）。
+     *
+     * <p>PR-1.2 (RFC-049 L1-B): If the bound model's family does not support
+     * {@code reasoning_effort} (as declared via {@link #supportsReasoningEffort} at
+     * construction time), the front-end thinking-level override is ignored.
+     * Chat-type models like {@code deepseek-chat} must not be forced into thinking mode
+     * just because the user ticked "deep thinking" in the UI — this is a product
+     * contract, not a runtime option.
      */
     private String resolveEffectiveReasoningEffort() {
         String requestLevel = ThinkingLevelHolder.get();
         if (requestLevel != null) {
             if ("off".equalsIgnoreCase(requestLevel)) {
+                return null;
+            }
+            if (!this.supportsReasoningEffort) {
+                log.debug("[ReasoningNode] Ignoring thinkingLevel='{}' — bound model family does not support reasoning_effort",
+                        requestLevel);
                 return null;
             }
             // thinkingLevel → reasoningEffort 映射

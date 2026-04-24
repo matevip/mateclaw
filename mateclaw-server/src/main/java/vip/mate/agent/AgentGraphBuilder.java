@@ -408,7 +408,14 @@ public class AgentGraphBuilder {
                     primaryModelConfig != null ? primaryModelConfig.getProvider() : null,
                     providerPool);
             ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
-            ReasoningNode reasoningNode = new ReasoningNode(chatModel, toolSet, reasoningEffort, streamingHelper, conversationWindowManager, streamTracker, 0, wikiContextService);
+            // PR-1.2 (RFC-049 L1-B): propagate the bound model's capability so ReasoningNode
+            // can gate the ThinkingLevelHolder override explicitly, rather than inferring
+            // capability from reasoningEffort == null.
+            boolean supportsReasoningEffort = primaryModelConfig != null
+                    && ModelFamily.detect(primaryModelConfig.getModelName()).supportsReasoningEffort();
+            ReasoningNode reasoningNode = new ReasoningNode(chatModel, toolSet, reasoningEffort,
+                    supportsReasoningEffort,
+                    streamingHelper, conversationWindowManager, streamTracker, 0, wikiContextService);
             ActionNode actionNode = new ActionNode(executor, streamTracker);
             ObservationProcessor observationProcessor = new ObservationProcessor(graphObservationProperties);
             ObservationNode observationNode = new ObservationNode(observationProcessor, streamTracker);
@@ -1037,7 +1044,8 @@ public class AgentGraphBuilder {
             public org.springframework.http.ResponseEntity<OpenAiApi.ChatCompletion> chatCompletionEntity(
                     OpenAiApi.ChatCompletionRequest chatRequest,
                     MultiValueMap<String, String> additionalHttpHeader) {
-                chatRequest = patchReasoningContent(chatRequest);
+                chatRequest = sanitizeReasoningEffortForProvider(chatRequest, provider);
+                chatRequest = patchReasoningContent(chatRequest, provider);
                 chatRequest = stripReasoningEffortIfIncompatible(chatRequest);
                 chatRequest = patchVideoMediaContent(chatRequest);
                 if (kimiSearchEnabled) {
@@ -1056,7 +1064,8 @@ public class AgentGraphBuilder {
             public Flux<OpenAiApi.ChatCompletionChunk> chatCompletionStream(
                     OpenAiApi.ChatCompletionRequest chatRequest,
                     MultiValueMap<String, String> additionalHttpHeader) {
-                chatRequest = patchReasoningContent(chatRequest);
+                chatRequest = sanitizeReasoningEffortForProvider(chatRequest, provider);
+                chatRequest = patchReasoningContent(chatRequest, provider);
                 chatRequest = stripReasoningEffortIfIncompatible(chatRequest);
                 chatRequest = patchVideoMediaContent(chatRequest);
                 if (kimiSearchEnabled) {
@@ -1108,13 +1117,28 @@ public class AgentGraphBuilder {
     }
 
     private String resolveReasoningEffort(String modelName, Map<String, Object> kwargs, ModelFamily family) {
-        // generateKwargs 显式覆盖始终优先
+        // PR-1.1 (RFC-049 L1-A): Only families that actually accept reasoning_effort may receive
+        // it. Previously only the default-inject branch checked capability; the generateKwargs
+        // override branch did not, so a provider-level `reasoningEffort: "high"` would leak to
+        // deepseek-chat / kimi-k2 / deepseek-reasoner etc., triggering the incident documented
+        // in RFC-049 (DeepSeek "reasoning_content missing" 400).
+        if (!family.supportsReasoningEffort()) {
+            Object overridden = findOptionValue(kwargs, "reasoningEffort");
+            if (overridden != null) {
+                log.warn("Dropping reasoningEffort='{}' from generateKwargs — model '{}' (family={}) "
+                                + "does not accept reasoning_effort. For DeepSeek thinking use "
+                                + "extra_body.thinking; for Kimi thinking the model activates it natively.",
+                        overridden, modelName, family);
+            }
+            return null;
+        }
+        // generateKwargs 显式覆盖始终优先（仅在白名单族内）
         Object value = findOptionValue(kwargs, "reasoningEffort");
         if (value instanceof String text && StringUtils.hasText(text)) {
             return text.trim();
         }
         // 仅支持 reasoning_effort 的模型族才自动注入默认值
-        if (family.isThinking() && family.supportsReasoningEffort()) {
+        if (family.isThinking()) {
             return "medium";
         }
         return null;
@@ -1376,62 +1400,135 @@ public class AgentGraphBuilder {
     }
 
     /**
-     * 修补 assistant 消息缺失的 reasoningContent 字段。
-     * <p>
-     * Spring AI 1.1.3 在将 AssistantMessage 转回 ChatCompletionMessage 时不会设置 reasoningContent，
-     * 导致某些启用 thinking 模式的 API（如 Kimi K2.5）在多轮对话中报错：
-     * "thinking is enabled but reasoning_content is missing in assistant tool call message"
-     * <p>
-     * 触发条件（放宽）：
-     * <ul>
-     *   <li>条件 A：请求明确设置了 reasoningEffort</li>
-     *   <li>条件 B：消息历史中已有 assistant 消息携带 reasoningContent（说明模型天然启用了 thinking）</li>
-     * </ul>
-     * 修复策略：为缺失 reasoningContent 的 assistant tool_call 消息注入空字符串 "" 以满足 API 校验。
-     * 使用 record canonical constructor 重建 ChatCompletionRequest，避免反射修改不可变字段。
+     * Consume the {@link AssistantThinkingRelay} entry and rebuild the outbound
+     * {@link OpenAiApi.ChatCompletionRequest} so that assistant tool-call / thinking
+     * messages carry the correct {@code reasoning_content}.
+     *
+     * <p>PR-2 (RFC-049 §2.3.2): This is the consumer side of the relay.
+     * {@code NodeStreamingChatHelper.doStreamCall} stashes per-assistant thinking
+     * keyed on a token embedded in {@code request.user()}. Here we:
+     * <ol>
+     *   <li>{@link AssistantThinkingRelay#take(String)} the entry and restore
+     *       {@code request.user()} to {@code entry.originalUser()} (internal token
+     *       never reaches the provider).</li>
+     *   <li>Compute {@code lastUserIdx} (the boundary of the current user turn),
+     *       symmetric to {@code stripThinkingFromPrompt}. Assistant messages at
+     *       {@code i <= lastUserIdx} are prior-turn history: their
+     *       {@code reasoning_content} must stay null. Only {@code i > lastUserIdx}
+     *       messages are eligible for patching.</li>
+     *   <li>Select a {@link FallbackPolicy} by {@code providerId}. When relay has
+     *       a real value, we use it; when empty, the policy decides whether to
+     *       inject {@code " "} (legacy tolerance: KIMI/OPENAI/DEFAULT) or leave
+     *       {@code null} to surface an explicit provider error (DEEPSEEK).</li>
+     * </ol>
+     *
+     * <p>The relay iterator advances for every assistant message (including
+     * prior-turn ones) to stay positionally aligned with the producer's extraction
+     * in {@code NodeStreamingChatHelper.extractAssistantThinkings}.
      */
-    private static OpenAiApi.ChatCompletionRequest patchReasoningContent(OpenAiApi.ChatCompletionRequest request) {
+    static OpenAiApi.ChatCompletionRequest patchReasoningContent(
+            OpenAiApi.ChatCompletionRequest request, ModelProviderEntity provider) {
         if (request.messages() == null || request.messages().isEmpty()) {
             return request;
         }
 
-        // 判断是否处于 thinking 模式
-        boolean thinkingMode = request.reasoningEffort() != null;
+        // 1. Consume relay (if any) and compute the sanitized user field.
+        AssistantThinkingRelay.RelayEntry entry = AssistantThinkingRelay.take(request.user());
+        String sanitizedUser = (entry != null)
+                ? entry.originalUser()
+                : (AssistantThinkingRelay.isToken(request.user()) ? null : request.user());
+
+        // 2. Detect thinking mode — unchanged from the prior design except that relay
+        //    presence is also a trigger.
+        boolean thinkingMode = request.reasoningEffort() != null
+                || requiresReasoningContentPatch(request.model())
+                || request.messages().stream().anyMatch(m ->
+                        m.role() == OpenAiApi.ChatCompletionMessage.Role.ASSISTANT
+                                && m.reasoningContent() != null)
+                || entry != null;
         if (!thinkingMode) {
-            thinkingMode = requiresReasoningContentPatch(request.model());
-        }
-        if (!thinkingMode) {
-            thinkingMode = request.messages().stream().anyMatch(msg ->
-                    msg.role() == OpenAiApi.ChatCompletionMessage.Role.ASSISTANT
-                            && msg.reasoningContent() != null);
-        }
-        if (!thinkingMode) {
-            return request;
+            // Nothing to patch but we may still need to strip a leaked relay token from user.
+            return request.user() != null && !request.user().equals(sanitizedUser)
+                    ? rebuildWithUser(request, sanitizedUser)
+                    : request;
         }
 
-        // 检查是否有需要补丁的消息
-        boolean needsPatch = request.messages().stream().anyMatch(msg ->
-                msg.role() == OpenAiApi.ChatCompletionMessage.Role.ASSISTANT
-                        && msg.toolCalls() != null && !msg.toolCalls().isEmpty()
-                        && msg.reasoningContent() == null);
-        if (!needsPatch) {
-            return request;
-        }
-
-        // 重建消息列表，为缺失 reasoningContent 的 assistant tool call 消息注入 ""
-        List<OpenAiApi.ChatCompletionMessage> patched = request.messages().stream().map(msg -> {
-            if (msg.role() == OpenAiApi.ChatCompletionMessage.Role.ASSISTANT
-                    && msg.toolCalls() != null && !msg.toolCalls().isEmpty()
-                    && msg.reasoningContent() == null) {
-                return new OpenAiApi.ChatCompletionMessage(
-                        msg.rawContent(), msg.role(), msg.name(), msg.toolCallId(),
-                        msg.toolCalls(), msg.refusal(), msg.audioOutput(),
-                        msg.annotations(), " ");
+        // 3. Find lastUserIdx so we can skip cross-turn assistants.
+        int lastUserIdx = -1;
+        for (int i = request.messages().size() - 1; i >= 0; i--) {
+            if (request.messages().get(i).role() == OpenAiApi.ChatCompletionMessage.Role.USER) {
+                lastUserIdx = i;
+                break;
             }
-            return msg;
-        }).toList();
+        }
 
-        // 用 record canonical constructor 重建 request（不用反射）
+        FallbackPolicy policy = FallbackPolicy.forProvider(provider);
+        java.util.Iterator<String> it = (entry != null)
+                ? entry.thinkings().iterator()
+                : java.util.Collections.emptyIterator();
+
+        // 4. Walk messages, patching only in-turn assistants; always advance iterator
+        //    for all assistants so producer/consumer positions stay aligned.
+        boolean anyPatched = false;
+        List<OpenAiApi.ChatCompletionMessage> patched = new ArrayList<>(request.messages().size());
+        for (int i = 0; i < request.messages().size(); i++) {
+            OpenAiApi.ChatCompletionMessage msg = request.messages().get(i);
+            if (msg.role() != OpenAiApi.ChatCompletionMessage.Role.ASSISTANT) {
+                patched.add(msg);
+                continue;
+            }
+
+            String next = it.hasNext() ? it.next() : null;
+
+            // Already has a real value: leave alone
+            if (msg.reasoningContent() != null && !msg.reasoningContent().isBlank()) {
+                patched.add(msg);
+                continue;
+            }
+
+            // Cross-turn assistant: never patch (symmetric with stripThinkingFromPrompt)
+            if (i <= lastUserIdx) {
+                patched.add(msg);
+                continue;
+            }
+
+            boolean hasToolCalls = msg.toolCalls() != null && !msg.toolCalls().isEmpty();
+            if (!hasToolCalls && !policy.patchNonToolCall) {
+                patched.add(msg);
+                continue;
+            }
+
+            String injected;
+            if (next != null && !next.isEmpty()) {
+                injected = next;
+            } else {
+                injected = policy.emptyFallback;
+                if (injected == null && policy.warnOnMissingReal) {
+                    log.warn("[patchReasoningContent] provider={} requires real reasoning_content "
+                                    + "but relay has no value for assistant message at index {}; "
+                                    + "leaving null so provider returns explicit error.",
+                            providerIdOrUnknown(provider), i);
+                }
+            }
+            if (injected == null && msg.reasoningContent() == null) {
+                // No change — keep original
+                patched.add(msg);
+                continue;
+            }
+            patched.add(new OpenAiApi.ChatCompletionMessage(
+                    msg.rawContent(), msg.role(), msg.name(), msg.toolCallId(),
+                    msg.toolCalls(), msg.refusal(), msg.audioOutput(),
+                    msg.annotations(), injected));
+            anyPatched = true;
+        }
+
+        boolean userChanged = request.user() != null && !request.user().equals(sanitizedUser)
+                || (request.user() == null && sanitizedUser != null);
+        if (!anyPatched && !userChanged) {
+            return request;
+        }
+
+        // 5. Rebuild with patched messages + sanitized user.
         return new OpenAiApi.ChatCompletionRequest(
                 patched,
                 request.model(),
@@ -1458,8 +1555,213 @@ public class AgentGraphBuilder {
                 request.tools(),
                 request.toolChoice(),
                 request.parallelToolCalls(),
-                request.user(),
+                sanitizedUser,
                 request.reasoningEffort(),
+                request.webSearchOptions(),
+                request.verbosity(),
+                request.promptCacheKey(),
+                request.safetyIdentifier(),
+                request.extraBody()
+        );
+    }
+
+    /**
+     * PR-2 (RFC-049 §2.3.2): Provider-keyed policy for how {@code patchReasoningContent}
+     * should behave when the relay has no real thinking for an in-turn assistant message.
+     *
+     * <ul>
+     *   <li>{@code emptyFallback}: value to inject when relay has no real value —
+     *       {@code null} means leave {@code reasoning_content} null (DeepSeek);
+     *       {@code " "} preserves Spring AI 1.1.4 legacy tolerance (Kimi/OpenAI/unknown).</li>
+     *   <li>{@code warnOnMissingReal}: emit WARN when {@code emptyFallback==null} fires —
+     *       only DeepSeek wants this, because there a missing value means we have a bug.</li>
+     *   <li>{@code patchNonToolCall}: whether to patch assistant messages without tool_calls —
+     *       DeepSeek's contract applies to all in-turn assistant messages, others only
+     *       to tool_call messages (historical behavior).</li>
+     * </ul>
+     *
+     * {@code DEFAULT} intentionally keeps the legacy {@code " "} tolerance rather than
+     * going no-op: an unrecognized provider (self-hosted DeepSeek-like backend, custom
+     * OpenAI-compatible gateway) might still require the patch — noop would regress
+     * those into new 400s.
+     */
+    private enum FallbackPolicy {
+        DEEPSEEK(null, true,  true),
+        KIMI    (" ",  false, false),
+        OPENAI  (" ",  false, false),
+        DEFAULT (" ",  false, false);
+
+        final String emptyFallback;
+        final boolean warnOnMissingReal;
+        final boolean patchNonToolCall;
+
+        FallbackPolicy(String emptyFallback, boolean warnOnMissingReal, boolean patchNonToolCall) {
+            this.emptyFallback = emptyFallback;
+            this.warnOnMissingReal = warnOnMissingReal;
+            this.patchNonToolCall = patchNonToolCall;
+        }
+
+        static FallbackPolicy forProvider(ModelProviderEntity provider) {
+            if (provider == null || provider.getProviderId() == null) {
+                return DEFAULT;
+            }
+            String id = provider.getProviderId().toLowerCase();
+            return switch (id) {
+                case "deepseek" -> DEEPSEEK;
+                case "kimi-cn", "kimi-intl", "kimi-code" -> KIMI;
+                case "openai", "azure-openai" -> OPENAI;
+                default -> DEFAULT;
+            };
+        }
+    }
+
+    /**
+     * Rebuild a {@link OpenAiApi.ChatCompletionRequest} with only the {@code user} field
+     * replaced. Used when {@code patchReasoningContent} has no assistant-message changes
+     * but must strip a relay token from the outbound {@code user} field.
+     */
+    private static OpenAiApi.ChatCompletionRequest rebuildWithUser(
+            OpenAiApi.ChatCompletionRequest request, String newUser) {
+        return new OpenAiApi.ChatCompletionRequest(
+                request.messages(),
+                request.model(),
+                request.store(),
+                request.metadata(),
+                request.frequencyPenalty(),
+                request.logitBias(),
+                request.logprobs(),
+                request.topLogprobs(),
+                request.maxTokens(),
+                request.maxCompletionTokens(),
+                request.n(),
+                request.outputModalities(),
+                request.audioParameters(),
+                request.presencePenalty(),
+                request.responseFormat(),
+                request.seed(),
+                request.serviceTier(),
+                request.stop(),
+                request.stream(),
+                request.streamOptions(),
+                request.temperature(),
+                request.topP(),
+                request.tools(),
+                request.toolChoice(),
+                request.parallelToolCalls(),
+                newUser,
+                request.reasoningEffort(),
+                request.webSearchOptions(),
+                request.verbosity(),
+                request.promptCacheKey(),
+                request.safetyIdentifier(),
+                request.extraBody()
+        );
+    }
+
+    /**
+     * PR-1.3 (RFC-049 L1-C): Provider-first sanitization of {@code reasoning_effort}.
+     *
+     * <p>Authoritative judgement uses the target {@code provider.getProviderId()} as a
+     * whitelist (default-deny). Only OpenAI official providers are allowed to carry
+     * {@code reasoning_effort}; everything else — known non-supporters (DeepSeek / Kimi /
+     * DashScope / Ollama / …) and any unrecognized providerId (self-hosted gateways,
+     * OpenRouter / Together / aggregators) — is stripped unconditionally.
+     *
+     * <p>The reason we intentionally distrust {@code request.model()} here: MateClaw's
+     * failover chain (RFC-009) can reuse the same {@code Prompt} and {@code OpenAiChatOptions}
+     * across providers, and {@code OpenAiChatOptions.model} was set to the primary's model
+     * name (e.g. {@code gpt-5}). If the sanitizer only checked {@code ModelFamily.detect(
+     * request.model())}, a failover hop from GPT-5 → DeepSeek would see model name
+     * "gpt-5" → OPENAI_REASONING → {@code supportsReasoningEffort == true} and quietly
+     * forward the primary's {@code reasoning_effort} to DeepSeek, re-triggering the
+     * incident this RFC exists to fix.
+     *
+     * <p>Only when the provider is on the whitelist do we fall through to the
+     * {@link ModelFamily} check (e.g. within OpenAI, {@code gpt-4} still wouldn't support
+     * reasoning_effort). Outside the whitelist, no runtime check on model is trusted.
+     *
+     * <p>Adding a new provider to the whitelist must be an explicit PR with a sanitizer
+     * test — do not add a catch-all default-allow branch.
+     */
+    static OpenAiApi.ChatCompletionRequest sanitizeReasoningEffortForProvider(
+            OpenAiApi.ChatCompletionRequest request, ModelProviderEntity provider) {
+        if (request == null || request.reasoningEffort() == null) {
+            return request;
+        }
+
+        if (!isReasoningEffortWhitelistedProvider(provider)) {
+            log.warn("[reasoning_effort sanitizer] provider={} is not on the reasoning_effort "
+                            + "whitelist (only openai/azure-openai are); stripping value='{}' "
+                            + "(request.model()='{}' may be leaked from failover primary).",
+                    providerIdOrUnknown(provider), request.reasoningEffort(), request.model());
+            return rebuildWithReasoningEffort(request, null);
+        }
+
+        ModelFamily targetFamily = ModelFamily.detect(request.model());
+        if (!targetFamily.supportsReasoningEffort()) {
+            log.warn("[reasoning_effort sanitizer] provider={} model={} family={} does not "
+                            + "support reasoning_effort; stripping value='{}'.",
+                    provider.getProviderId(), request.model(), targetFamily, request.reasoningEffort());
+            return rebuildWithReasoningEffort(request, null);
+        }
+        return request;
+    }
+
+    /**
+     * Whitelist of providers known to accept {@code reasoning_effort} on
+     * {@code /v1/chat/completions} (or {@code /v1/responses}). Anything else is denied.
+     * Adding a provider here must come with a corresponding sanitizer test case.
+     */
+    static boolean isReasoningEffortWhitelistedProvider(ModelProviderEntity provider) {
+        if (provider == null || provider.getProviderId() == null) {
+            return false;
+        }
+        String id = provider.getProviderId().toLowerCase();
+        return switch (id) {
+            case "openai", "azure-openai" -> true;
+            default -> false;
+        };
+    }
+
+    private static String providerIdOrUnknown(ModelProviderEntity p) {
+        return (p == null || p.getProviderId() == null) ? "<unknown>" : p.getProviderId();
+    }
+
+    /**
+     * Rebuild a {@link OpenAiApi.ChatCompletionRequest} with a new {@code reasoningEffort}
+     * value (typically {@code null} to strip). Mirrors the record canonical-constructor
+     * pattern used by {@link #stripReasoningEffortIfIncompatible}.
+     */
+    private static OpenAiApi.ChatCompletionRequest rebuildWithReasoningEffort(
+            OpenAiApi.ChatCompletionRequest request, String newReasoningEffort) {
+        return new OpenAiApi.ChatCompletionRequest(
+                request.messages(),
+                request.model(),
+                request.store(),
+                request.metadata(),
+                request.frequencyPenalty(),
+                request.logitBias(),
+                request.logprobs(),
+                request.topLogprobs(),
+                request.maxTokens(),
+                request.maxCompletionTokens(),
+                request.n(),
+                request.outputModalities(),
+                request.audioParameters(),
+                request.presencePenalty(),
+                request.responseFormat(),
+                request.seed(),
+                request.serviceTier(),
+                request.stop(),
+                request.stream(),
+                request.streamOptions(),
+                request.temperature(),
+                request.topP(),
+                request.tools(),
+                request.toolChoice(),
+                request.parallelToolCalls(),
+                request.user(),
+                newReasoningEffort,
                 request.webSearchOptions(),
                 request.verbosity(),
                 request.promptCacheKey(),
