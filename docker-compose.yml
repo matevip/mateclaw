@@ -33,12 +33,13 @@ services:
 
   # SearXNG 搜索引擎（keyless 搜索 provider）
   #
-  # ⚠️ deploy/searxng/settings.yml is bind-mounted because the upstream image
-  # ships with JSON format disabled and the anti-bot Limiter plugin enabled —
-  # both of which would silently break mateclaw's SearXNGSearchProvider.
-  # Do NOT remove that bind mount.
+  # The custom image at docker/searxng/ bakes in settings.yml so the sidecar
+  # works out of the box (upstream image ships JSON disabled + Limiter enabled,
+  # both of which silently break mateclaw's SearXNGSearchProvider).
+  # No host bind-mount — edit docker/searxng/settings.yml and rebuild.
   searxng:
-    image: searxng/searxng:latest
+    build:
+      context: ./docker/searxng
     container_name: mateclaw-searxng
     restart: unless-stopped
     environment:
@@ -46,11 +47,6 @@ services:
       - SEARXNG_SECRET=${SEARXNG_SECRET:-mateclaw-dev-searxng-secret-change-me}
       - UWSGI_WORKERS=2
       - UWSGI_THREADS=4
-    volumes:
-      - searxng_data:/etc/searxng
-      # This override MUST be mounted AFTER the named volume so it shadows
-      # the image's default settings.yml (enables JSON, disables limiter).
-      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
     ports:
       - "8088:8080"
     healthcheck:
@@ -103,4 +99,3 @@ services:
 volumes:
   mysql_data:
   server_data:
-  searxng_data:
