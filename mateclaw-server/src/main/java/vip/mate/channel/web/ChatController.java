@@ -1238,6 +1238,8 @@ public class ChatController {
         private final List<Map<String, Object>> browserActions = new ArrayList<>();
         private final List<String> warnings = new ArrayList<>();
         private final List<Map<String, Object>> planStepResults = new ArrayList<>();
+        /** RFC-052: tool names whose returnDirect output was folded into the assistant message */
+        private final List<String> directToolNames = new ArrayList<>();
         private int segCounter = 0;
         private int promptTokens = 0;
         private int completionTokens = 0;
@@ -1390,6 +1392,18 @@ public class ChatController {
                 seg.put("toolName", data.getOrDefault("toolName", ""));
                 seg.put("toolArgs", data.getOrDefault("arguments", ""));
                 segments.add(seg);
+            } else if ("tool_direct_result".equals(eventType)) {
+                // RFC-052: returnDirect tool — track the tool name so history
+                // replay can render a "data returned directly by tool" badge.
+                // The actual textual content reaches the user/persistence layer
+                // through the regular content_delta path (FinalAnswerNode's
+                // FINAL_ANSWER → StateGraphReActAgent → StreamDelta), so we
+                // intentionally do NOT add a content-bearing segment here to
+                // avoid the user seeing the same text twice.
+                String toolName = String.valueOf(data.getOrDefault("toolName", ""));
+                if (!toolName.isBlank() && !directToolNames.contains(toolName)) {
+                    directToolNames.add(toolName);
+                }
             } else if ("tool_call_completed".equals(eventType)) {
                 String toolName = String.valueOf(data.getOrDefault("toolName", ""));
                 // toolCalls（兼容）
@@ -1524,6 +1538,13 @@ public class ChatController {
                 }
                 if (!warnings.isEmpty()) {
                     metadata.put("warnings", warnings);
+                }
+                if (!directToolNames.isEmpty()) {
+                    // RFC-052 §3.3: only the tool names go into metadata —
+                    // the full content already lives in mate_message.content
+                    // (assembled by FinalAnswerNode). UI uses this to badge
+                    // historical messages as "data returned directly by tool".
+                    metadata.put("directToolNames", directToolNames);
                 }
                 return objectMapper.writeValueAsString(metadata);
             } catch (Exception e) {

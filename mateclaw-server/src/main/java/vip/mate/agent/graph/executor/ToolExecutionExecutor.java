@@ -8,6 +8,7 @@ import org.springframework.ai.tool.ToolCallback;
 import vip.mate.tool.builtin.ToolExecutionContext;
 import vip.mate.agent.AgentToolSet;
 import vip.mate.agent.GraphEventPublisher;
+import vip.mate.agent.graph.state.DirectToolOutput;
 import vip.mate.approval.ApprovalWorkflowService;
 import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.tool.guard.ToolExecutionGuardHelper;
@@ -76,6 +77,15 @@ public class ToolExecutionExecutor {
     /** 尾部错误模式检测 */
     private static final java.util.regex.Pattern ERROR_TAIL_PATTERN = java.util.regex.Pattern.compile(
             "(?i)\\b(error|exception|traceback|failed|fatal|panic|stack.?trace|errno)\\b");
+
+    /**
+     * RFC-052 §2.4: placeholder written into {@code ToolResponseMessage.content}
+     * for returnDirect tools. Intentionally English, short, and free of any
+     * tool-specific data so it is safe to enter prompt cache and gives the LLM
+     * a clear signal that the tool ran (vs failed).
+     */
+    static final String DIRECT_TOOL_PLACEHOLDER =
+            "[Tool result returned directly to user. Content withheld from model context per tool policy.]";
 
     /**
      * 智能截断工具结果：检测尾部是否含错误信息，动态调整 head/tail 比例。
@@ -207,6 +217,9 @@ public class ToolExecutionExecutor {
         this.currentWorkspaceBasePath = workspaceBasePath;
         List<ToolResponseMessage.ToolResponse> allResponses = new ArrayList<>();
         List<GraphEventPublisher.GraphEvent> events = Collections.synchronizedList(new ArrayList<>());
+        // RFC-052: accumulate full-text outputs from returnDirect tools so the
+        // graph can route to FinalAnswerNode without re-entering the LLM.
+        List<DirectToolOutput> directOutputs = Collections.synchronizedList(new ArrayList<>());
 
         events.add(GraphEventPublisher.phase("action", Map.of("toolCount", toolCalls.size())));
 
@@ -303,7 +316,7 @@ public class ToolExecutionExecutor {
 
         // ═══ Phase 2: 分段并发执行 ═══
         if (!preparedCalls.isEmpty()) {
-            executePreparedCalls(preparedCalls, allResponses, events);
+            executePreparedCalls(preparedCalls, allResponses, events, directOutputs);
         }
 
         // Defensive: drop null placeholders (should never appear in practice).
@@ -320,7 +333,8 @@ public class ToolExecutionExecutor {
         boolean hasApprovalPending = barrier != null;
         return new ToolExecutionResult(allResponses, events, hasApprovalPending,
                 barrier != null ? barrier.pendingId : null,
-                barrier != null ? barrier.toolName : null);
+                barrier != null ? barrier.toolName : null,
+                List.copyOf(directOutputs));
     }
 
     /**
@@ -336,6 +350,26 @@ public class ToolExecutionExecutor {
             AssistantMessage.ToolCall toolCall, String storedArguments,
             List<GraphEventPublisher.GraphEvent> events,
             String conversationId, String workspaceBasePath) {
+        return executePreApproved(toolCall, storedArguments, events, conversationId,
+                workspaceBasePath, null);
+    }
+
+    /**
+     * RFC-052 PR-2: returnDirect-aware variant. When the pre-approved tool
+     * declares {@code returnDirect=true}, the result is captured into
+     * {@code directOutputs} (verbatim), the SSE consumer gets a
+     * {@code tool_direct_result} event, and the {@link ToolResponseMessage}
+     * carries the placeholder so any subsequent LLM call can never see the
+     * full payload.
+     *
+     * @param directOutputs nullable; pass-through for callers that don't track
+     *     direct outputs (kept for legacy compatibility).
+     */
+    public ToolResponseMessage.ToolResponse executePreApproved(
+            AssistantMessage.ToolCall toolCall, String storedArguments,
+            List<GraphEventPublisher.GraphEvent> events,
+            String conversationId, String workspaceBasePath,
+            List<DirectToolOutput> directOutputs) {
         String toolName = toolCall.name();
         String callArguments = storedArguments != null ? storedArguments : toolCall.arguments();
 
@@ -350,6 +384,25 @@ public class ToolExecutionExecutor {
             log.info("[ToolExecutor] Executing pre-approved tool: {}", toolName);
             String result = callback.call(callArguments);
             int rawLen = result != null ? result.length() : 0;
+
+            // RFC-052: pre-approved tool may itself be returnDirect — in that
+            // case its result must take the direct path (no spill, no LLM).
+            // Without this branch, an approved direct tool would leak its full
+            // content into the next LLM round-trip via the ToolResponseMessage.
+            if (isReturnDirect(callback)) {
+                String fullResult = result != null ? result : "";
+                log.info("[ToolExecutor] Pre-approved tool {} is returnDirect; bypassing " +
+                        "spill/truncate, broadcasting tool_direct_result ({} chars)", toolName, rawLen);
+                if (directOutputs != null) {
+                    directOutputs.add(new DirectToolOutput(
+                            toolCall.id(), toolName, fullResult, System.currentTimeMillis()));
+                }
+                events.add(GraphEventPublisher.toolDirectResult(
+                        toolCall.id(), toolName, fullResult));
+                return new ToolResponseMessage.ToolResponse(
+                        toolCall.id(), toolName, DIRECT_TOOL_PLACEHOLDER);
+            }
+
             // Phase 3 Layer 2: spill before truncation when storage is wired.
             // Use the caller-supplied conversationId so spill files inherit the
             // same per-conversation directory layout as the non-replay path.
@@ -366,9 +419,11 @@ public class ToolExecutionExecutor {
                     toolCall.id(), toolName, result != null ? result : "");
         } catch (Exception e) {
             log.error("[ToolExecutor] Pre-approved tool {} failed: {}", toolName, e.getMessage());
-            events.add(GraphEventPublisher.toolComplete(toolName, e.getMessage(), false));
-            return new ToolResponseMessage.ToolResponse(
-                    toolCall.id(), toolName, "Tool execution failed: " + e.getMessage());
+            String safeError = isReturnDirect(callback)
+                    ? "Tool execution failed (details withheld per returnDirect policy)"
+                    : "Tool execution failed: " + e.getMessage();
+            events.add(GraphEventPublisher.toolComplete(toolName, safeError, false));
+            return new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, safeError);
         }
     }
 
@@ -391,7 +446,8 @@ public class ToolExecutionExecutor {
 
     private void executePreparedCalls(List<PreparedToolCall> preparedCalls,
                                        List<ToolResponseMessage.ToolResponse> allResponses,
-                                       List<GraphEventPublisher.GraphEvent> events) {
+                                       List<GraphEventPublisher.GraphEvent> events,
+                                       List<DirectToolOutput> directOutputs) {
         long execStartMs = System.currentTimeMillis();
         if (!preparedCalls.isEmpty() && streamTracker != null) {
             String conversationId = preparedCalls.get(0).conversationId;
@@ -408,11 +464,11 @@ public class ToolExecutionExecutor {
             if (batch.size() == 1) {
                 // 单个工具（safe 或 unsafe），直接执行
                 PreparedToolCall pc = batch.get(0);
-                ToolResponseMessage.ToolResponse response = executeSingleTool(pc, events);
+                ToolResponseMessage.ToolResponse response = executeSingleTool(pc, events, directOutputs);
                 allResponses.set(pc.resultIndex, response);
             } else {
                 // 多个 safe 工具，并行执行
-                executeParallelBatch(batch, allResponses, events);
+                executeParallelBatch(batch, allResponses, events, directOutputs);
             }
         }
 
@@ -456,7 +512,8 @@ public class ToolExecutionExecutor {
 
     private void executeParallelBatch(List<PreparedToolCall> batch,
                                        List<ToolResponseMessage.ToolResponse> allResponses,
-                                       List<GraphEventPublisher.GraphEvent> events) {
+                                       List<GraphEventPublisher.GraphEvent> events,
+                                       List<DirectToolOutput> directOutputs) {
         log.info("[ToolExecutor] Executing {} safe tools in parallel: {}",
                 batch.size(), batch.stream().map(pc -> pc.toolCall.name()).toList());
         long batchStartMs = System.currentTimeMillis();
@@ -464,7 +521,7 @@ public class ToolExecutionExecutor {
         Map<Integer, CompletableFuture<ToolResponseMessage.ToolResponse>> futures = new LinkedHashMap<>();
         for (PreparedToolCall pc : batch) {
             CompletableFuture<ToolResponseMessage.ToolResponse> future =
-                    CompletableFuture.supplyAsync(() -> executeSingleTool(pc, events), TOOL_EXECUTOR);
+                    CompletableFuture.supplyAsync(() -> executeSingleTool(pc, events, directOutputs), TOOL_EXECUTOR);
             futures.put(pc.resultIndex, future);
         }
 
@@ -495,7 +552,8 @@ public class ToolExecutionExecutor {
     }
 
     private ToolResponseMessage.ToolResponse executeSingleTool(PreparedToolCall pc,
-                                                                List<GraphEventPublisher.GraphEvent> events) {
+                                                                List<GraphEventPublisher.GraphEvent> events,
+                                                                List<DirectToolOutput> directOutputs) {
         String toolName = pc.toolCall.name();
         try {
             if (streamTracker != null) {
@@ -517,6 +575,31 @@ public class ToolExecutionExecutor {
             }
 
             int rawLen = result != null ? result.length() : 0;
+            // RFC-052: returnDirect tools bypass spill / truncation / LLM context.
+            // Their full text goes to the user verbatim and is never persisted to
+            // a workspace cache file (spill could leak sensitive data).
+            if (isReturnDirect(pc.callback)) {
+                String fullResult = result != null ? result : "";
+                log.info("[ToolExecutor] Tool {} is returnDirect; bypassing spill/truncate, " +
+                        "broadcasting tool_direct_result ({} chars)", toolName, rawLen);
+                directOutputs.add(new DirectToolOutput(
+                        pc.toolCall.id(), toolName, fullResult, System.currentTimeMillis()));
+                GraphEventPublisher.GraphEvent directEvent =
+                        GraphEventPublisher.toolDirectResult(pc.toolCall.id(), toolName, fullResult);
+                events.add(directEvent);
+                if (streamTracker != null) {
+                    streamTracker.broadcastObject(pc.conversationId,
+                            GraphEventPublisher.EVENT_TOOL_DIRECT_RESULT, directEvent.data());
+                    streamTracker.updateRunningTool(pc.conversationId, null);
+                }
+                // Placeholder keeps the tool_call_id ↔ tool_response pairing valid
+                // for OpenAI-compatible providers, while withholding the data from
+                // any subsequent LLM round (the graph won't take a next round —
+                // see ObservationDispatcher RETURN_DIRECT_TRIGGERED branch).
+                return new ToolResponseMessage.ToolResponse(
+                        pc.toolCall.id(), toolName, DIRECT_TOOL_PLACEHOLDER);
+            }
+
             // RFC-008 Phase 3 Layer 2: spill oversized results to disk and replace
             // with preview + path. Falls back to truncation when spilling is
             // disabled or fails. Spill preserves the full output (read_file can
@@ -538,15 +621,22 @@ public class ToolExecutionExecutor {
                     pc.toolCall.id(), toolName, result != null ? result : "");
         } catch (Exception e) {
             log.error("[ToolExecutor] Tool {} execution failed: {}", toolName, e.getMessage(), e);
-            String normalizedError = normalizeToolExecutionError(e);
-            events.add(GraphEventPublisher.toolComplete(toolName, normalizedError, false));
+            // RFC-052: for returnDirect tools, even the error message is
+            // suspect — exception text may carry stack traces, SQL fragments,
+            // or other sensitive substrings that should not enter LLM context.
+            // Emit a generic placeholder instead. Full error still goes to logs
+            // for operator diagnosis.
+            String reportedError = isReturnDirect(pc.callback)
+                    ? "Tool execution failed (details withheld per returnDirect policy)"
+                    : normalizeToolExecutionError(e);
+            events.add(GraphEventPublisher.toolComplete(toolName, reportedError, false));
             if (streamTracker != null) {
                 streamTracker.broadcastObject(pc.conversationId, GraphEventPublisher.EVENT_TOOL_COMPLETE,
-                        GraphEventPublisher.toolComplete(toolName, normalizedError, false).data());
+                        GraphEventPublisher.toolComplete(toolName, reportedError, false).data());
                 streamTracker.updateRunningTool(pc.conversationId, null);
             }
             return new ToolResponseMessage.ToolResponse(
-                    pc.toolCall.id(), toolName, normalizedError);
+                    pc.toolCall.id(), toolName, reportedError);
         }
     }
 
@@ -601,6 +691,24 @@ public class ToolExecutionExecutor {
     }
 
     // ==================== 辅助方法 ====================
+
+    /**
+     * RFC-052: a tool is "direct" when its {@link ToolCallback#getToolMetadata()}
+     * reports {@code returnDirect=true}. {@code @Tool(returnDirect=true)} maps
+     * here automatically; MCP tools rely on the
+     * {@code ReturnDirectMcpToolCallback} decorator to override the metadata
+     * (the upstream {@code SyncMcpToolCallback} returns the framework default
+     * of {@code false}).
+     */
+    private static boolean isReturnDirect(ToolCallback callback) {
+        try {
+            return callback.getToolMetadata() != null
+                    && callback.getToolMetadata().returnDirect();
+        } catch (Exception e) {
+            log.debug("[ToolExecutor] Failed to read returnDirect metadata: {}", e.getMessage());
+            return false;
+        }
+    }
 
     /**
      * Returns true when the tool can run in parallel with other safe tools.
@@ -699,6 +807,25 @@ public class ToolExecutionExecutor {
             /** 审批 pending ID（如果 awaitingApproval=true） */
             String pendingId,
             /** 触发审批 barrier 的工具名（如果 awaitingApproval=true） */
-            String barrierToolName
-    ) {}
+            String barrierToolName,
+            /**
+             * RFC-052: full-text outputs from any returnDirect tools that ran
+             * in this batch. Non-empty list ⇒ graph must short-circuit to
+             * FinalAnswerNode without re-entering the LLM.
+             */
+            List<DirectToolOutput> directOutputs
+    ) {
+        /** Backwards-compatible constructor for callers that don't track direct outputs. */
+        public ToolExecutionResult(List<ToolResponseMessage.ToolResponse> responses,
+                                    List<GraphEventPublisher.GraphEvent> events,
+                                    boolean awaitingApproval,
+                                    String pendingId,
+                                    String barrierToolName) {
+            this(responses, events, awaitingApproval, pendingId, barrierToolName, List.of());
+        }
+
+        public boolean hasDirectOutputs() {
+            return directOutputs != null && !directOutputs.isEmpty();
+        }
+    }
 }

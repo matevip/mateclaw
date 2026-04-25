@@ -38,6 +38,17 @@ public class ObservationDispatcher implements EdgeAction {
             return FINAL_ANSWER_NODE;
         }
 
+        // RFC-052: returnDirect short-circuit — highest priority after approval.
+        // Any tool in the latest batch declared returnDirect=true: skip the next
+        // LLM call entirely and route straight to FinalAnswerNode, which will
+        // assemble the final answer from DIRECT_TOOL_OUTPUTS.
+        if (accessor.returnDirectTriggered()) {
+            log.info("[ObservationDispatcher] RETURN_DIRECT_TRIGGERED=true, " +
+                    "routing to finalAnswerNode (skipping next LLM call), iteration {}/{}",
+                    currentIteration, maxIterations);
+            return FINAL_ANSWER_NODE;
+        }
+
         // 1. 迭代超限检查（maxIterations=0 表示不限制）
         if (maxIterations > 0 && currentIteration >= maxIterations) {
             log.warn("[ObservationDispatcher] Max iterations ({}) reached at iteration {}, " +

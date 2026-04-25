@@ -140,4 +140,19 @@ public final class MateClawStateKeys {
     // ===== 运行时模型快照（REPLACE 策略，buildInitialState 注入）=====
     public static final String RUNTIME_MODEL_NAME = "runtime_model_name";
     public static final String RUNTIME_PROVIDER_ID = "runtime_provider_id";
+
+    // ===== RFC-052: Tool returnDirect 与数据隔离 =====
+
+    /**
+     * RFC-052: when true the latest tool batch contained at least one tool
+     * declared as returnDirect, so the graph must short-circuit to
+     * {@link #FINAL_ANSWER_NODE} without re-entering the LLM.
+     */
+    public static final String RETURN_DIRECT_TRIGGERED = "return_direct_triggered";
+
+    /**
+     * RFC-052: list of {@code DirectToolOutput} accumulated from the most recent
+     * tool batch, used by FinalAnswerNode to assemble the final answer.
+     */
+    public static final String DIRECT_TOOL_OUTPUTS = "direct_tool_outputs";
 }

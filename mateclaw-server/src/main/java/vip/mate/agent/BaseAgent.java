@@ -217,18 +217,57 @@ public abstract class BaseAgent {
 
         List<Message> messages = new ArrayList<>(limit);
         for (int i = 0; i < limit; i += 1) {
-            MessageEntity entity = history.get(i);
-            // 过滤审批占位消息，确保 LLM 上下文不包含审批残留
-            if ("assistant".equals(entity.getRole()) && isApprovalPlaceholder(entity.getContent())) {
-                log.debug("[{}] Filtering approval placeholder from history: msgId={}", agentName, entity.getId());
-                continue;
-            }
-            Message springMessage = toSpringMessage(entity);
+            Message springMessage = sanitizeForLlm(history.get(i));
             if (springMessage != null) {
                 messages.add(springMessage);
             }
         }
         return messages;
+    }
+
+    /**
+     * History sanitization entry point. Encapsulates *all* steps applied to a
+     * persisted message before it reaches an LLM prompt. Returns {@code null}
+     * to drop the message, or a Spring AI {@link Message} (possibly with
+     * rewritten content) to keep it.
+     *
+     * <p>Design philosophy (OpenClaw-inspired): keep the conversion + every
+     * sanitization stage centralized here so future steps (RFC-052 §9 PII
+     * field-level redaction, RFC-049 thinking-block replay strategy, image
+     * compression for vision models, etc.) plug in as additional inline
+     * stages with clear ordering rather than scattering across the loop.
+     *
+     * <p>Current stages (in order):
+     * <ol>
+     *   <li><b>Drop approval placeholders</b> — assistant messages whose
+     *       content is a "[等待审批]" stub from the approval flow are removed
+     *       entirely so they don't pollute the LLM context.</li>
+     *   <li><b>Render content</b> — convert {@code MessageEntity} to a string
+     *       via {@link ConversationService#renderMessageContent}.</li>
+     *   <li><b>Direct-tool scrub (RFC-052)</b> — assistant messages produced
+     *       by a returnDirect tool path get their content replaced with a
+     *       tool-named placeholder; the original DB content is unchanged.</li>
+     *   <li><b>Type dispatch</b> — wrap into {@code AssistantMessage},
+     *       {@code SystemMessage}, or {@code UserMessage} (with multimodal
+     *       Media for image/video parts).</li>
+     * </ol>
+     */
+    private Message sanitizeForLlm(MessageEntity entity) {
+        if (entity == null) {
+            return null;
+        }
+
+        // Stage 1: drop approval-placeholder assistant messages
+        if ("assistant".equals(entity.getRole()) && isApprovalPlaceholder(entity.getContent())) {
+            log.debug("[{}] Filtering approval placeholder from history: msgId={}",
+                    agentName, entity.getId());
+            return null;
+        }
+
+        // Delegate stages 2-4 to toSpringMessage; the stage 3 scrub is applied
+        // there so the rendered content is replaced before the typed Message
+        // wrapper is constructed.
+        return toSpringMessage(entity);
     }
 
     /**
@@ -256,6 +295,86 @@ public abstract class BaseAgent {
         return ApprovalPlaceholderUtil.isApprovalPlaceholder(content);
     }
 
+    /**
+     * RFC-052: regex matching {@code "directToolNames":["a","b",...]} in the
+     * metadata JSON and capturing every tool name in group(1) iterations. The
+     * {@code \\s*} guards keep us robust to pretty-printed JSON.
+     *
+     * <p>Design note (OpenClaw-inspired): rather than a one-shot "is this a
+     * direct turn?" boolean we extract the actual tool names and weave them
+     * into the placeholder, so the next LLM turn can reason about *which* tool
+     * answered (e.g. "the user just asked their salary; you used
+     * query_employee_salary; if they ask follow-up questions, call it again").
+     * This preserves conversational continuity that a generic placeholder
+     * destroys.
+     */
+    private static final java.util.regex.Pattern DIRECT_TOOL_NAMES_ARRAY =
+            java.util.regex.Pattern.compile(
+                    "\"directToolNames\"\\s*:\\s*\\[(\\s*\"[^\"]*\"\\s*(?:,\\s*\"[^\"]*\"\\s*)*)\\]");
+    private static final java.util.regex.Pattern DIRECT_TOOL_NAMES_INNER =
+            java.util.regex.Pattern.compile("\"([^\"]+)\"");
+
+    /**
+     * RFC-052: returns the list of returnDirect tool names recorded in the
+     * persisted assistant message's metadata. Empty list means this is NOT a
+     * direct-tool message and the content is safe for the LLM.
+     *
+     * <p>Allocates only when a non-empty {@code directToolNames} array is
+     * actually present (the common case — normal assistant turns — exits at
+     * the first {@code contains} check with zero allocations).
+     */
+    static List<String> directToolNamesIn(MessageEntity msg) {
+        if (msg == null) return List.of();
+        String metadata = msg.getMetadata();
+        if (metadata == null || metadata.isEmpty()) return List.of();
+        if (!metadata.contains("\"directToolNames\"")) return List.of();
+        java.util.regex.Matcher arrayMatcher = DIRECT_TOOL_NAMES_ARRAY.matcher(metadata);
+        if (!arrayMatcher.find()) return List.of();
+        String inner = arrayMatcher.group(1);
+        java.util.regex.Matcher nameMatcher = DIRECT_TOOL_NAMES_INNER.matcher(inner);
+        List<String> names = new ArrayList<>(2);
+        while (nameMatcher.find()) {
+            names.add(nameMatcher.group(1));
+        }
+        return names;
+    }
+
+    /**
+     * Convenience wrapper preserved for callers that only need the boolean.
+     * Keeps the original test surface stable.
+     */
+    static boolean isDirectToolMessage(MessageEntity msg) {
+        return !directToolNamesIn(msg).isEmpty();
+    }
+
+    /**
+     * RFC-052: build the placeholder text used to replace a direct-tool
+     * assistant message in next-turn prompts. Includes the originating tool
+     * names so the model retains conversational structure (it knows *why*
+     * the content is redacted and *which* tool would re-fetch it). The
+     * original message stays unchanged in {@code mate_message.content}.
+     *
+     * <p>Worded as a neutral status line, not as a faux assistant utterance —
+     * the model treats it as a system-level note, not as previous output to
+     * be continued.
+     */
+    static String directToolHistoryPlaceholder(List<String> toolNames) {
+        if (toolNames == null || toolNames.isEmpty()) {
+            return "[Previous answer was tool data returned directly to the user. " +
+                    "Content withheld from model context per tool policy.]";
+        }
+        String joined = toolNames.size() == 1
+                ? "'" + toolNames.get(0) + "'"
+                : toolNames.stream()
+                        .map(n -> "'" + n + "'")
+                        .reduce((a, b) -> a + ", " + b)
+                        .orElse("");
+        return "[Previous turn used direct-return tool(s) " + joined + " to deliver " +
+                "data straight to the user. Content withheld from model context per tool " +
+                "policy. If the user asks a follow-up that requires that data, call the " +
+                "tool again.]";
+    }
+
     private Message toSpringMessage(MessageEntity message) {
         if (message == null) {
             return null;
@@ -263,6 +382,24 @@ public abstract class BaseAgent {
         String renderedContent = conversationService.renderMessageContent(message);
         if (renderedContent == null || renderedContent.isBlank()) {
             return null;
+        }
+        // RFC-052: scrub direct-tool content from any subsequent LLM prompt.
+        // The DB content stays unchanged; only the in-memory Message handed to
+        // the model gets replaced. This is MateClaw's persistence-aware analog
+        // of joyagent-jdgenie's Memory.clearToolContext (purely in-memory) and
+        // OpenClaw's stripToolResultDetails (structural strip per replay).
+        //
+        // Unlike a generic "withheld" placeholder, we name the originating
+        // tool(s) so the model retains the dialog structure: it knows what
+        // kind of data was withheld and which tool would fetch it again. This
+        // preserves multi-turn coherence without leaking the payload itself.
+        if ("assistant".equals(message.getRole())) {
+            List<String> directNames = directToolNamesIn(message);
+            if (!directNames.isEmpty()) {
+                log.debug("[{}] Scrubbing direct-tool content from history msgId={} tools={} (RFC-052)",
+                        agentName, message.getId(), directNames);
+                renderedContent = directToolHistoryPlaceholder(directNames);
+            }
         }
         return switch (message.getRole()) {
             case "assistant" -> new AssistantMessage(renderedContent);

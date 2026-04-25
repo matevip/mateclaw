@@ -20,6 +20,7 @@ import vip.mate.agent.GraphEventPublisher;
 import vip.mate.agent.graph.NodeStreamingChatHelper;
 import vip.mate.agent.graph.plan.state.PlanStateAccessor;
 import vip.mate.agent.graph.plan.state.PlanStateKeys;
+import vip.mate.agent.graph.state.DirectToolOutput;
 import vip.mate.agent.graph.state.MateClawStateKeys;
 import vip.mate.agent.context.ConversationWindowManager;
 import vip.mate.agent.context.RuntimeContextInjector;
@@ -116,6 +117,11 @@ public class StepExecutionNode implements NodeAction {
         int stepPromptTokens = 0;
         int stepCompletionTokens = 0;
 
+        // RFC-052: any returnDirect tool that fires inside this step must
+        // short-circuit the entire plan (not just this step). We accumulate
+        // outputs across the inner loop and break out as soon as one appears.
+        List<DirectToolOutput> stepDirectOutputs = new ArrayList<>();
+
         try {
             while (toolCallCount < MAX_TOOL_CALLS_PER_STEP) {
                 // PR-2 (RFC-049 §2.3.4): always use OpenAiChatOptions so the relay
@@ -179,8 +185,12 @@ public class StepExecutionNode implements NodeAction {
                         if (isPreApprovedToolCall(toolCall.name(), preApprovedPayload)) {
                             String storedArguments = extractArgumentsFromPayload(preApprovedPayload);
                             events.add(GraphEventPublisher.toolStart(toolCall.name(), toolCall.arguments()));
+                            // RFC-052: pass the directOutputs collector so that an
+                            // approved direct tool's full content is captured here
+                            // (instead of leaking into the next LLM round).
                             ToolResponseMessage.ToolResponse response = executor.executePreApproved(
-                                    toolCall, storedArguments, events, conversationId, workspaceBasePath);
+                                    toolCall, storedArguments, events, conversationId, workspaceBasePath,
+                                    stepDirectOutputs);
                             toolResponses.add(response);
                             preApprovedPayload = ""; // 只消费一次
                         } else {
@@ -189,6 +199,9 @@ public class StepExecutionNode implements NodeAction {
                                     List.of(toolCall), conversationId, agentId, false, "", workspaceBasePath);
                             toolResponses.addAll(execResult.responses());
                             events.addAll(execResult.events());
+                            if (execResult.hasDirectOutputs()) {
+                                stepDirectOutputs.addAll(execResult.directOutputs());
+                            }
                             if (execResult.awaitingApproval()) {
                                 approvalTriggered = true;
                                 approvalToolName = toolCall.name();
@@ -202,6 +215,9 @@ public class StepExecutionNode implements NodeAction {
                             allToolCalls, conversationId, agentId, false, "", workspaceBasePath);
                     toolResponses.addAll(execResult.responses());
                     events.addAll(execResult.events());
+                    if (execResult.hasDirectOutputs()) {
+                        stepDirectOutputs.addAll(execResult.directOutputs());
+                    }
                     if (execResult.awaitingApproval()) {
                         approvalTriggered = true;
                         approvalToolName = execResult.barrierToolName() != null
@@ -220,6 +236,16 @@ public class StepExecutionNode implements NodeAction {
                 if (approvalTriggered) {
                     break;
                 }
+
+                // RFC-052: returnDirect short-circuit. Any direct tool in this
+                // step ends the plan immediately; the dispatcher routes via
+                // currentPhase=plan_aborted so no further LLM call happens.
+                if (!stepDirectOutputs.isEmpty()) {
+                    log.info("[StepExecution] RETURN_DIRECT — step {} produced {} direct " +
+                            "tool output(s); aborting plan execution",
+                            stepIndex, stepDirectOutputs.size());
+                    break;
+                }
             }
 
             // 处理审批暂停
@@ -234,6 +260,40 @@ public class StepExecutionNode implements NodeAction {
                         .thinkingStreamed(!stepThinking.isEmpty())
                         .put(MateClawStateKeys.PROMPT_TOKENS, state.value(MateClawStateKeys.PROMPT_TOKENS, 0) + stepPromptTokens)
                         .put(MateClawStateKeys.COMPLETION_TOKENS, state.value(MateClawStateKeys.COMPLETION_TOKENS, 0) + stepCompletionTokens)
+                        .events(events)
+                        .build();
+            }
+
+            // RFC-052: direct tool short-circuit at the plan level. Treat the
+            // assembled direct text as the final summary and abort the plan;
+            // the dispatcher routes plan_aborted to END so no further LLM call
+            // is made. Persisting RETURN_DIRECT_TRIGGERED + DIRECT_TOOL_OUTPUTS
+            // lets the SSE accumulator pick up directToolNames metadata so
+            // history scrub (BaseAgent.isDirectToolMessage) kicks in next turn.
+            //
+            // Plan status is "completed" (not "failed"): the user got their
+            // answer correctly, the plan just terminated earlier than the
+            // model's planning stage anticipated. Marking as failed would skew
+            // operational dashboards and confuse plan-history readers.
+            if (!stepDirectOutputs.isEmpty()) {
+                String assembled = assembleDirectAnswerText(stepDirectOutputs);
+                planningService.updateSubPlanResult(planId, stepIndex, assembled);
+                planningService.completePlan(planId,
+                        "Plan completed via returnDirect tool: " +
+                        stepDirectOutputs.get(0).toolName());
+                events.add(GraphEventPublisher.stepCompleted(stepIndex, assembled));
+                return PlanStateAccessor.output()
+                        .currentStepResult(assembled)
+                        .currentStepIndex(steps.size())  // 越界 → dispatcher 收束
+                        .currentPhase("plan_aborted")
+                        .finalSummary(assembled)
+                        .contentStreamed(false)  // 由 StateGraphPlanExecuteAgent 经 finalSummary 推送
+                        .put(MateClawStateKeys.RETURN_DIRECT_TRIGGERED, true)
+                        .put(MateClawStateKeys.DIRECT_TOOL_OUTPUTS, List.copyOf(stepDirectOutputs))
+                        .put(MateClawStateKeys.PROMPT_TOKENS,
+                                state.value(MateClawStateKeys.PROMPT_TOKENS, 0) + stepPromptTokens)
+                        .put(MateClawStateKeys.COMPLETION_TOKENS,
+                                state.value(MateClawStateKeys.COMPLETION_TOKENS, 0) + stepCompletionTokens)
                         .events(events)
                         .build();
             }
@@ -296,6 +356,26 @@ public class StepExecutionNode implements NodeAction {
                 .put(MateClawStateKeys.COMPLETION_TOKENS, state.value(MateClawStateKeys.COMPLETION_TOKENS, 0) + stepCompletionTokens)
                 .events(events)
                 .build();
+    }
+
+    /**
+     * RFC-052: assemble the final answer text from direct tool outputs in this
+     * step. Mirrors {@code FinalAnswerNode#assembleDirectAnswer} so the user
+     * sees the same shape regardless of which graph (ReAct / Plan-Execute)
+     * produced the answer.
+     */
+    private static String assembleDirectAnswerText(List<DirectToolOutput> outputs) {
+        if (outputs.size() == 1) {
+            return outputs.get(0).fullResult();
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < outputs.size(); i++) {
+            DirectToolOutput out = outputs.get(i);
+            if (i > 0) sb.append("\n\n");
+            sb.append("### ").append(out.toolName()).append("\n");
+            sb.append(out.fullResult());
+        }
+        return sb.toString();
     }
 
     private List<Message> buildStepMessages(PlanStateAccessor accessor, String step, String systemPrompt, String workspaceBasePath) {

@@ -3,9 +3,11 @@ package vip.mate.agent.graph.node;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
 import lombok.extern.slf4j.Slf4j;
+import vip.mate.agent.graph.state.DirectToolOutput;
 import vip.mate.agent.graph.state.FinishReason;
 import vip.mate.agent.graph.state.MateClawStateAccessor;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -33,6 +35,34 @@ public class FinalAnswerNode implements NodeAction {
         String finalAnswer;
         String finalThinking;
         FinishReason finishReason;
+
+        // RFC-052 — RETURN_DIRECT path takes the highest priority after stopping checks.
+        // The full text of the direct tool result(s) becomes the final answer
+        // verbatim; no LLM call has been made on it. Thinking from the LLM
+        // call that *decided* to invoke the direct tool is preserved (it has
+        // already been streamed; this just keeps the state symmetric with the
+        // NORMAL / SUMMARIZED / LIMIT_EXCEEDED branches below).
+        if (accessor.returnDirectTriggered()) {
+            List<DirectToolOutput> outputs = accessor.directToolOutputs();
+            if (!outputs.isEmpty()) {
+                String assembled = assembleDirectAnswer(outputs);
+                String currentThinking = accessor.currentThinking();
+                String existingThinking = accessor.finalThinking();
+                String preservedThinking = !currentThinking.isEmpty() ? currentThinking : existingThinking;
+                log.info("[FinalAnswerNode] RETURN_DIRECT — assembled final answer from {} direct " +
+                        "tool output(s), {} chars (thinking preserved: {} chars)",
+                        outputs.size(), assembled.length(), preservedThinking.length());
+                var builder = MateClawStateAccessor.output()
+                        .finalAnswer(assembled)
+                        .finishReason(FinishReason.RETURN_DIRECT);
+                if (!preservedThinking.isEmpty()) {
+                    builder.finalThinking(preservedThinking);
+                }
+                return builder.build();
+            }
+            log.warn("[FinalAnswerNode] RETURN_DIRECT_TRIGGERED=true but DIRECT_TOOL_OUTPUTS empty; " +
+                    "falling through to default final-answer assembly");
+        }
 
         // 审批等待路径：Graph 因 AWAITING_APPROVAL 终止，保留已流式推送的内容用于持久化
         if (accessor.awaitingApproval()) {
@@ -113,6 +143,27 @@ public class FinalAnswerNode implements NodeAction {
         }
 
         return builder.build();
+    }
+
+    /**
+     * RFC-052 §2.5: assemble the final answer from direct tool outputs.
+     * Single output ⇒ verbatim full text. Multiple outputs ⇒ each prefixed
+     * with a Markdown heading so the user can tell them apart.
+     */
+    private static String assembleDirectAnswer(List<DirectToolOutput> outputs) {
+        if (outputs.size() == 1) {
+            return outputs.get(0).fullResult();
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < outputs.size(); i++) {
+            DirectToolOutput out = outputs.get(i);
+            if (i > 0) {
+                sb.append("\n\n");
+            }
+            sb.append("### ").append(out.toolName()).append("\n");
+            sb.append(out.fullResult());
+        }
+        return sb.toString();
     }
 
     private FinishReason parseFinishReason(String reason) {

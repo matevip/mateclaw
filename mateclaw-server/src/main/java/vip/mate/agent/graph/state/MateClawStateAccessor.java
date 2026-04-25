@@ -195,6 +195,17 @@ public final class MateClawStateAccessor {
         return state.value(AWAITING_APPROVAL, false);
     }
 
+    // ===== RFC-052: returnDirect =====
+
+    public boolean returnDirectTriggered() {
+        return state.value(RETURN_DIRECT_TRIGGERED, false);
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<DirectToolOutput> directToolOutputs() {
+        return state.<List<DirectToolOutput>>value(DIRECT_TOOL_OUTPUTS).orElse(List.of());
+    }
+
     // ===== 审批重放 =====
 
     public String forcedToolCall() {
@@ -371,6 +382,15 @@ public final class MateClawStateAccessor {
         // ---- 审批控制 ----
         public OutputBuilder awaitingApproval(boolean awaiting) {
             return put(AWAITING_APPROVAL, awaiting);
+        }
+
+        // ---- RFC-052: returnDirect ----
+        public OutputBuilder returnDirectTriggered(boolean triggered) {
+            return put(RETURN_DIRECT_TRIGGERED, triggered);
+        }
+
+        public OutputBuilder directToolOutputs(List<DirectToolOutput> outputs) {
+            return put(DIRECT_TOOL_OUTPUTS, outputs);
         }
 
         // ---- 审批重放 ----
