@@ -657,19 +657,23 @@ public class WikiProcessingService {
                 .replace("{existing_pages}", freshIndex)
                 .replace("{raw_title}", rawTitle)
                 .replace("{raw_content}", textContent);
+
+        // RFC-051 PR-6b: optionally inject Spring AI's structured-output hint so the
+        // LLM produces strict RouteResult JSON. Default off; flip via mate.wiki.use-structured-route.
+        org.springframework.ai.converter.BeanOutputConverter<vip.mate.wiki.dto.RouteResult> routeConverter =
+                properties.isUseStructuredRoute()
+                        ? new org.springframework.ai.converter.BeanOutputConverter<>(vip.mate.wiki.dto.RouteResult.class)
+                        : null;
+        if (routeConverter != null) {
+            routeUser = routeUser + "\n\n" + routeConverter.getFormat();
+        }
+
         Prompt routePrompt = new Prompt(List.of(
                 new SystemMessage(routeSystem),
                 new UserMessage(routeUser)
         ));
         String routeResponse = callLlmWithResilientRetry(routePrompt, "route chunk of raw=" + rawId,
                 kbId, vip.mate.wiki.job.WikiJobStep.ROUTE);
-        JsonNode routeJson = parseJsonResponse(routeResponse);
-        if (routeJson == null) {
-            log.warn("[Wiki] Route phase: failed to parse JSON for kbId={}, rawId={}, responseLen={}, first200={}",
-                    kbId, rawId, routeResponse != null ? routeResponse.length() : 0,
-                    routeResponse != null ? routeResponse.substring(0, Math.min(200, routeResponse.length())) : "null");
-            return 0;
-        }
 
         // RFC-012 follow-up #3：phase B 现在并行执行，计数必须是 atomic
         AtomicInteger created = new AtomicInteger(0);
@@ -677,21 +681,59 @@ public class WikiProcessingService {
 
         // ─── 收集 route 输出（仅 metadata，无 content） ───
         List<JsonNode> createMetas = new ArrayList<>();
-        JsonNode createNode = routeJson.path("create");
-        if (createNode.isArray()) {
-            for (JsonNode metaNode : createNode) {
-                String slug = metaNode.path("slug").asText("");
-                String title = metaNode.path("title").asText("");
-                if (slug.isBlank() || title.isBlank()) continue;
-                createMetas.add(metaNode);
+        List<String> updateSlugs = new ArrayList<>();
+
+        boolean structuredOk = false;
+        if (routeConverter != null) {
+            try {
+                vip.mate.wiki.dto.RouteResult bound = routeConverter.convert(routeResponse);
+                if (bound != null) {
+                    for (vip.mate.wiki.dto.RoutedPageMeta meta : bound.create()) {
+                        if (meta == null || meta.slug() == null || meta.slug().isBlank()
+                                || meta.title() == null || meta.title().isBlank()) continue;
+                        com.fasterxml.jackson.databind.node.ObjectNode node = objectMapper.createObjectNode();
+                        node.put("slug", meta.slug());
+                        node.put("title", meta.title());
+                        if (meta.summary() != null) node.put("summary", meta.summary());
+                        if (meta.purposeHint() != null) node.put("purposeHint", meta.purposeHint());
+                        createMetas.add(node);
+                    }
+                    for (String slug : bound.update()) {
+                        if (slug != null && !slug.isBlank()) updateSlugs.add(slug);
+                    }
+                    structuredOk = true;
+                    log.debug("[Wiki] Route phase: structured parse ok kbId={} rawId={} create={} update={}",
+                            kbId, rawId, createMetas.size(), updateSlugs.size());
+                }
+            } catch (Exception e) {
+                log.warn("[Wiki] Route phase: structured parse failed for rawId={}, falling back to lenient JSON: {}",
+                        rawId, e.getMessage());
             }
         }
-        List<String> updateSlugs = new ArrayList<>();
-        JsonNode updateNode = routeJson.path("update");
-        if (updateNode.isArray()) {
-            for (JsonNode slugNode : updateNode) {
-                String slug = slugNode.asText("");
-                if (!slug.isBlank()) updateSlugs.add(slug);
+
+        if (!structuredOk) {
+            JsonNode routeJson = parseJsonResponse(routeResponse);
+            if (routeJson == null) {
+                log.warn("[Wiki] Route phase: failed to parse JSON for kbId={}, rawId={}, responseLen={}, first200={}",
+                        kbId, rawId, routeResponse != null ? routeResponse.length() : 0,
+                        routeResponse != null ? routeResponse.substring(0, Math.min(200, routeResponse.length())) : "null");
+                return 0;
+            }
+            JsonNode createNode = routeJson.path("create");
+            if (createNode.isArray()) {
+                for (JsonNode metaNode : createNode) {
+                    String slug = metaNode.path("slug").asText("");
+                    String title = metaNode.path("title").asText("");
+                    if (slug.isBlank() || title.isBlank()) continue;
+                    createMetas.add(metaNode);
+                }
+            }
+            JsonNode updateNode = routeJson.path("update");
+            if (updateNode.isArray()) {
+                for (JsonNode slugNode : updateNode) {
+                    String slug = slugNode.asText("");
+                    if (!slug.isBlank()) updateSlugs.add(slug);
+                }
             }
         }
         int totalPlanned = createMetas.size() + updateSlugs.size();

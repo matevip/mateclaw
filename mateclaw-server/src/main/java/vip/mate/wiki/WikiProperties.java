@@ -164,4 +164,18 @@ public class WikiProperties {
      * Default 15000 covers most documents while staying well within model limits.
      */
     private int documentAnalysisSampleChars = 15000;
+
+    /**
+     * RFC-051 PR-6b: route-phase output binding. When {@code true}, the route
+     * LLM call uses a Spring AI {@code BeanOutputConverter<RouteResult>} —
+     * the format hint is injected into the user prompt and the response is
+     * parsed strictly into the DTO. Failures fall back to the legacy lenient
+     * JSON parser so a flaky model never blocks ingest.
+     * <p>
+     * Default {@code false} keeps existing behavior on first upgrade. Flip on
+     * once you've validated the route prompt against the models you actually
+     * run (DashScope / OpenAI / Anthropic / DeepSeek tend to be fine; Ollama
+     * and weaker models may need the fallback).
+     */
+    private boolean useStructuredRoute = false;
 }
