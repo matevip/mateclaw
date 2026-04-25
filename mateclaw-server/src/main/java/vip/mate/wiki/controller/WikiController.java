@@ -361,6 +361,40 @@ public class WikiController {
         return R.ok(pageService.getBacklinks(kbId, slug));
     }
 
+    // RFC-051 PR-7 follow-up: archive surfaces. Default-list is filtered, so the UI
+    // needs a dedicated endpoint to enumerate archived pages and a way to flip the
+    // flag via REST (the agent tools wiki_archive_page / wiki_unarchive_page already
+    // exist, but the admin UI shouldn't have to go through agent plumbing).
+
+    @RequireWorkspaceRole("viewer")
+    @Operation(summary = "列出知识库中所有 archived=1 的页面（不含 content）")
+    @GetMapping("/knowledge-bases/{kbId}/pages/archived")
+    public R<List<WikiPageEntity>> listArchivedPages(@PathVariable Long kbId,
+                                                      @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyKBWorkspace(kbId, workspaceId);
+        return R.ok(pageService.listArchivedByKbId(kbId));
+    }
+
+    @RequireWorkspaceRole("admin")
+    @Operation(summary = "归档单个页面（软归档；可恢复）")
+    @PostMapping("/knowledge-bases/{kbId}/pages/{slug}/archive")
+    public R<Map<String, Object>> archivePage(@PathVariable Long kbId, @PathVariable String slug,
+                                               @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyKBWorkspace(kbId, workspaceId);
+        boolean changed = pageService.setArchived(kbId, slug, true);
+        return R.ok(Map.of("slug", slug, "archived", true, "changed", changed));
+    }
+
+    @RequireWorkspaceRole("admin")
+    @Operation(summary = "取消归档")
+    @PostMapping("/knowledge-bases/{kbId}/pages/{slug}/unarchive")
+    public R<Map<String, Object>> unarchivePage(@PathVariable Long kbId, @PathVariable String slug,
+                                                 @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyKBWorkspace(kbId, workspaceId);
+        boolean changed = pageService.setArchived(kbId, slug, false);
+        return R.ok(Map.of("slug", slug, "archived", false, "changed", changed));
+    }
+
     // ==================== Processing ====================
 
     @RequireWorkspaceRole("member")

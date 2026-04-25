@@ -68,6 +68,21 @@ public class WikiPageService {
     }
 
     /**
+     * RFC-051 PR-7 follow-up: list ONLY archived pages — the inverse of the
+     * default {@link #listByKbId} filter. Used by the admin UI's "show archived"
+     * panel so users can see what they archived and recover it.
+     */
+    public List<WikiPageEntity> listArchivedByKbId(Long kbId) {
+        List<WikiPageEntity> pages = pageMapper.selectList(
+                new LambdaQueryWrapper<WikiPageEntity>()
+                        .eq(WikiPageEntity::getKbId, kbId)
+                        .eq(WikiPageEntity::getArchived, 1)
+                        .orderByDesc(WikiPageEntity::getUpdateTime));
+        pages.forEach(p -> p.setContent(null));
+        return pages;
+    }
+
+    /**
      * 列出知识库的所有页面（不含 content）。
      * RFC-051 PR-7: archived 页面默认不返回。
      */

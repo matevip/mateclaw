@@ -1354,6 +1354,9 @@ export default {
     systemPageHint: 'overview / log 是知识库自带的系统页，无法删除',
     lockedPageBadge: '已锁定',
     lockedPageHint: '该页被手动锁定，AI 工具与批量操作不会修改或删除',
+    archivedSection: '已归档',
+    noArchived: '没有已归档的页面',
+    unarchive: '恢复',
     pageTypes: {
       concept: '概念',
       person: '人物',

@@ -159,6 +159,47 @@
                   </div>
                 </div>
                 <div v-if="groupedPages.length === 0" class="empty-hint">{{ t('wiki.noPages') }}</div>
+
+                <!-- RFC-051 PR-7 follow-up: archived pages drawer at the bottom of the list. -->
+                <div class="archived-section">
+                  <button
+                    class="archived-toggle"
+                    :disabled="archivedLoading"
+                    @click="toggleArchived"
+                  >
+                    <svg
+                      class="archived-chevron"
+                      :class="{ expanded: archivedOpen }"
+                      width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                    ><polyline points="9 18 15 12 9 6"/></svg>
+                    {{ t('wiki.archivedSection') }}
+                    <span v-if="archivedPages.length > 0" class="archived-count">{{ archivedPages.length }}</span>
+                  </button>
+                  <div v-if="archivedOpen" class="archived-items">
+                    <div v-if="archivedLoading" class="archived-empty">{{ t('common.loading') }}</div>
+                    <div v-else-if="archivedPages.length === 0" class="archived-empty">{{ t('wiki.noArchived') }}</div>
+                    <div v-else
+                         v-for="page in archivedPages" :key="'arc:' + page.slug"
+                         class="archived-item"
+                         @click="openPage(page.slug)"
+                    >
+                      <div class="archived-item-body">
+                        <div class="archived-item-title">{{ page.title }}</div>
+                        <div class="archived-item-meta">v{{ page.version }} · {{ page.slug }}</div>
+                      </div>
+                      <button
+                        class="archived-restore-btn"
+                        :title="t('wiki.unarchive')"
+                        @click.stop="restoreArchivedPage(page.slug)"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                          <polyline points="3 7 12 12 21 7"/><path d="M3 7v10l9 5 9-5V7"/>
+                        </svg>
+                        {{ t('wiki.unarchive') }}
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <!-- Flat search results -->
@@ -271,7 +312,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useWikiStore, isProtectedPage } from '@/stores/useWikiStore'
+import { useWikiStore, isProtectedPage, type WikiPage } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
 import RawMaterialPanel from './components/RawMaterialPanel.vue'
 import WikiPageViewer from './components/WikiPageViewer.vue'
@@ -324,6 +365,46 @@ const groupPageLimit = reactive<Record<string, number>>({})
 
 // Which groups are collapsed
 const collapsedGroups = reactive<Set<string>>(new Set())
+
+// RFC-051 PR-7 follow-up: archived pages drawer state.
+const archivedOpen = ref(false)
+const archivedLoading = ref(false)
+const archivedPages = ref<WikiPage[]>([])
+
+async function toggleArchived() {
+  archivedOpen.value = !archivedOpen.value
+  if (archivedOpen.value && archivedPages.value.length === 0 && store.currentKB) {
+    archivedLoading.value = true
+    try {
+      const res: any = await wikiApi.listArchivedPages(store.currentKB.id)
+      archivedPages.value = (res?.data || res || []) as WikiPage[]
+    } catch (e) {
+      console.error('[Wiki] Failed to load archived pages', e)
+      archivedPages.value = []
+    } finally {
+      archivedLoading.value = false
+    }
+  }
+}
+
+async function restoreArchivedPage(slug: string) {
+  if (!store.currentKB) return
+  try {
+    await wikiApi.unarchivePage(store.currentKB.id, slug)
+    archivedPages.value = archivedPages.value.filter(p => p.slug !== slug)
+    // Bring the page back into the main list cache.
+    await store.fetchPages(store.currentKB.id)
+  } catch (e: any) {
+    console.error('[Wiki] Unarchive failed', e)
+    alert(e?.message || 'Unarchive failed')
+  }
+}
+
+// Reset archived drawer when KB changes so we re-fetch on first open in the new KB.
+watch(() => store.currentKB?.id, () => {
+  archivedOpen.value = false
+  archivedPages.value = []
+})
 
 function toggleGroup(type: string) {
   if (collapsedGroups.has(type)) collapsedGroups.delete(type)
@@ -656,6 +737,67 @@ onMounted(() => {
 
 /* Subtle accent on the row itself so system pages read as "managed by the system". */
 .page-item--system { border-left: 2px solid var(--mc-primary); padding-left: 6px; }
+
+/* RFC-051 PR-7 follow-up: archived drawer at the bottom of the page list. */
+.archived-section { margin-top: 12px; border-top: 1px dashed var(--mc-border-light); padding-top: 8px; }
+.archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 4px;
+  background: none;
+  border: none;
+  font-size: 11px;
+  color: var(--mc-text-tertiary);
+  cursor: pointer;
+  text-align: left;
+}
+.archived-toggle:hover { color: var(--mc-text-secondary); }
+.archived-toggle:disabled { cursor: wait; opacity: 0.5; }
+.archived-chevron { transition: transform 0.15s; flex-shrink: 0; }
+.archived-chevron.expanded { transform: rotate(90deg); }
+.archived-count {
+  margin-left: auto;
+  padding: 0 6px;
+  background: var(--mc-bg-sunken);
+  border-radius: 99px;
+  font-weight: 600;
+  font-size: 10px;
+}
+
+.archived-items { display: flex; flex-direction: column; gap: 2px; padding-top: 4px; }
+.archived-empty { padding: 6px 4px; font-size: 11px; font-style: italic; color: var(--mc-text-tertiary); }
+.archived-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.1s, background 0.1s;
+}
+.archived-item:hover { opacity: 1; background: var(--mc-bg-muted); }
+.archived-item-body { flex: 1; min-width: 0; }
+.archived-item-title { font-size: 12px; font-weight: 500; color: var(--mc-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.archived-item-meta { font-size: 10px; color: var(--mc-text-tertiary); margin-top: 1px; }
+
+.archived-restore-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--mc-border-light);
+  border-radius: 6px;
+  background: none;
+  color: var(--mc-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.archived-restore-btn:hover { color: var(--mc-primary); border-color: var(--mc-primary); background: var(--mc-primary-bg); }
 
 .load-more-btn {
   width: 100%;

@@ -448,6 +448,14 @@ export const wikiApi = {
   getBacklinks: (kbId: number, slug: string) =>
     http.get(`/wiki/knowledge-bases/${kbId}/pages/${encodeURIComponent(slug)}/backlinks`),
 
+  // RFC-051 PR-7: archived pages
+  listArchivedPages: (kbId: number) =>
+    http.get(`/wiki/knowledge-bases/${kbId}/pages/archived`),
+  archivePage: (kbId: number, slug: string) =>
+    http.post(`/wiki/knowledge-bases/${kbId}/pages/${encodeURIComponent(slug)}/archive`),
+  unarchivePage: (kbId: number, slug: string) =>
+    http.post(`/wiki/knowledge-bases/${kbId}/pages/${encodeURIComponent(slug)}/unarchive`),
+
   // Processing
   processKB: (kbId: number) => http.post(`/wiki/knowledge-bases/${kbId}/process`),
   getProcessingStatus: (kbId: number) => http.get(`/wiki/knowledge-bases/${kbId}/processing-status`),

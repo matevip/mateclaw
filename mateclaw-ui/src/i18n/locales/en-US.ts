@@ -1344,6 +1344,9 @@ export default {
     systemPageHint: 'overview / log are built-in system pages — they can\'t be deleted',
     lockedPageBadge: 'Locked',
     lockedPageHint: 'This page is locked — AI tools and batch operations skip it',
+    archivedSection: 'Archived',
+    noArchived: 'No archived pages',
+    unarchive: 'Restore',
     pageTypes: {
       concept: 'Concepts',
       person: 'People',
