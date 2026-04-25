@@ -200,4 +200,26 @@ public class WikiProperties {
      * applies only to the prompt; the applier always sees full content.
      */
     private int enrichBatchPerPageMaxChars = 3000;
+
+    /**
+     * RFC-051 §9.4: replace the legacy flat 0.15 relation boost with a
+     * normalized score per query, scaled by {@link #relationBoostLambda}.
+     * Default {@code false} keeps the legacy ranking; flip on after
+     * validating against your retrieval test set.
+     * <p>
+     * Why it matters: the flat 0.15 was bigger than typical RRF scores
+     * (~0.02–0.05), so boosted neighbors routinely leapfrogged real RRF
+     * hits. Normalization keeps boost on the same scale as fused scores.
+     */
+    private boolean useNormalizedRelationBoost = false;
+
+    /**
+     * RFC-051 §9.4: maximum boost contribution from the relation pass when
+     * {@link #useNormalizedRelationBoost} is on. Each boosted candidate
+     * gets {@code (rawRelationScore / maxRawRelationScore) * lambda} added
+     * to its fused score. Default {@code 0.05} is roughly the size of a
+     * top-3 RRF score, so a max-relation neighbor competes evenly with a
+     * top-3 RRF hit but doesn't dominate it.
+     */
+    private double relationBoostLambda = 0.05;
 }

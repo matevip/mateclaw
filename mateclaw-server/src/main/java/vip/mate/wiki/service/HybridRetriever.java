@@ -129,6 +129,14 @@ public class HybridRetriever {
             }
 
             String reason = buildReason(lite, ri.matchedBy, query);
+            // RFC-051 §9.4: when the entry came from relation boost, override / append
+            // the reason with the seed slug + dominant signals so callers can explain
+            // why an out-of-search-corpus page surfaced.
+            if (ri.relationReason() != null && !ri.relationReason().isBlank()) {
+                reason = (reason == null || reason.isBlank())
+                        ? ri.relationReason()
+                        : reason + " · " + ri.relationReason();
+            }
             results.add(new PageSearchResult(
                 lite.slug(), lite.title(), lite.summary(),
                 snippet != null ? snippet : lite.summary(),
@@ -267,12 +275,20 @@ public class HybridRetriever {
 
     /**
      * RFC-032: 1-hop relation boost on top-3 seed pages.
+     * <p>
+     * RFC-051 §9.4 makes the boost magnitude data-driven instead of a flat
+     * constant when {@code mate.wiki.use-normalized-relation-boost} is on.
      */
     private List<RankedItem> applyRelationBoost(List<RankedItem> hits, Long kbId, int topK) {
         if (relationService == null || hits.isEmpty()) return hits;
 
         List<Long> seedIds = hits.stream().limit(3).map(h -> h.pageId).toList();
-        Map<Long, Double> boostMap = new HashMap<>();
+        // Per-candidate aggregate raw score (sum of contributions from each seed-relation
+        // pair) plus a remembered "best" reason — the seed that contributed the highest
+        // relation score and its dominant signals. Used for the human-readable reason
+        // surfaced via PageSearchResult.reason.
+        Map<Long, Double> rawScoreMap = new HashMap<>();
+        Map<Long, RelationReasonRecord> reasonMap = new HashMap<>();
 
         for (Long seedId : seedIds) {
             List<WikiPageLite> seedLites = pageMapper.selectBatchLite(List.of(seedId));
@@ -287,10 +303,14 @@ public class HybridRetriever {
             try {
                 relationService.relatedPages(kbId, seed.slug(), 3)
                     .forEach(r -> {
-                        // Find the page ID from slug
                         WikiPageEntity relPage = pageService.getBySlug(kbId, r.slug());
-                        if (relPage != null) {
-                            boostMap.merge(relPage.getId(), RELATION_BOOST, Double::sum);
+                        if (relPage == null) return;
+                        rawScoreMap.merge(relPage.getId(), r.score(), Double::sum);
+                        // Keep the strongest single seed→neighbor pair as the reason.
+                        RelationReasonRecord existing = reasonMap.get(relPage.getId());
+                        if (existing == null || r.score() > existing.contribution) {
+                            reasonMap.put(relPage.getId(),
+                                new RelationReasonRecord(seed.slug(), r.signals(), r.score()));
                         }
                     });
             } catch (Exception e) {
@@ -299,13 +319,31 @@ public class HybridRetriever {
         }
 
         Set<Long> existingIds = hits.stream().map(h -> h.pageId).collect(Collectors.toSet());
-        boostMap.keySet().removeAll(existingIds);
+        rawScoreMap.keySet().removeAll(existingIds);
 
-        if (boostMap.isEmpty()) return hits;
+        if (rawScoreMap.isEmpty()) return hits;
+
+        // Choose boost magnitude per candidate: legacy flat constant or normalized × λ.
+        Map<Long, Double> boostMap = new HashMap<>();
+        if (properties != null && properties.isUseNormalizedRelationBoost()) {
+            double maxRaw = rawScoreMap.values().stream().mapToDouble(Double::doubleValue).max().orElse(0.0);
+            double lambda = Math.max(0, properties.getRelationBoostLambda());
+            if (maxRaw <= 0 || lambda <= 0) {
+                rawScoreMap.forEach((pid, raw) -> boostMap.put(pid, 0.0));
+            } else {
+                final double maxRawF = maxRaw;
+                rawScoreMap.forEach((pid, raw) -> boostMap.put(pid, (raw / maxRawF) * lambda));
+            }
+        } else {
+            rawScoreMap.forEach((pid, raw) -> boostMap.put(pid, RELATION_BOOST));
+        }
 
         List<RankedItem> expanded = new ArrayList<>(hits);
-        boostMap.forEach((pid, score) -> expanded.add(
-            new RankedItem(pid, score, List.of("relation_boost"))));
+        boostMap.forEach((pid, score) -> {
+            RelationReasonRecord rr = reasonMap.get(pid);
+            String reason = rr == null ? null : formatRelationReason(rr);
+            expanded.add(new RankedItem(pid, score, List.of("relation_boost"), reason));
+        });
         return expanded;
     }
 
@@ -334,5 +372,27 @@ public class HybridRetriever {
         };
     }
 
-    private record RankedItem(Long pageId, double score, List<String> matchedBy) {}
+    /**
+     * RFC-051 §9.4: optional human-readable explanation for relation boost
+     * entries. {@code null} when this RankedItem wasn't produced by the
+     * relation pass.
+     */
+    private record RankedItem(Long pageId, double score, List<String> matchedBy, String relationReason) {
+        /** Back-compat ctor — keyword/semantic items don't carry a relation reason. */
+        RankedItem(Long pageId, double score, List<String> matchedBy) {
+            this(pageId, score, matchedBy, null);
+        }
+    }
+
+    /** Internal: which seed/signals contributed the strongest relation pull to a candidate. */
+    private record RelationReasonRecord(String seedSlug, List<String> signals, double contribution) {}
+
+    private static String formatRelationReason(RelationReasonRecord r) {
+        if (r == null) return null;
+        StringBuilder sb = new StringBuilder("related to '").append(r.seedSlug()).append("'");
+        if (r.signals() != null && !r.signals().isEmpty()) {
+            sb.append(" via ").append(String.join("+", r.signals()));
+        }
+        return sb.toString();
+    }
 }
