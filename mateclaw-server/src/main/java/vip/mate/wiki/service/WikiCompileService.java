@@ -58,8 +58,22 @@ public class WikiCompileService {
     @Autowired(required = false)
     private WikiLogService logService;
 
+    /**
+     * Compile outcome.
+     * <ul>
+     *   <li>{@code pageId}, {@code slug}, {@code title} non-null → page produced.</li>
+     *   <li>{@code evidenceChunkCount == 0} → no chunks matched the topic;
+     *       {@code pageId/slug/title} all null. Caller (agent) should fall
+     *       back to {@code wiki_search_pages} or report no source material.</li>
+     * </ul>
+     */
     public record CompileResult(Long pageId, String slug, String title, int evidenceChunkCount,
-                                 boolean created) {}
+                                 boolean created) {
+
+        public static CompileResult noEvidence() {
+            return new CompileResult(null, null, null, 0, false);
+        }
+    }
 
     /**
      * Compile or update a single page on the topic.
@@ -79,7 +93,10 @@ public class WikiCompileService {
         // 1. Retrieve evidence chunks via semantic search (hybrid retriever).
         List<HybridRetriever.ChunkHit> hits = hybridRetriever.searchChunks(kbId, topic, cap);
         if (hits.isEmpty()) {
-            throw new IllegalStateException("No evidence chunks found for topic: " + topic);
+            // Structured "nothing matched" result rather than throw — lets the
+            // tool surface respond with a clean message instead of a stack trace.
+            log.info("[WikiCompile] No evidence chunks for topic='{}' kbId={}", topic, kbId);
+            return CompileResult.noEvidence();
         }
 
         List<Long> evidenceChunkIds = new ArrayList<>(hits.size());

@@ -390,8 +390,21 @@ public class WikiTool {
 
         try {
             WikiCompileService.CompileResult res = compileService.compilePage(kbId, topic, slug, maxEvidenceChunks);
+            // RFC-051 follow-up: distinguish "no source material" from a hard error
+            // so the agent can decide whether to retry, fall back to search, or tell
+            // the user there's nothing on this topic.
+            if (res.evidenceChunkCount() == 0) {
+                return JSONUtil.createObj()
+                        .set("ok", true)
+                        .set("compiled", false)
+                        .set("reason", "no_evidence")
+                        .set("message", "No chunks matched the topic. Try wiki_search_pages, or upload source material first.")
+                        .set("evidenceChunks", 0)
+                        .toString();
+            }
             return JSONUtil.createObj()
                     .set("ok", true)
+                    .set("compiled", true)
                     .set("slug", res.slug())
                     .set("title", res.title())
                     .set("evidenceChunks", res.evidenceChunkCount())

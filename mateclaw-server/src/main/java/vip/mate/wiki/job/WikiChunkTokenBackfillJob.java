@@ -39,6 +39,16 @@ public class WikiChunkTokenBackfillJob {
 
     private final WikiChunkMapper chunkMapper;
 
+    /**
+     * RFC-051 follow-up: count chunks still missing a token estimate.
+     * Used by the admin endpoint to decide whether a manual rerun is worthwhile.
+     */
+    public long pendingCount() {
+        return chunkMapper.selectCount(
+                new LambdaQueryWrapper<WikiChunkEntity>()
+                        .isNull(WikiChunkEntity::getTokenCount));
+    }
+
     @Async
     @Scheduled(cron = "${mate.wiki.chunk-token-backfill-cron:0 */30 * * * ?}")
     public void runOnce() {
