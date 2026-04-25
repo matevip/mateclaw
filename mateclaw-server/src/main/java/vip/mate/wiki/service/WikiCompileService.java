@@ -51,6 +51,13 @@ public class WikiCompileService {
     @Autowired(required = false)
     private WikiModelRoutingService modelRoutingService;
 
+    /** RFC-051 PR-2b/2c: optional overview rebuilder + log appender. */
+    @Autowired(required = false)
+    private WikiOverviewService overviewService;
+
+    @Autowired(required = false)
+    private WikiLogService logService;
+
     public record CompileResult(Long pageId, String slug, String title, int evidenceChunkCount,
                                  boolean created) {}
 
@@ -157,6 +164,15 @@ public class WikiCompileService {
 
         log.info("[WikiCompile] {} page slug={} title='{}' from {} evidence chunks (kbId={})",
                 created ? "Created" : "Updated", resolvedSlug, title, evidenceChunkIds.size(), kbId);
+
+        // RFC-051 PR-2c: log every compile attempt; PR-2b: refresh overview.
+        if (logService != null) {
+            logService.append(kbId, WikiLogService.EventType.COMPILE,
+                    (created ? "compiled new page " : "recompiled page ") + resolvedSlug
+                            + " · topic='" + topic + "' · " + evidenceChunkIds.size() + " evidence chunks");
+        }
+        if (overviewService != null) overviewService.rebuild(kbId);
+
         return new CompileResult(persisted.getId(), resolvedSlug, title, evidenceChunkIds.size(), created);
     }
 

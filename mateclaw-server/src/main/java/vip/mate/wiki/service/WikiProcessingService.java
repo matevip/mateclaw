@@ -87,6 +87,13 @@ public class WikiProcessingService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private vip.mate.wiki.job.WikiModelRoutingService modelRoutingService;
 
+    /** RFC-051 PR-2b/2c: optional overview rebuilder + log appender. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private WikiOverviewService overviewService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private WikiLogService logService;
+
     /** Parallel chunk / material processing executor (JDK 21 virtual threads) */
     public static final ExecutorService WIKI_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -332,6 +339,19 @@ public class WikiProcessingService {
                     };
                     wikiJobService.transition(jobId, terminalStage);
                 } catch (Exception ignored) {}
+            }
+
+            // RFC-051 PR-2c: log every non-failed eager ingest. Failures already get a
+            // RAW_FAILED broadcast and an error message in the raw row.
+            if (logService != null && !"failed".equals(finalStatus)) {
+                logService.append(kb.getId(), WikiLogService.EventType.INGEST,
+                        "eager " + finalStatus + " raw=" + rawId
+                                + " · " + totalPages + " pages · " + totalChunks + " chunks");
+            }
+            // RFC-051 PR-2b: refresh overview stats whenever a raw lands in a terminal state
+            // (completed or partial). Failures don't shift the stats meaningfully.
+            if (overviewService != null && !"failed".equals(finalStatus)) {
+                overviewService.rebuild(kb.getId());
             }
 
             log.info("[Wiki] Processing completed for raw={}, kbId={}, generatedPages={}, totalPages={}",
@@ -1823,6 +1843,14 @@ public class WikiProcessingService {
                             "totalPages", 0,
                             "kbPageCount", pageCount,
                             "totalChunks", totalChunks));
+
+            // RFC-051 PR-2c: write an activity log entry.
+            if (logService != null) {
+                logService.append(kbId, WikiLogService.EventType.INGEST,
+                        "lazy ingest raw=" + rawId + " · " + totalChunks + " chunks");
+            }
+            // RFC-051 PR-2b: refresh overview stats.
+            if (overviewService != null) overviewService.rebuild(kbId);
 
             log.info("[Wiki] Lazy processing completed for raw={}, kbId={}, chunks={}",
                     rawId, kbId, totalChunks);
