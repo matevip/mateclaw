@@ -71,6 +71,21 @@ public class WikiModelRoutingService {
     }
 
     /**
+     * RFC-051 PR-3: KB-scoped overload. Synthesizes a minimal job context so
+     * legacy call sites in {@code WikiProcessingService} (which don't always
+     * have the {@code WikiProcessingJobEntity} on hand) can still benefit
+     * from per-step model overrides. {@code jobType} matches the keys the UI
+     * writes into KB config — {@code "heavy_ingest"} for the eager pipeline,
+     * {@code "light_enrich"} for wikilink enrichment.
+     */
+    public Long selectModelId(Long kbId, String jobType, WikiJobStep step) {
+        WikiProcessingJobEntity synthetic = new WikiProcessingJobEntity();
+        synthetic.setKbId(kbId);
+        synthetic.setJobType(jobType);
+        return selectModelId(synthetic, step);
+    }
+
+    /**
      * Select a fallback model after a failure.
      */
     public Long selectFallbackModel(WikiProcessingJobEntity job, WikiJobStep step, String errorCode) {

@@ -78,6 +78,15 @@ public class WikiProcessingService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private WikiScaffoldService scaffoldService;
 
+    /**
+     * RFC-051 PR-3: optional model routing service. When wired, route /
+     * create_page / merge_page LLM calls inside the eager pipeline ask the
+     * routing chain (stepModels[step] -&gt; wikiDefaultModelId -&gt; system
+     * default) for a model rather than always pulling the system default.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private vip.mate.wiki.job.WikiModelRoutingService modelRoutingService;
+
     /** Parallel chunk / material processing executor (JDK 21 virtual threads) */
     public static final ExecutorService WIKI_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -577,7 +586,8 @@ public class WikiProcessingService {
                 new SystemMessage(systemPrompt),
                 new UserMessage(userPrompt)
         ));
-        String llmResponse = callLlmWithResilientRetry(prompt, "chunk of raw=" + raw.getId());
+        String llmResponse = callLlmWithResilientRetry(prompt, "chunk of raw=" + raw.getId(),
+                kb.getId(), vip.mate.wiki.job.WikiJobStep.CREATE_PAGE);
 
         return applyLlmResponse(kb.getId(), raw.getId(), llmResponse);
     }
@@ -631,7 +641,8 @@ public class WikiProcessingService {
                 new SystemMessage(routeSystem),
                 new UserMessage(routeUser)
         ));
-        String routeResponse = callLlmWithResilientRetry(routePrompt, "route chunk of raw=" + rawId);
+        String routeResponse = callLlmWithResilientRetry(routePrompt, "route chunk of raw=" + rawId,
+                kbId, vip.mate.wiki.job.WikiJobStep.ROUTE);
         JsonNode routeJson = parseJsonResponse(routeResponse);
         if (routeJson == null) {
             log.warn("[Wiki] Route phase: failed to parse JSON for kbId={}, rawId={}, responseLen={}, first200={}",
@@ -829,7 +840,8 @@ public class WikiProcessingService {
 
             String batchResponse = callLlmWithResilientRetry(batchPrompt,
                     "batch-create " + subBatch.size() + " pages of raw=" + rawId
-                    + " subBatch=" + (bStart / batchSize + 1));
+                    + " subBatch=" + (bStart / batchSize + 1),
+                    kbId, vip.mate.wiki.job.WikiJobStep.CREATE_PAGE);
 
             List<WikiBatchCreateParser.ParsedPage> parsedPages = batchParser.parse(batchResponse);
 
@@ -1017,7 +1029,8 @@ public class WikiProcessingService {
                 new SystemMessage(createSystem),
                 new UserMessage(createUser)
         ));
-        return callLlmWithResilientRetry(prompt, "retry-create slug=" + slug + " of raw=" + raw.getId());
+        return callLlmWithResilientRetry(prompt, "retry-create slug=" + slug + " of raw=" + raw.getId(),
+                kb.getId(), vip.mate.wiki.job.WikiJobStep.CREATE_PAGE);
     }
 
     /**
@@ -1146,7 +1159,8 @@ public class WikiProcessingService {
                 new UserMessage(mergeUser)
         ));
         String response = callLlmWithResilientRetry(prompt,
-                "merge page slug=" + slug + " of raw=" + rawId);
+                "merge page slug=" + slug + " of raw=" + rawId,
+                kbId, vip.mate.wiki.job.WikiJobStep.MERGE_PAGE);
         JsonNode mergeJson = parseJsonResponse(response);
         if (mergeJson == null) {
             log.warn("[Wiki] Phase B merge page slug='{}' returned unparseable JSON, skipping", slug);
@@ -1266,7 +1280,8 @@ public class WikiProcessingService {
                 new UserMessage(user)
         ));
         try {
-            String response = callLlmWithResilientRetry(prompt, "analyze doc raw=" + raw.getId());
+            String response = callLlmWithResilientRetry(prompt, "analyze doc raw=" + raw.getId(),
+                    kb.getId(), vip.mate.wiki.job.WikiJobStep.ROUTE);
             JsonNode json = parseJsonResponse(response);
             if (json != null) {
                 log.info("[Wiki] Document analysis done for raw={}: topics={}, concepts={}",
@@ -1319,6 +1334,28 @@ public class WikiProcessingService {
     }
 
     /**
+     * RFC-051 PR-3: build a {@link ChatModel} for an eager-pipeline step,
+     * honoring the KB-level routing chain when {@link #modelRoutingService}
+     * is available. Falls back to the system default on any lookup failure
+     * so a misconfigured KB never blocks ingest.
+     */
+    private ChatModel buildChatModelFor(Long kbId, vip.mate.wiki.job.WikiJobStep step) {
+        if (modelRoutingService != null && kbId != null && step != null) {
+            try {
+                Long modelId = modelRoutingService.selectModelId(kbId, "heavy_ingest", step);
+                ModelConfigEntity model = modelConfigService.getModel(modelId);
+                if (model != null) {
+                    return agentGraphBuilder.buildRuntimeChatModel(model, WIKI_NO_RETRY);
+                }
+            } catch (Exception e) {
+                log.warn("[Wiki] Model routing failed for kbId={} step={}, falling back to default: {}",
+                        kbId, step, e.getMessage());
+            }
+        }
+        return buildChatModel();
+    }
+
+    /**
      * 调用 LLM，带"任务完成或模型不可用才终止"的重试策略。
      * <p>
      * 可重试（一直重试直到成功）：网络抖动、5xx、429 限流、超时、连接中断、内容过滤偶发、JSON 空输出。
@@ -1332,12 +1369,21 @@ public class WikiProcessingService {
      * 反复瞬时错误把单 chunk 卡到永远；buildChatModel 提到循环外，所有重试复用同一实例。
      */
     private String callLlmWithResilientRetry(Prompt prompt, String ctx) {
+        return callLlmWithResilientRetry(prompt, ctx, null, null);
+    }
+
+    /**
+     * RFC-051 PR-3: step-aware LLM retry helper. {@code kbId} and {@code step}
+     * pick the routed chat model; passing {@code null} for either reproduces
+     * the legacy behavior (system default model).
+     */
+    private String callLlmWithResilientRetry(Prompt prompt, String ctx, Long kbId, vip.mate.wiki.job.WikiJobStep step) {
         long backoffMs = 1000;
         final long maxBackoffMs = 60_000;
         final int maxAttempts = Math.max(1, properties.getLlmMaxAttempts());
         final long maxTotalDurationMs = Math.max(1_000L, properties.getLlmMaxTotalDurationMs());
         final long startNanos = System.nanoTime();
-        final ChatModel chatModel = buildChatModel();
+        final ChatModel chatModel = buildChatModelFor(kbId, step);
         int attempt = 0;
         while (true) {
             attempt++;
@@ -1599,7 +1645,8 @@ public class WikiProcessingService {
                 new SystemMessage(createSystem),
                 new UserMessage(createUser)
         ));
-        String response = callLlmWithResilientRetry(prompt, "repair page=" + page.getSlug());
+        String response = callLlmWithResilientRetry(prompt, "repair page=" + page.getSlug(),
+                kb.getId(), vip.mate.wiki.job.WikiJobStep.MERGE_PAGE);
         com.fasterxml.jackson.databind.JsonNode pageJson = parseJsonResponse(response);
         if (pageJson == null) return;
 
