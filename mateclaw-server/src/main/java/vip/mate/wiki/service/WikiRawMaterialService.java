@@ -132,10 +132,13 @@ public class WikiRawMaterialService {
         entity.setFileSize(fileSize);
         entity.setProcessingStatus("pending");
 
-        // 计算文件内容 hash（用于上传去重）
+        // Compute hash of original upload bytes (for dedup). RFC-051: hash raw bytes
+        // directly — the previous `new String(bytes, UTF_8)` round-trip produced unstable
+        // hashes for binary files (PDF/Office) because invalid UTF-8 sequences become
+        // replacement characters, collapsing distinct files into the same hash.
         try {
             byte[] bytes = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(sourcePath));
-            entity.setContentHash(computeHash(new String(bytes, java.nio.charset.StandardCharsets.UTF_8)));
+            entity.setContentHash(computeHashOfBytes(bytes));
         } catch (Exception e) {
             log.warn("[Wiki] Could not compute file hash for dedup: {}", e.getMessage());
         }
@@ -219,12 +222,21 @@ public class WikiRawMaterialService {
         rawMapper.updateById(entity);
     }
 
+    /**
+     * Cache the extracted text for a raw material.
+     * <p>
+     * RFC-051: this method no longer touches {@code contentHash}. The previous
+     * behavior overwrote the original-upload hash with an extracted-text hash,
+     * which broke upload dedup (re-uploading the same file would compute a hash
+     * over raw bytes but find a row whose hash had been replaced with extracted
+     * text). The {@code contentHash} field is now an immutable identity for the
+     * uploaded artifact; downstream short-circuiting uses {@code lastProcessedHash}.
+     */
     @Transactional
-    public void updateExtractedText(Long id, String extractedText, String contentHash) {
+    public void updateExtractedText(Long id, String extractedText) {
         WikiRawMaterialEntity entity = rawMapper.selectById(id);
         if (entity == null) return;
         entity.setExtractedText(extractedText);
-        entity.setContentHash(contentHash);
         rawMapper.updateById(entity);
     }
 
@@ -316,8 +328,8 @@ public class WikiRawMaterialService {
                             log.warn("[Wiki] Extracted text truncated at {} chars for: {} (full document may be larger)",
                                     text.length(), entity.getSourcePath());
                         } else {
-                            // 完整提取结果：缓存以避免重复提取
-                            updateExtractedText(entity.getId(), text, computeHash(text));
+                            // Full extraction: cache to avoid re-extracting on subsequent calls.
+                            updateExtractedText(entity.getId(), text);
                         }
                         log.info("[Wiki] Extracted text from {}: {} chars, method={}, truncated={}",
                                 entity.getSourcePath(), text.length(), json.getStr("method"), truncated);
@@ -398,6 +410,21 @@ public class WikiRawMaterialService {
             return HexFormat.of().formatHex(hash);
         } catch (Exception e) {
             log.warn("[Wiki] Failed to compute content hash: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * SHA-256 over raw bytes. Used for file uploads so that PDF/Office binaries
+     * produce a stable identity hash regardless of UTF-8 round-tripping.
+     */
+    private String computeHashOfBytes(byte[] bytes) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(bytes);
+            return HexFormat.of().formatHex(hash);
+        } catch (Exception e) {
+            log.warn("[Wiki] Failed to compute byte hash: {}", e.getMessage());
             return null;
         }
     }

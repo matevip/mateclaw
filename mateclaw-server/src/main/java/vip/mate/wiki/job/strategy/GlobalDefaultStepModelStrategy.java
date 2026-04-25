@@ -14,7 +14,7 @@ import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
  * strong steps (CREATE_PAGE, MERGE_PAGE) use the default model.
  */
 @Component
-@Order(2)
+@Order(3)
 @RequiredArgsConstructor
 public class GlobalDefaultStepModelStrategy implements WikiStepModelStrategy {
 

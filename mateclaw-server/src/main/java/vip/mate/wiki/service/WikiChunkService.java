@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import vip.mate.wiki.dto.WikiChunkDraft;
 import vip.mate.wiki.model.WikiChunkEntity;
 import vip.mate.wiki.repository.WikiChunkMapper;
 
@@ -53,6 +54,125 @@ public class WikiChunkService {
 
         // 增量对账
         return reconcile(kbId, rawId, chunks, offsets, existing);
+    }
+
+    /**
+     * RFC-051 PR-1a: persist chunks along with their structural metadata
+     * (page number, token count, header breadcrumb, source section).
+     * <p>
+     * Behaves like {@link #persistChunks(Long, Long, List, List)} — full insert
+     * when no existing chunks for the raw, otherwise hash-based reconcile so
+     * unchanged chunks keep their embeddings. Reconcile updates the metadata
+     * columns on retained rows so re-running ingest with a richer normalizer
+     * can fill in fields that were null on the previous pass.
+     *
+     * @param drafts chunks-to-persist with metadata (ordered, ordinal == index)
+     * @return persisted chunk IDs (same order as {@code drafts})
+     */
+    @Transactional
+    public List<Long> persistChunks(Long kbId, Long rawId, List<WikiChunkDraft> drafts) {
+        List<WikiChunkEntity> existing = listByRawId(rawId);
+
+        if (existing.isEmpty()) {
+            return insertAllDrafts(kbId, rawId, drafts);
+        }
+        return reconcileDrafts(kbId, rawId, drafts, existing);
+    }
+
+    private List<Long> insertAllDrafts(Long kbId, Long rawId, List<WikiChunkDraft> drafts) {
+        List<Long> ids = new ArrayList<>(drafts.size());
+        for (int i = 0; i < drafts.size(); i++) {
+            WikiChunkDraft draft = drafts.get(i);
+            String hash = computeHash(draft.content());
+            WikiChunkEntity entity = buildEntityFromDraft(kbId, rawId, i, draft, hash);
+            chunkMapper.insert(entity);
+            ids.add(entity.getId());
+        }
+        log.info("[WikiChunk] Inserted {} drafts for raw={}", drafts.size(), rawId);
+        return ids;
+    }
+
+    private List<Long> reconcileDrafts(Long kbId, Long rawId, List<WikiChunkDraft> drafts,
+                                        List<WikiChunkEntity> existing) {
+        Map<Integer, WikiChunkEntity> oldByOrdinal = new HashMap<>();
+        for (WikiChunkEntity e : existing) {
+            oldByOrdinal.put(e.getOrdinal(), e);
+        }
+
+        List<Long> resultIds = new ArrayList<>(drafts.size());
+        Set<Long> retainedIds = new HashSet<>();
+        int retained = 0, rebuilt = 0;
+
+        for (int i = 0; i < drafts.size(); i++) {
+            WikiChunkDraft draft = drafts.get(i);
+            String hash = computeHash(draft.content());
+            WikiChunkEntity old = oldByOrdinal.get(i);
+
+            if (old != null && hash.equals(old.getContentHash())) {
+                // Same content: keep existing row (and its embedding). Refresh offsets and
+                // metadata so a re-run with a smarter normalizer can fill gaps.
+                boolean changed = false;
+                if (!Objects.equals(old.getStartOffset(), draft.startOffset())) {
+                    old.setStartOffset(draft.startOffset()); changed = true;
+                }
+                if (!Objects.equals(old.getEndOffset(), draft.endOffset())) {
+                    old.setEndOffset(draft.endOffset()); changed = true;
+                }
+                if (!Objects.equals(old.getPageNumber(), draft.pageNumber())) {
+                    old.setPageNumber(draft.pageNumber()); changed = true;
+                }
+                if (!Objects.equals(old.getTokenCount(), draft.tokenCount())) {
+                    old.setTokenCount(draft.tokenCount()); changed = true;
+                }
+                if (!Objects.equals(old.getHeaderBreadcrumb(), draft.headerBreadcrumb())) {
+                    old.setHeaderBreadcrumb(draft.headerBreadcrumb()); changed = true;
+                }
+                if (!Objects.equals(old.getSourceSection(), draft.sourceSection())) {
+                    old.setSourceSection(draft.sourceSection()); changed = true;
+                }
+                if (changed) {
+                    chunkMapper.updateById(old);
+                }
+                resultIds.add(old.getId());
+                retainedIds.add(old.getId());
+                retained++;
+            } else {
+                WikiChunkEntity entity = buildEntityFromDraft(kbId, rawId, i, draft, hash);
+                chunkMapper.insert(entity);
+                resultIds.add(entity.getId());
+                rebuilt++;
+            }
+        }
+
+        int deleted = 0;
+        for (WikiChunkEntity old : existing) {
+            if (!retainedIds.contains(old.getId()) && !resultIds.contains(old.getId())) {
+                chunkMapper.deleteById(old.getId());
+                deleted++;
+            }
+        }
+
+        log.info("[WikiChunk] Reconciled drafts raw={}: retained={}, rebuilt={}, deleted={}",
+                rawId, retained, rebuilt, deleted);
+        return resultIds;
+    }
+
+    private WikiChunkEntity buildEntityFromDraft(Long kbId, Long rawId, int ordinal,
+                                                  WikiChunkDraft draft, String hash) {
+        WikiChunkEntity entity = new WikiChunkEntity();
+        entity.setKbId(kbId);
+        entity.setRawId(rawId);
+        entity.setOrdinal(ordinal);
+        entity.setContent(draft.content());
+        entity.setCharCount(draft.content().length());
+        entity.setStartOffset(draft.startOffset());
+        entity.setEndOffset(draft.endOffset());
+        entity.setContentHash(hash);
+        entity.setPageNumber(draft.pageNumber());
+        entity.setTokenCount(draft.tokenCount());
+        entity.setHeaderBreadcrumb(draft.headerBreadcrumb());
+        entity.setSourceSection(draft.sourceSection());
+        return entity;
     }
 
     /**

@@ -51,6 +51,18 @@ public class WikiChunkEntity {
     /** RFC-011：生成该 embedding 的模型名称（切模型时需全量重嵌） */
     private String embeddingModel;
 
+    /** RFC-051: source page number (PDF/PPTX) when known; null otherwise. */
+    private Integer pageNumber;
+
+    /** RFC-051: estimated token count; null until populated by chunker or backfill job. */
+    private Integer tokenCount;
+
+    /** RFC-051: header path leading to this chunk, e.g. "Intro / Setup / Linux". */
+    private String headerBreadcrumb;
+
+    /** RFC-051: short identifier of the source section (slide id, sheet name, heading). */
+    private String sourceSection;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 
