@@ -21,6 +21,11 @@ RUN pnpm exec vite build --outDir /static --emptyOutDir
 # Stage 2 — Backend (Maven)
 FROM maven:3.9-eclipse-temurin-21 AS builder
 
+# Optional Maven extra flags passed at build time.
+# Set MAVEN_FLAGS=-Paliyun-first in .env (or via --build-arg) to put Aliyun
+# repos first — speeds up builds dramatically inside mainland China.
+ARG MAVEN_FLAGS=""
+
 # Inject mirror settings to avoid Maven Central timeouts in restricted networks
 COPY mateclaw-server/settings.xml /root/.m2/settings.xml
 
@@ -28,18 +33,18 @@ COPY mateclaw-server/settings.xml /root/.m2/settings.xml
 WORKDIR /plugin-api
 COPY mateclaw-plugin-api/pom.xml ./pom.xml
 COPY mateclaw-plugin-api/src ./src
-RUN mvn install -DskipTests -q
+RUN mvn install -DskipTests -q ${MAVEN_FLAGS}
 
 # Pre-fetch mateclaw-server dependencies (uses mirror, so this won't hang)
 WORKDIR /build
 COPY mateclaw-server/pom.xml .
-RUN mvn dependency:go-offline -q
+RUN mvn dependency:go-offline -q ${MAVEN_FLAGS}
 
 # Copy backend source and inject pre-built frontend into the right classpath location
 COPY mateclaw-server/src ./src
 COPY --from=frontend-builder /static ./src/main/resources/static
 
-RUN mvn package -DskipTests -q
+RUN mvn package -DskipTests -q ${MAVEN_FLAGS}
 
 # Stage 3 — Runtime
 #
@@ -58,12 +63,26 @@ WORKDIR /app
 # JDK 21 is NOT part of the base image (it ships Node for the JS driver).
 # Install openjdk-21 explicitly and add CJK fonts so Chinese pages render
 # correctly in screenshots and snapshots.
+#
+# PDF extraction toolchain — DocumentExtractTool tries pdftotext first, then
+# Python pdfplumber/pypdf, then falls through to a naive Java parser that
+# reads bytes as ISO_8859_1 (mojibake for CJK). Without poppler-utils and
+# python3, Docker always hits the naive path and feeds garbled text to the
+# Wiki pipeline. Installing these puts the Docker runtime on the same
+# extraction path as local Mac (brew poppler + pyenv pdfplumber).
+# Tesseract + chi-sim is the final OCR fallback for scanned PDFs.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         openjdk-21-jre-headless \
         fonts-noto-cjk \
         fonts-noto-color-emoji \
+        poppler-utils \
+        python3 \
+        python3-pip \
+        tesseract-ocr \
+        tesseract-ocr-chi-sim \
         tzdata \
+    && pip3 install --no-cache-dir --break-system-packages pdfplumber pypdf \
     && rm -rf /var/lib/apt/lists/*
 
 # Tell Playwright Java where Microsoft's image stored the browsers.
