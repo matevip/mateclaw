@@ -278,6 +278,12 @@ public class HybridRetriever {
             List<WikiPageLite> seedLites = pageMapper.selectBatchLite(List.of(seedId));
             if (seedLites.isEmpty()) continue;
             WikiPageLite seed = seedLites.get(0);
+            // RFC-051 PR-5: don't expand 1-hop neighborhood from a system page seed.
+            // Otherwise the overview / log neighborhood — typically every page that
+            // shares a raw with them — leaks into search results via boost. PR-2's
+            // result-emit filter drops the system pages themselves; this guard ensures
+            // we don't even use them as expansion roots.
+            if (seed.isSystem()) continue;
             try {
                 relationService.relatedPages(kbId, seed.slug(), 3)
                     .forEach(r -> {

@@ -472,15 +472,26 @@ public class WikiPageService {
     }
 
     /**
-     * 从 Markdown 内容中提取 [[links]] 并返回 JSON 数组
+     * Extract {@code [[links]]} (and {@code [[target|label]]} alias form,
+     * RFC-051 PR-5) from Markdown content and return them as a JSON array of
+     * canonical slugs.
+     * <p>
+     * For aliased links the {@code label} part is purely display — only
+     * {@code target} feeds slug resolution. Without this split we'd canonicalize
+     * "Spring AI|Spring AI Alibaba" as a single slug, polluting outgoingLinks
+     * and breaking graph view / backlinks.
      */
     String extractLinksAsJson(String content) {
         if (content == null) return "[]";
         List<String> links = new ArrayList<>();
         Matcher matcher = WIKI_LINK_PATTERN.matcher(content);
         while (matcher.find()) {
-            String link = matcher.group(1).trim();
-            String slug = toSlug(link);
+            String raw = matcher.group(1).trim();
+            int pipe = raw.indexOf('|');
+            String target = pipe >= 0 ? raw.substring(0, pipe).trim() : raw;
+            if (target.isEmpty()) continue;
+            String slug = toSlug(target);
+            if (slug.isEmpty()) continue;
             if (!links.contains(slug)) {
                 links.add(slug);
             }
