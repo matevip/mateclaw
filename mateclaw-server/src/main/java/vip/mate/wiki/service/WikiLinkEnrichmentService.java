@@ -17,10 +17,14 @@ import vip.mate.wiki.job.WikiModelRoutingService;
 import vip.mate.wiki.model.WikiPageEntity;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -45,6 +49,9 @@ public class WikiLinkEnrichmentService {
 
     private static final ExecutorService WIKI_EXECUTOR =
         Executors.newVirtualThreadPerTaskExecutor();
+
+    /** Matches existing wikilinks. Group 1 is the inner text (slug or slug|label). */
+    private static final Pattern WIKILINK_USAGE = Pattern.compile("\\[\\[([^\\[\\]]+)]]");
 
     /**
      * Enrich a single page with [[wikilinks]] using a replacement plan.
@@ -85,7 +92,11 @@ public class WikiLinkEnrichmentService {
     }
 
     private void applyEnrichment(WikiPageEntity page, ChatModel chatModel, String index) {
-        EnrichmentPlan plan = requestPlan(chatModel, page.getContent(), index, page.getSlug());
+        // RFC-051 follow-up: tell the LLM how many times each slug is already linked
+        // in this page so it doesn't waste effort re-proposing positions that are
+        // already wrapped (which the applier would skip anyway, just more cheaply).
+        String indexWithUsage = decorateIndexWithUsage(index, page.getContent());
+        EnrichmentPlan plan = requestPlan(chatModel, page.getContent(), indexWithUsage, page.getSlug());
         if (plan == null || plan.isEmpty()) {
             return; // LLM had nothing to add or call failed; leave page alone.
         }
@@ -196,5 +207,49 @@ public class WikiLinkEnrichmentService {
             .filter(p -> !"system".equals(p.getPageType()))
             .map(p -> p.getSlug() + " → " + p.getTitle())
             .collect(Collectors.joining("\n"));
+    }
+
+    /**
+     * Decorate the wiki-index prompt with per-slug "(used N times)" annotations
+     * derived from the current page content. Slugs not yet linked render
+     * without the annotation so they stand out as candidates.
+     */
+    String decorateIndexWithUsage(String index, String pageContent) {
+        if (index == null || index.isEmpty()) return index;
+        Map<String, Integer> counts = countWikilinkSlugs(pageContent);
+        if (counts.isEmpty()) return index;
+        StringBuilder out = new StringBuilder(index.length() + counts.size() * 16);
+        for (String line : index.split("\n", -1)) {
+            int arrow = line.indexOf("→");
+            if (arrow < 0) {
+                out.append(line).append('\n');
+                continue;
+            }
+            String slug = line.substring(0, arrow).trim();
+            Integer n = counts.get(slug);
+            if (n == null || n == 0) {
+                out.append(line).append('\n');
+            } else {
+                out.append(line).append(" (used ").append(n).append("× already)\n");
+            }
+        }
+        // strip the trailing newline we just appended on every line
+        if (out.length() > 0 && out.charAt(out.length() - 1) == '\n') out.setLength(out.length() - 1);
+        return out.toString();
+    }
+
+    /** Count wikilink usage per slug. {@code [[slug|label]]} counts toward {@code slug}. */
+    static Map<String, Integer> countWikilinkSlugs(String content) {
+        Map<String, Integer> counts = new HashMap<>();
+        if (content == null || content.isEmpty()) return counts;
+        Matcher m = WIKILINK_USAGE.matcher(content);
+        while (m.find()) {
+            String inner = m.group(1).trim();
+            int pipe = inner.indexOf('|');
+            String slug = (pipe >= 0 ? inner.substring(0, pipe) : inner).trim();
+            if (slug.isEmpty()) continue;
+            counts.merge(slug, 1, Integer::sum);
+        }
+        return counts;
     }
 }
