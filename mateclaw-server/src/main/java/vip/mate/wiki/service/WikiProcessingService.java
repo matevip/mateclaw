@@ -16,6 +16,7 @@ import vip.mate.agent.prompt.PromptLoader;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.wiki.WikiProperties;
+import vip.mate.wiki.job.WikiKbConfig;
 import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.model.WikiRawMaterialEntity;
@@ -145,6 +146,14 @@ public class WikiProcessingService {
         }
 
         kbService.updateStatus(kb.getId(), "processing");
+
+        // RFC-051 PR-1b: lazy ingest short-circuit. Per KB config, skip the heavy
+        // pipeline entirely: extract → chunk → embed → completed. 0 pages is the
+        // expected outcome, not a failure. ingestMode==null keeps existing behavior.
+        if ("lazy".equals(resolveIngestMode(kb))) {
+            processLazyIngest(kb, raw);
+            return;
+        }
 
         // RFC-030 §9.1: create a processing job record and track its ID for stage transitions
         Long jobId = null;
@@ -1623,6 +1632,99 @@ public class WikiProcessingService {
             }
             log.warn("[Wiki] Failed to parse JSON response: {}", e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * RFC-051 PR-1b: read {@code ingestMode} from KB config JSON. Returns null
+     * on any parse error or missing field so the caller falls through to eager.
+     */
+    private String resolveIngestMode(WikiKnowledgeBaseEntity kb) {
+        if (kb == null || kb.getConfigContent() == null) return null;
+        try {
+            WikiKbConfig config = objectMapper.readValue(kb.getConfigContent(), WikiKbConfig.class);
+            return config.getIngestMode();
+        } catch (Exception e) {
+            log.warn("[Wiki] Failed to parse KB config for ingest mode, falling back to eager: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * RFC-051 PR-1b: lazy ingest — chunk + embed, no page generation.
+     * <p>
+     * Intentionally minimal: reuses the legacy {@code persistChunks(List<String>, offsets)}
+     * overload (no structural metadata; that lands in PR-1c with the preprocessor)
+     * and the existing {@code embedMissingChunks} entry point. Zero pages is the
+     * expected outcome, not a failure.
+     */
+    private void processLazyIngest(WikiKnowledgeBaseEntity kb, WikiRawMaterialEntity raw) {
+        Long rawId = raw.getId();
+        Long kbId = kb.getId();
+        log.info("[Wiki] Lazy ingest starting for raw={}, kbId={}", rawId, kbId);
+
+        rawService.updateProgress(rawId, "lazy", 0, 0);
+        progressBus.broadcast(kbId, WikiProgressBus.EVENT_RAW_STARTED,
+                java.util.Map.of("rawId", rawId, "phase", "lazy"));
+
+        try {
+            String textContent = rawService.getTextContent(raw);
+            if (textContent == null || textContent.isBlank()) {
+                rawService.updateProcessingStatus(rawId, "failed", "No text content available");
+                kbService.updateStatus(kbId, "active");
+                progressBus.broadcast(kbId, WikiProgressBus.EVENT_RAW_FAILED,
+                        java.util.Map.of("rawId", rawId, "error", "No text content available"));
+                return;
+            }
+
+            List<ChunkWithOffset> chunksWithOffset = splitIntoChunksWithOffsets(textContent);
+            List<String> chunks = chunksWithOffset.stream().map(ChunkWithOffset::text).toList();
+            List<int[]> offsets = chunksWithOffset.stream()
+                    .map(c -> new int[]{c.startOffset(), c.endOffset()}).toList();
+            chunkService.persistChunks(kbId, rawId, chunks, offsets);
+            int totalChunks = chunks.size();
+            log.info("[Wiki] Lazy ingest persisted {} chunks for raw={}", totalChunks, rawId);
+
+            // Async embedding — mirror the eager path so a slow embedding model
+            // does not block the raw from reaching completed.
+            final Long fKbId = kbId;
+            WIKI_EXECUTOR.submit(() -> {
+                try {
+                    int embedded = embeddingService.embedMissingChunks(fKbId);
+                    if (embedded > 0) {
+                        log.info("[Wiki] Lazy async embedding completed: kbId={}, embedded={}", fKbId, embedded);
+                    }
+                } catch (Exception ex) {
+                    log.warn("[Wiki] Lazy async embedding failed for kbId={}: {}", fKbId, ex.getMessage());
+                }
+            });
+
+            rawService.updateProcessingStatus(rawId, "completed", null);
+            if (raw.getContentHash() != null) {
+                rawService.setLastProcessedHash(rawId, raw.getContentHash());
+            }
+            rawService.updateProgress(rawId, "done", totalChunks, totalChunks);
+            int pageCount = pageService.countByKbId(kbId);
+            kbService.setPageCount(kbId, pageCount);
+            kbService.updateStatus(kbId, "active");
+
+            progressBus.broadcast(kbId, WikiProgressBus.EVENT_RAW_COMPLETED,
+                    java.util.Map.of(
+                            "rawId", rawId,
+                            "status", "completed",
+                            "totalPages", 0,
+                            "kbPageCount", pageCount,
+                            "totalChunks", totalChunks));
+
+            log.info("[Wiki] Lazy processing completed for raw={}, kbId={}, chunks={}",
+                    rawId, kbId, totalChunks);
+        } catch (Exception e) {
+            log.error("[Wiki] Lazy processing failed for raw={}: {}", rawId, e.getMessage(), e);
+            rawService.updateProcessingStatus(rawId, "failed", e.getMessage());
+            kbService.updateStatus(kbId, "active");
+            progressBus.broadcast(kbId, WikiProgressBus.EVENT_RAW_FAILED,
+                    java.util.Map.of("rawId", rawId,
+                            "error", e.getMessage() == null ? "unknown" : e.getMessage()));
         }
     }
 }

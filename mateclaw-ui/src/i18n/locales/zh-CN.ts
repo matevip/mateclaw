@@ -1317,6 +1317,11 @@ export default {
     configPanel: {
       embeddingModel: '向量化模型',
       embeddingModelHint: '语义搜索模型，留空使用系统默认',
+      ingestMode: '入库模式',
+      ingestModeEager: '立即生成页面',
+      ingestModeLazy: '先入索引',
+      ingestModeEagerHint: '上传后立即调用 LLM 生成完整 Wiki 页面。',
+      ingestModeLazyHint: '上传仅抽取、切片、向量化，跳过页面生成；上传即可搜索，页面按需编译。',
       modelStrategy: '模型策略',
       globalDefault: '跟随全局默认',
       selectModel: '选择可用模型…',

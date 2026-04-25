@@ -19,6 +19,33 @@
       <WikiModelPicker v-model="embeddingModelId" :options="embeddingPickerOptions" :disabled="savingEmbedding" />
     </div>
 
+    <!-- ①b Ingest mode (RFC-051 PR-1b) -->
+    <div class="config-card">
+      <div class="config-card__head">
+        <div>
+          <div class="config-card__title">{{ t('wiki.configPanel.ingestMode') }}</div>
+          <div class="config-card__hint">
+            {{ ingestMode === 'lazy'
+              ? t('wiki.configPanel.ingestModeLazyHint')
+              : t('wiki.configPanel.ingestModeEagerHint') }}
+          </div>
+        </div>
+        <button class="btn-save" @click="saveIngestMode" :disabled="savingIngestMode">
+          {{ savingIngestMode ? t('wiki.saving') : t('common.save') }}
+        </button>
+      </div>
+      <div class="ingest-mode-row">
+        <label class="ingest-mode-option" :class="{ 'ingest-mode-option--active': ingestMode === 'eager' }">
+          <input type="radio" value="eager" v-model="ingestMode" :disabled="savingIngestMode" />
+          <span class="ingest-mode-option__label">{{ t('wiki.configPanel.ingestModeEager') }}</span>
+        </label>
+        <label class="ingest-mode-option" :class="{ 'ingest-mode-option--active': ingestMode === 'lazy' }">
+          <input type="radio" value="lazy" v-model="ingestMode" :disabled="savingIngestMode" />
+          <span class="ingest-mode-option__label">{{ t('wiki.configPanel.ingestModeLazy') }}</span>
+        </label>
+      </div>
+    </div>
+
     <!-- ② Model strategy -->
     <div class="config-card config-card--clickable" @click="modelsOpen = true">
       <div class="config-card__row">
@@ -177,6 +204,29 @@ async function saveEmbeddingBinding() {
   }
 }
 
+// ── Ingest mode (RFC-051 PR-1b) ──
+// eager = legacy heavy pipeline (extract → chunk → route/create/merge LLM → pages).
+// lazy  = extract → chunk → embed → completed (0 pages is success).
+const ingestMode = ref<'eager' | 'lazy'>('eager')
+const savingIngestMode = ref(false)
+
+async function saveIngestMode() {
+  if (!store.currentKB) return
+  savingIngestMode.value = true
+  try {
+    let existingConfig: any = {}
+    try {
+      if (store.currentKB.configContent) existingConfig = JSON.parse(store.currentKB.configContent)
+    } catch { /* config may be plain text rules */ }
+    existingConfig.ingestMode = ingestMode.value
+    await wikiApi.updateConfig(store.currentKB.id, JSON.stringify(existingConfig, null, 2))
+  } catch (e) {
+    console.error('[WikiConfig] Failed to save ingest mode', e)
+  } finally {
+    savingIngestMode.value = false
+  }
+}
+
 // ── Model strategy ──
 const stepKeys = ['route', 'create_page', 'merge_page', 'enrich', 'summary']
 const stepModels = reactive<Record<string, string>>({})
@@ -192,6 +242,7 @@ function loadStepModels() {
   stepKeys.forEach(k => (stepModels[k] = ''))
   fallbackModelIds.value = []
   wikiGlobalModelId.value = ''
+  ingestMode.value = 'eager'
   if (!store.currentKB) return
   try {
     const cfg = store.currentKB.configContent ? JSON.parse(store.currentKB.configContent) : null
@@ -203,6 +254,7 @@ function loadStepModels() {
     }
     if (cfg?.fallbackModelIds) fallbackModelIds.value = cfg.fallbackModelIds.map(String)
     if (cfg?.wikiDefaultModelId) wikiGlobalModelId.value = String(cfg.wikiDefaultModelId)
+    if (cfg?.ingestMode === 'lazy') ingestMode.value = 'lazy'
   } catch { /* not JSON */ }
 }
 
@@ -416,4 +468,28 @@ loadProviderNames().then(() => {
 }
 .btn-save:hover { opacity: 0.88; }
 .btn-save:disabled { background: var(--mc-border); cursor: not-allowed; }
+
+/* Ingest mode radio group */
+.ingest-mode-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.ingest-mode-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--mc-border-light);
+  border-radius: 8px;
+  background: var(--mc-bg-elevated);
+  font-size: 12px;
+  color: var(--mc-text-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.ingest-mode-option input { margin: 0; cursor: pointer; }
+.ingest-mode-option--active {
+  border-color: var(--mc-primary);
+  color: var(--mc-primary);
+  background: var(--mc-primary-bg);
+  font-weight: 600;
+}
+.ingest-mode-option__label { line-height: 1; }
 </style>

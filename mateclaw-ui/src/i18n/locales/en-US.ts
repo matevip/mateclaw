@@ -1307,6 +1307,11 @@ export default {
     configPanel: {
       embeddingModel: 'Embedding Model',
       embeddingModelHint: 'Semantic search model for this KB; leave empty for system default',
+      ingestMode: 'Ingest Mode',
+      ingestModeEager: 'Eager',
+      ingestModeLazy: 'Lazy',
+      ingestModeEagerHint: 'Upload runs the full LLM pipeline to generate wiki pages immediately.',
+      ingestModeLazyHint: 'Upload only extracts, chunks, and embeds. No page generation; search works right away.',
       modelStrategy: 'Model Strategy',
       globalDefault: 'Global default',
       selectModel: 'Select a model…',
