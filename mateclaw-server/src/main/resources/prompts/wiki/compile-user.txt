@@ -1,0 +1,7 @@
+## Topic
+
+{topic}
+
+## Evidence
+
+{evidence}

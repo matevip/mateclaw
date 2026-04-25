@@ -11,6 +11,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import vip.mate.agent.prompt.PromptLoader;
 import vip.mate.wiki.job.WikiJobStep;
 import vip.mate.wiki.job.WikiModelRoutingService;
 import vip.mate.wiki.model.WikiChunkEntity;
@@ -127,17 +128,12 @@ public class WikiCompileService {
             throw new IllegalStateException("Refusing to compile over protected page: " + resolvedSlug);
         }
 
-        // 3. Build LLM prompt.
-        String system = """
-                You are a wiki page compiler. Produce a single Markdown page that
-                synthesizes the supplied evidence. Constraints:
-                - Output ONLY a JSON object: {"title": "...", "summary": "...", "content": "..."}
-                - Do not invent facts beyond the evidence.
-                - Use [[wikilinks]] when an evidence breadcrumb names a related concept.
-                - Keep summary <= 300 characters.
-                - content must be Markdown with ## headers.
-                """;
-        String user = "## Topic\n\n" + topic + "\n\n## Evidence\n\n" + evidenceBlock;
+        // 3. Build LLM prompt — prompt body lives in resources/prompts/wiki/compile-{system,user}.txt
+        // so we can iterate on phrasing without recompiling Java.
+        String system = PromptLoader.loadPrompt("wiki/compile-system");
+        String user = PromptLoader.loadPrompt("wiki/compile-user")
+                .replace("{topic}", topic)
+                .replace("{evidence}", evidenceBlock.toString());
 
         ChatModel chatModel = resolveChatModel(kbId);
         ChatResponse resp = chatModel.call(new Prompt(List.of(
