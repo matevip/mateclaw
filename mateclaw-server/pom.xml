@@ -325,4 +325,114 @@
             </plugin>
         </plugins>
     </build>
+
+    <!--
+      Dependency repositories, with US + CN mirrors listed side by side so builds
+      are reasonable on either continent. Maven tries repositories in the order
+      they are declared — the first one that resolves an artifact wins.
+
+      IDs are deliberately distinct from the super-POM's `central` id so that
+      mirror rules in settings.xml (if any) don't silently redirect them. Keep
+      the fastest-by-default first; switch order via a local ~/.m2/settings.xml
+      or pass `-Paliyun-first` when building from inside China.
+    -->
+    <repositories>
+        <!-- Primary: Maven Central direct — fast from US/EU backbones. -->
+        <repository>
+            <id>maven-central</id>
+            <name>Maven Central</name>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+        <!-- Fallback 1: Google Cloud's Maven Central mirror (global CDN edge). -->
+        <repository>
+            <id>google-maven-central</id>
+            <name>Google Maven Central Mirror</name>
+            <url>https://maven-central.storage-download.googleapis.com/maven2</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+        <!-- Fallback 2: Aliyun public — fast from China, full Central mirror. -->
+        <repository>
+            <id>aliyun-public</id>
+            <name>Aliyun Public</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+        <!-- Spring milestones / snapshots — direct from Spring (US). -->
+        <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+        <!-- Aliyun Spring mirror — fallback for CN builds. -->
+        <repository>
+            <id>aliyun-spring</id>
+            <name>Aliyun Spring Mirror</name>
+            <url>https://maven.aliyun.com/repository/spring</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+    </repositories>
+
+    <!-- Plugin lookups follow the same multi-region fallback. -->
+    <pluginRepositories>
+        <pluginRepository>
+            <id>maven-central</id>
+            <name>Maven Central</name>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </pluginRepository>
+        <pluginRepository>
+            <id>google-maven-central</id>
+            <name>Google Maven Central Mirror</name>
+            <url>https://maven-central.storage-download.googleapis.com/maven2</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </pluginRepository>
+        <pluginRepository>
+            <id>aliyun-public</id>
+            <name>Aliyun Public</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </pluginRepository>
+    </pluginRepositories>
+
+    <!--
+      Profile: swap the primary repo order when building from China so Aliyun
+      is tried first. Activate with `mvn -Paliyun-first ...`.
+    -->
+    <profiles>
+        <profile>
+            <id>aliyun-first</id>
+            <repositories>
+                <repository>
+                    <id>aliyun-public-first</id>
+                    <url>https://maven.aliyun.com/repository/public</url>
+                    <releases><enabled>true</enabled></releases>
+                    <snapshots><enabled>false</enabled></snapshots>
+                </repository>
+                <repository>
+                    <id>aliyun-spring-first</id>
+                    <url>https://maven.aliyun.com/repository/spring</url>
+                    <releases><enabled>true</enabled></releases>
+                    <snapshots><enabled>false</enabled></snapshots>
+                </repository>
+            </repositories>
+            <pluginRepositories>
+                <pluginRepository>
+                    <id>aliyun-public-first</id>
+                    <url>https://maven.aliyun.com/repository/public</url>
+                    <releases><enabled>true</enabled></releases>
+                    <snapshots><enabled>false</enabled></snapshots>
+                </pluginRepository>
+            </pluginRepositories>
+        </profile>
+    </profiles>
 </project>
