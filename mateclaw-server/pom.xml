@@ -296,13 +296,40 @@
             Used by WikiContentNormalizer to strip nav/footer/script/style/aside
             and ad-class nodes from URL/HTML uploads before chunking. Small
             (~430KB), no transitive deps, JVM-only — safe for the desktop bundle.
-            Tika is intentionally not pulled in: DocumentExtractTool already
-            covers PDF/Office via pdftotext, pdfplumber, and Java fallbacks.
         -->
         <dependency>
             <groupId>org.jsoup</groupId>
             <artifactId>jsoup</artifactId>
             <version>1.18.3</version>
+        </dependency>
+
+        <!-- ===== Apache Tika (RFC-051 PR-?: Java-side last-resort extractor) ===== -->
+        <!--
+            Wired as the FINAL fallback in DocumentExtractTool's PDF/DOCX/XLSX/PPTX
+            chains, after every system command + Python + POI-based path has failed.
+            Used in production primarily by Windows users without Python or poppler
+            installed; otherwise idle.
+
+            Pinned to the precise format modules called out in RFC-051 §5.2 — we
+            deliberately avoid `tika-parsers-standard-package`, which pulls in mail,
+            audio, archive, RTF / ODT, scientific, etc. (~80MB). Current footprint:
+            tika-core (~700KB) + tika-parser-pdf-module (PDFBox ~5MB) +
+            tika-parser-microsoft-module (POI-scratchpad ~10MB) ≈ 16MB.
+        -->
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-core</artifactId>
+            <version>3.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-parser-pdf-module</artifactId>
+            <version>3.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-parser-microsoft-module</artifactId>
+            <version>3.0.0</version>
         </dependency>
 
         <!-- ===== Database Migration (Flyway) ===== -->
