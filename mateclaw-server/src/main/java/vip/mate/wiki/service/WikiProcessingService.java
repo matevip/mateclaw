@@ -16,6 +16,7 @@ import vip.mate.agent.prompt.PromptLoader;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.wiki.WikiProperties;
+import vip.mate.wiki.dto.WikiChunkDraft;
 import vip.mate.wiki.job.WikiKbConfig;
 import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.model.WikiPageEntity;
@@ -59,6 +60,15 @@ public class WikiProcessingService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     @org.springframework.context.annotation.Lazy
     private vip.mate.wiki.job.WikiProcessingJobService wikiJobService;
+
+    /**
+     * RFC-051 PR-1c: optional preprocessor that fills chunk metadata
+     * (page_number / token_count / header_breadcrumb / source_section).
+     * Marked optional so unit tests that construct this service directly
+     * (without Spring) can opt out without exploding.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DocumentPreprocessService preprocessService;
 
     /** Parallel chunk / material processing executor (JDK 21 virtual threads) */
     public static final ExecutorService WIKI_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
@@ -1651,6 +1661,34 @@ public class WikiProcessingService {
     }
 
     /**
+     * RFC-051 PR-1c: bridge from {@link DocumentPreprocessService.Chunker} to
+     * the existing sentence-boundary chunker. Returns {@code [start, end]}
+     * pairs over the supplied text.
+     */
+    private List<int[]> splitToOffsetPairs(String text) {
+        List<ChunkWithOffset> windows = splitIntoChunksWithOffsets(text);
+        List<int[]> out = new ArrayList<>(windows.size());
+        for (ChunkWithOffset w : windows) {
+            out.add(new int[]{w.startOffset(), w.endOffset()});
+        }
+        return out;
+    }
+
+    /**
+     * Legacy chunk persistence path used by the lazy branch when the
+     * preprocessor is unavailable or yields nothing usable. Returns the
+     * persisted chunk count.
+     */
+    private int persistLegacyLazy(Long kbId, Long rawId, String textContent) {
+        List<ChunkWithOffset> chunksWithOffset = splitIntoChunksWithOffsets(textContent);
+        List<String> chunks = chunksWithOffset.stream().map(ChunkWithOffset::text).toList();
+        List<int[]> offsets = chunksWithOffset.stream()
+                .map(c -> new int[]{c.startOffset(), c.endOffset()}).toList();
+        chunkService.persistChunks(kbId, rawId, chunks, offsets);
+        return chunks.size();
+    }
+
+    /**
      * RFC-051 PR-1b: lazy ingest — chunk + embed, no page generation.
      * <p>
      * Intentionally minimal: reuses the legacy {@code persistChunks(List<String>, offsets)}
@@ -1677,12 +1715,21 @@ public class WikiProcessingService {
                 return;
             }
 
-            List<ChunkWithOffset> chunksWithOffset = splitIntoChunksWithOffsets(textContent);
-            List<String> chunks = chunksWithOffset.stream().map(ChunkWithOffset::text).toList();
-            List<int[]> offsets = chunksWithOffset.stream()
-                    .map(c -> new int[]{c.startOffset(), c.endOffset()}).toList();
-            chunkService.persistChunks(kbId, rawId, chunks, offsets);
-            int totalChunks = chunks.size();
+            int totalChunks;
+            // PR-1c: when the preprocessor is on the classpath, normalize +
+            // attach metadata; otherwise fall back to the legacy chunker.
+            if (preprocessService != null) {
+                List<WikiChunkDraft> drafts = preprocessService.preprocess(raw, textContent, this::splitToOffsetPairs);
+                if (drafts.isEmpty()) {
+                    log.warn("[Wiki] Lazy preprocess produced 0 drafts for raw={}, falling back to legacy split", rawId);
+                    totalChunks = persistLegacyLazy(kbId, rawId, textContent);
+                } else {
+                    chunkService.persistChunks(kbId, rawId, drafts);
+                    totalChunks = drafts.size();
+                }
+            } else {
+                totalChunks = persistLegacyLazy(kbId, rawId, textContent);
+            }
             log.info("[Wiki] Lazy ingest persisted {} chunks for raw={}", totalChunks, rawId);
 
             // Async embedding — mirror the eager path so a slow embedding model

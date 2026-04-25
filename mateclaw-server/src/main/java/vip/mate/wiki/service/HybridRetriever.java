@@ -59,8 +59,19 @@ public class HybridRetriever {
 
     /**
      * Chunk-level search result (semantic search).
+     * <p>
+     * RFC-051 PR-1c: {@code pageNumber} and {@code headerBreadcrumb} are
+     * populated when the chunk has those columns set (lazy ingest with
+     * preprocessor on, or backfilled chunks). Both are nullable.
      */
-    public record ChunkHit(Long chunkId, Long rawId, String snippet, float score) {}
+    public record ChunkHit(Long chunkId, Long rawId, String snippet, float score,
+                            Integer pageNumber, String headerBreadcrumb) {
+
+        /** Backwards-compatible factory for callers that don't yet pass metadata. */
+        public ChunkHit(Long chunkId, Long rawId, String snippet, float score) {
+            this(chunkId, rawId, snippet, score, null, null);
+        }
+    }
 
     /**
      * RFC-032: Enhanced search returning PageSearchResult with snippet and matchedBy metadata.
@@ -152,7 +163,8 @@ public class HybridRetriever {
                     String snippet = c.getContent().length() > 300
                             ? c.getContent().substring(0, 300) + "..."
                             : c.getContent();
-                    return new ChunkHit(c.getId(), c.getRawId(), snippet, score);
+                    return new ChunkHit(c.getId(), c.getRawId(), snippet, score,
+                            c.getPageNumber(), c.getHeaderBreadcrumb());
                 })
                 .sorted(Comparator.comparingDouble(ChunkHit::score).reversed())
                 .limit(topK)

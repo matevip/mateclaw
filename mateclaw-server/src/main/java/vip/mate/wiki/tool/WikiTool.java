@@ -260,11 +260,18 @@ public class WikiTool {
 
         JSONArray arr = new JSONArray();
         for (HybridRetriever.ChunkHit hit : hits) {
-            arr.add(JSONUtil.createObj()
+            cn.hutool.json.JSONObject obj = JSONUtil.createObj()
                     .set("chunkId", hit.chunkId())
                     .set("rawTitle", rawTitles.getOrDefault(hit.rawId(), "unknown"))
                     .set("snippet", hit.snippet())
-                    .set("score", String.format("%.4f", hit.score())));
+                    .set("score", String.format("%.4f", hit.score()));
+            // RFC-051 PR-1c: surface chunk metadata when available so the agent
+            // can cite "page 12, section 'Setup / Linux'" rather than an opaque snippet.
+            if (hit.pageNumber() != null) obj.set("pageNumber", hit.pageNumber());
+            if (hit.headerBreadcrumb() != null && !hit.headerBreadcrumb().isBlank()) {
+                obj.set("section", hit.headerBreadcrumb());
+            }
+            arr.add(obj);
         }
 
         return JSONUtil.createObj()

@@ -291,6 +291,20 @@
             <version>5.4.1</version>
         </dependency>
 
+        <!-- ===== jsoup (HTML cleanup for Wiki ingest, RFC-051 PR-1c) ===== -->
+        <!--
+            Used by WikiContentNormalizer to strip nav/footer/script/style/aside
+            and ad-class nodes from URL/HTML uploads before chunking. Small
+            (~430KB), no transitive deps, JVM-only — safe for the desktop bundle.
+            Tika is intentionally not pulled in: DocumentExtractTool already
+            covers PDF/Office via pdftotext, pdfplumber, and Java fallbacks.
+        -->
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>1.18.3</version>
+        </dependency>
+
         <!-- ===== Database Migration (Flyway) ===== -->
         <dependency>
             <groupId>org.flywaydb</groupId>
