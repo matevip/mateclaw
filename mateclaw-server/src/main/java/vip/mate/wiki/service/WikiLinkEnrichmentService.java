@@ -11,6 +11,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Service;
 import vip.mate.wiki.WikiProperties;
+import vip.mate.wiki.dto.EnrichmentBatchPlan;
 import vip.mate.wiki.dto.EnrichmentPlan;
 import vip.mate.wiki.dto.EnrichmentReplacement;
 import vip.mate.wiki.job.WikiModelRoutingService;
@@ -67,21 +68,75 @@ public class WikiLinkEnrichmentService {
 
     /**
      * Batch-enrich all pages in a KB.
+     * <p>
+     * Internally honors {@code mate.wiki.enrich-batch-size}: when {@code 1}
+     * (the default), pages are enriched one-per-LLM-call as before. When
+     * larger, pages are grouped into batches and the LLM is asked for a
+     * multi-page replacement plan. Pages whose body exceeds
+     * {@code enrich-batch-per-page-max-chars} fall through to single-page
+     * mode so the batch prompt stays bounded.
      */
     public void enrichAllPages(Long kbId, Long modelId) {
         List<WikiPageEntity> pages = pageService.listByKbIdWithContent(kbId);
+        if (pages.isEmpty()) return;
         String index = buildIndexPrompt(kbId);
-        Semaphore sem = new Semaphore(wikiProperties.getMaxParallelPhaseBPages());
 
-        for (WikiPageEntity page : pages) {
-            sem.acquireUninterruptibly();
-            WIKI_EXECUTOR.submit(() -> {
-                try {
-                    enrichPageWithIndex(page, modelId, index);
-                } finally {
-                    sem.release();
-                }
-            });
+        int batchSize = Math.max(1, wikiProperties.getEnrichBatchSize());
+        int perPageCap = Math.max(500, wikiProperties.getEnrichBatchPerPageMaxChars());
+
+        if (batchSize <= 1) {
+            // Legacy per-page parallel path.
+            Semaphore sem = new Semaphore(wikiProperties.getMaxParallelPhaseBPages());
+            for (WikiPageEntity page : pages) {
+                sem.acquireUninterruptibly();
+                WIKI_EXECUTOR.submit(() -> {
+                    try {
+                        enrichPageWithIndex(page, modelId, index);
+                    } finally {
+                        sem.release();
+                    }
+                });
+            }
+            return;
+        }
+
+        // Split: oversized pages go solo so the batch prompt stays bounded.
+        List<WikiPageEntity> batchable = new ArrayList<>(pages.size());
+        List<WikiPageEntity> oversized = new ArrayList<>();
+        for (WikiPageEntity p : pages) {
+            if (p.getContent() != null && p.getContent().length() > perPageCap) {
+                oversized.add(p);
+            } else if (p.getContent() != null) {
+                batchable.add(p);
+            }
+        }
+
+        ChatModel chatModel = routingService.buildChatModel(modelId);
+
+        // Process batches sequentially — typical batch is ~5 pages, single LLM call,
+        // already a fraction of the cost of the previous one-per-page parallelism.
+        for (int i = 0; i < batchable.size(); i += batchSize) {
+            List<WikiPageEntity> batch = batchable.subList(i, Math.min(i + batchSize, batchable.size()));
+            try {
+                applyBatchEnrichment(batch, chatModel, index, perPageCap);
+            } catch (Exception e) {
+                log.warn("[WikiEnrich] Batch enrichment failed (size={}): {}", batch.size(), e.getMessage());
+            }
+        }
+
+        // Oversized pages fall back to single-page enrich, in parallel.
+        if (!oversized.isEmpty()) {
+            Semaphore sem = new Semaphore(wikiProperties.getMaxParallelPhaseBPages());
+            for (WikiPageEntity page : oversized) {
+                sem.acquireUninterruptibly();
+                WIKI_EXECUTOR.submit(() -> {
+                    try {
+                        enrichPageWithIndex(page, modelId, index);
+                    } finally {
+                        sem.release();
+                    }
+                });
+            }
         }
     }
 
@@ -89,6 +144,34 @@ public class WikiLinkEnrichmentService {
         if (page == null || page.getContent() == null) return;
         ChatModel chatModel = routingService.buildChatModel(modelId);
         applyEnrichment(page, chatModel, index);
+    }
+
+    /**
+     * Run one batch LLM call covering N pages and apply each per-slug plan
+     * independently. A malformed plan for one slug doesn't affect peers.
+     */
+    private void applyBatchEnrichment(List<WikiPageEntity> batch, ChatModel chatModel,
+                                       String index, int perPageCap) {
+        if (batch.isEmpty()) return;
+        EnrichmentBatchPlan batchPlan = requestBatchPlan(chatModel, batch, index, perPageCap);
+        if (batchPlan == null || batchPlan.isEmpty()) return;
+
+        for (WikiPageEntity page : batch) {
+            EnrichmentPlan plan = batchPlan.plans().get(page.getSlug());
+            if (plan == null || plan.isEmpty()) continue;
+            WikiEnrichmentApplier.Result result = WikiEnrichmentApplier.apply(page.getContent(), plan);
+            if (result instanceof WikiEnrichmentApplier.Result.Rejected rejected) {
+                log.warn("[WikiEnrich] Batch plan rejected for slug={}: {}", page.getSlug(), rejected.reason());
+                continue;
+            }
+            if (result instanceof WikiEnrichmentApplier.Result.Applied applied) {
+                page.setContent(applied.content());
+                page.setOutgoingLinks(pageService.extractLinksAsJson(applied.content()));
+                pageService.updateById(page);
+                log.info("[WikiEnrich] Batch applied {} replacements on slug={}",
+                        applied.replacementCount(), page.getSlug());
+            }
+        }
     }
 
     private void applyEnrichment(WikiPageEntity page, ChatModel chatModel, String index) {
@@ -207,6 +290,107 @@ public class WikiLinkEnrichmentService {
             .filter(p -> !"system".equals(p.getPageType()))
             .map(p -> p.getSlug() + " → " + p.getTitle())
             .collect(Collectors.joining("\n"));
+    }
+
+    /**
+     * Batch enrich prompt: ask the LLM for one JSON object keyed by slug.
+     * Returns {@code null} on any LLM call failure; per-slug parse failures
+     * yield empty plans (no-op for that page).
+     */
+    private EnrichmentBatchPlan requestBatchPlan(ChatModel chatModel,
+                                                   List<WikiPageEntity> batch,
+                                                   String index,
+                                                   int perPageCap) {
+        String systemPrompt = """
+            You are a wiki cross-referencing assistant.
+            Your ONLY job: emit a JSON replacement plan that wraps existing words/phrases
+            with [[wikilinks]] from the supplied wiki index — for EACH page in the batch.
+
+            Strict output contract — return ONLY this JSON object, nothing else:
+            {
+              "plans": {
+                "<page-slug>": {
+                  "replacements": [
+                    {"original": "<exact substring of that page>",
+                     "replacement": "[[<slug>]]" or "[[<slug>|<label>]]",
+                     "occurrence": <1-based int>}
+                  ]
+                },
+                "<another-page-slug>": { "replacements": [...] }
+              }
+            }
+
+            Rules — replacements that violate any rule will be rejected by the server,
+            but rejection is per-page: a bad plan for one slug does not waste the
+            others.
+            - Do NOT rewrite, translate, summarize, or add prose. Only wrap.
+            - Each "replacement" must contain exactly ONE wikilink and nothing else.
+            - The visible text of the wikilink (slug, or label after |) must equal
+              "original" byte-for-byte.
+            - Use slugs from the wiki index. Do not invent new slugs.
+            - "occurrence" is per-page and counts only matches outside existing [[...]].
+            - Keys in "plans" must match the page slugs exactly as supplied below.
+            - Returning an empty replacements array (or omitting a slug) is fine.
+            """;
+
+        StringBuilder user = new StringBuilder("Wiki Index (slug → title):\n").append(index)
+                .append("\n\nPages to enrich (")
+                .append(batch.size()).append(" total):\n");
+        for (WikiPageEntity p : batch) {
+            String body = p.getContent() == null ? "" : p.getContent();
+            boolean truncated = body.length() > perPageCap;
+            String shown = truncated ? body.substring(0, perPageCap) + "\n…(truncated)" : body;
+            user.append("\n### slug=").append(p.getSlug()).append("\n").append(shown).append("\n");
+        }
+
+        try {
+            ChatResponse response = chatModel.call(
+                new Prompt(List.of(
+                    new SystemMessage(systemPrompt),
+                    new UserMessage(user.toString())
+                ))
+            );
+            String text = response.getResult().getOutput().getText();
+            return parseBatchPlan(text);
+        } catch (Exception e) {
+            log.warn("[WikiEnrich] Batch plan request failed (size={}): {}", batch.size(), e.getMessage());
+            return null;
+        }
+    }
+
+    EnrichmentBatchPlan parseBatchPlan(String text) {
+        if (text == null || text.isBlank()) return null;
+        String trimmed = text.trim();
+        if (trimmed.startsWith("```")) {
+            int firstNl = trimmed.indexOf('\n');
+            int lastFence = trimmed.lastIndexOf("```");
+            if (firstNl > 0 && lastFence > firstNl) {
+                trimmed = trimmed.substring(firstNl + 1, lastFence).trim();
+            }
+        }
+        JsonNode root = null;
+        try {
+            root = objectMapper.readTree(trimmed);
+        } catch (Exception ignored) {
+            int s = trimmed.indexOf('{');
+            int e = trimmed.lastIndexOf('}');
+            if (s >= 0 && e > s) {
+                try {
+                    root = objectMapper.readTree(trimmed.substring(s, e + 1));
+                } catch (Exception ignored2) {
+                    return null;
+                }
+            }
+        }
+        if (root == null) return null;
+        JsonNode plansNode = root.path("plans");
+        if (!plansNode.isObject()) return new EnrichmentBatchPlan(Map.of());
+        Map<String, EnrichmentPlan> out = new HashMap<>();
+        plansNode.fields().forEachRemaining(entry -> {
+            EnrichmentPlan plan = planFromJson(entry.getValue());
+            if (plan != null) out.put(entry.getKey(), plan);
+        });
+        return new EnrichmentBatchPlan(out);
     }
 
     /**

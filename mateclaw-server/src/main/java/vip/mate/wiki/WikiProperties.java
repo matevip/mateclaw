@@ -178,4 +178,26 @@ public class WikiProperties {
      * and weaker models may need the fallback).
      */
     private boolean useStructuredRoute = false;
+
+    /**
+     * RFC-051 follow-up: how many pages the enrich service packs into a single
+     * LLM call. {@code 1} (default) reproduces the legacy behavior of one
+     * call per page. {@code 5}–{@code 10} is reasonable for most chat models;
+     * weaker locally-served models may need to stay at 1.
+     * <p>
+     * Larger batches reduce LLM cost roughly proportional to the batch size,
+     * but each batch's prompt grows linearly with the included page bodies,
+     * so very long pages still benefit from single-page mode. Pages exceeding
+     * {@link #enrichBatchPerPageMaxChars} are excluded from the batch and
+     * enriched individually.
+     */
+    private int enrichBatchSize = 1;
+
+    /**
+     * RFC-051 follow-up: per-page content cap when packing pages into an
+     * enrich batch. Pages whose body exceeds this size fall through to a
+     * single-page enrich call so the batch prompt stays bounded. The cap
+     * applies only to the prompt; the applier always sees full content.
+     */
+    private int enrichBatchPerPageMaxChars = 3000;
 }
