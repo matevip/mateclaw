@@ -374,8 +374,30 @@ public class WikiPageService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * RFC-051 PR-2: a page is protected from AI / tool / batch deletion when
+     * either {@code locked == 1} or {@code pageType == "system"}. The system
+     * pages ({@code overview} / {@code log}) carry both flags; users may set
+     * {@code locked} on individual curated pages without making them system.
+     */
+    public static boolean isProtected(WikiPageEntity page) {
+        if (page == null) return false;
+        if (page.getLocked() != null && page.getLocked() == 1) return true;
+        return "system".equals(page.getPageType());
+    }
+
     @Transactional
     public void delete(Long kbId, String slug) {
+        WikiPageEntity existing = getBySlug(kbId, slug);
+        if (existing == null) {
+            // Nothing to delete; preserve idempotent behavior.
+            return;
+        }
+        if (isProtected(existing)) {
+            log.warn("[Wiki] Refusing to delete protected page kbId={}, slug={}, type={}, locked={}",
+                    kbId, slug, existing.getPageType(), existing.getLocked());
+            return;
+        }
         pageMapper.delete(
                 new LambdaQueryWrapper<WikiPageEntity>()
                         .eq(WikiPageEntity::getKbId, kbId)
@@ -409,6 +431,9 @@ public class WikiPageService {
         int deleted = 0;
         for (WikiPageEntity page : allPages) {
             if ("manual".equals(page.getLastUpdatedBy())) continue;
+            // RFC-051 PR-2: never sweep system / locked pages, even when their
+            // source raw is being reprocessed.
+            if (isProtected(page)) continue;
             List<Long> sourceIds = parseSourceRawIds(page.getSourceRawIds());
             if (sourceIds.contains(rawId)) {
                 if (sourceIds.size() == 1) {

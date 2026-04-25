@@ -134,18 +134,23 @@ public class WikiTool {
         List<WikiPageLite> pages;
         if (query != null && !query.isBlank()) {
             List<Long> ids = pageService.searchPages(kbId, query).stream()
+                    .filter(p -> !"system".equals(p.getPageType()))
                     .map(WikiPageEntity::getId).limit(30).toList();
             if (ids.isEmpty()) {
                 pages = List.of();
             } else {
                 pages = pageService.listSummaries(kbId).stream()
+                        .filter(p -> !"system".equals(p.getPageType()))
                         .filter(p -> ids.stream().anyMatch(id -> Objects.equals(id, p.getId())))
-                        .map(p -> new WikiPageLite(p.getId(), p.getSlug(), p.getTitle(), p.getSummary()))
+                        .map(p -> new WikiPageLite(p.getId(), p.getSlug(), p.getTitle(), p.getSummary(), p.getPageType()))
                         .toList();
             }
         } else {
+            // RFC-051 PR-2: hide system pages (overview / log) from default listings.
+            // Agents can still wiki_read_page("overview") explicitly.
             pages = pageService.listSummaries(kbId).stream()
-                    .map(p -> new WikiPageLite(p.getId(), p.getSlug(), p.getTitle(), p.getSummary()))
+                    .filter(p -> !"system".equals(p.getPageType()))
+                    .map(p -> new WikiPageLite(p.getId(), p.getSlug(), p.getTitle(), p.getSummary(), p.getPageType()))
                     .toList();
         }
 
@@ -380,6 +385,13 @@ public class WikiTool {
 
         if ("manual".equals(page.getLastUpdatedBy())) {
             return error("Cannot delete manually curated page: " + page.getTitle() + ". Please manage via admin UI.");
+        }
+
+        // RFC-051 PR-2: refuse to delete system pages (overview/log) or any
+        // user-locked page, even when the agent has tool access.
+        if (WikiPageService.isProtected(page)) {
+            return error("Cannot delete protected page: " + page.getTitle()
+                    + (page.getLocked() != null && page.getLocked() == 1 ? " (locked)" : " (system)"));
         }
 
         pageService.delete(kbId, slug);

@@ -35,7 +35,7 @@ public interface WikiPageMapper extends BaseMapper<WikiPageEntity> {
     /**
      * Batch-fetch lightweight page projections by IDs (no content).
      */
-    @Select("<script>SELECT id, slug, title, summary FROM mate_wiki_page " +
+    @Select("<script>SELECT id, slug, title, summary, page_type AS pageType FROM mate_wiki_page " +
             "WHERE id IN <foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach> " +
             "AND deleted = 0</script>")
     List<WikiPageLite> selectBatchLite(@Param("ids") Collection<Long> ids);
@@ -43,7 +43,7 @@ public interface WikiPageMapper extends BaseMapper<WikiPageEntity> {
     /**
      * List all pages as lightweight projections (no content).
      */
-    @Select("SELECT id, slug, title, summary FROM mate_wiki_page " +
+    @Select("SELECT id, slug, title, summary, page_type AS pageType FROM mate_wiki_page " +
             "WHERE kb_id = #{kbId} AND deleted = 0 ORDER BY update_time DESC")
     List<WikiPageLite> selectAllLite(@Param("kbId") Long kbId);
 

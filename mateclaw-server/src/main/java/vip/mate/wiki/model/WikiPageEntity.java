@@ -58,6 +58,13 @@ public class WikiPageEntity {
     /** 最后更新者：ai / manual */
     private String lastUpdatedBy;
 
+    /**
+     * RFC-051 PR-2: protection flag. {@code locked=1} blocks AI/tool/UI deletion
+     * and batch cleanup; combined with {@code pageType="system"} for the
+     * built-in {@code overview} / {@code log} pages.
+     */
+    private Integer locked;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

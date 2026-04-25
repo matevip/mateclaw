@@ -117,6 +117,8 @@ public class HybridRetriever {
         for (RankedItem ri : fused.stream().limit(topK).toList()) {
             WikiPageLite lite = liteMap.get(ri.pageId);
             if (lite == null) continue;
+            // RFC-051 PR-2: hide system pages (overview / log) from search results.
+            if (lite.isSystem()) continue;
 
             String snippet = null;
             if (!ri.matchedBy.contains("relation_boost")) {

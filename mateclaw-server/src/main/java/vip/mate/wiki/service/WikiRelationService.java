@@ -68,6 +68,8 @@ public class WikiRelationService {
 
         return topIds.stream()
             .filter(liteMap::containsKey)
+            // RFC-051 PR-2: hide system pages (overview / log) from related results.
+            .filter(pid -> !liteMap.get(pid).isSystem())
             .map(pid -> new RelatedPageResult(
                 liteMap.get(pid).slug(),
                 liteMap.get(pid).title(),

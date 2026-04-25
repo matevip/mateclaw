@@ -70,6 +70,14 @@ public class WikiProcessingService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DocumentPreprocessService preprocessService;
 
+    /**
+     * RFC-051 PR-2: ensures system-page scaffold (overview / log) exists for
+     * the KB before each ingest. Optional so the older lazy-only unit tests
+     * don't need to wire it.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private WikiScaffoldService scaffoldService;
+
     /** Parallel chunk / material processing executor (JDK 21 virtual threads) */
     public static final ExecutorService WIKI_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -156,6 +164,12 @@ public class WikiProcessingService {
         }
 
         kbService.updateStatus(kb.getId(), "processing");
+
+        // RFC-051 PR-2: every ingest path opens with a scaffold check so older
+        // KBs get their overview / log pages on first use without a manual step.
+        if (scaffoldService != null) {
+            scaffoldService.ensureScaffold(kb.getId());
+        }
 
         // RFC-051 PR-1b: lazy ingest short-circuit. Per KB config, skip the heavy
         // pipeline entirely: extract → chunk → embed → completed. 0 pages is the
