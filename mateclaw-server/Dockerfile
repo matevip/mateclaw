@@ -66,23 +66,26 @@ WORKDIR /app
 #
 # PDF extraction toolchain — DocumentExtractTool tries pdftotext first, then
 # Python pdfplumber/pypdf, then falls through to a naive Java parser that
-# reads bytes as ISO_8859_1 (mojibake for CJK). Without poppler-utils and
-# python3, Docker always hits the naive path and feeds garbled text to the
-# Wiki pipeline. Installing these puts the Docker runtime on the same
-# extraction path as local Mac (brew poppler + pyenv pdfplumber).
-# Tesseract + chi-sim is the final OCR fallback for scanned PDFs.
+# reads bytes as ISO_8859_1 (mojibake for CJK). Without poppler-utils the
+# Docker image always hits the naive path and feeds garbled text to the
+# Wiki pipeline.
+#
+# We install poppler-utils (backend 1) and tesseract (backend 4), which
+# together cover the vast majority of PDFs including scanned docs. The
+# Python backend is intentionally skipped — pip install against aliyun
+# mirrors in CN networks hits transient hash-mismatch failures on cffi /
+# cryptography transitive deps, and RFC-051 PR-1c will replace the Python
+# hop with JVM-native Tika extraction anyway. Leaving it out keeps the
+# image ~200 MB smaller and the build reproducible.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         openjdk-21-jre-headless \
         fonts-noto-cjk \
         fonts-noto-color-emoji \
         poppler-utils \
-        python3 \
-        python3-pip \
         tesseract-ocr \
         tesseract-ocr-chi-sim \
         tzdata \
-    && pip3 install --no-cache-dir --break-system-packages pdfplumber pypdf \
     && rm -rf /var/lib/apt/lists/*
 
 # Tell Playwright Java where Microsoft's image stored the browsers.
