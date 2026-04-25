@@ -1340,6 +1340,10 @@ export default {
     loadMore: 'Load {n} more',
     filteredByRaw: 'Filtered by source material',
     clearFilter: 'Clear filter',
+    systemPageBadge: 'System',
+    systemPageHint: 'overview / log are built-in system pages — they can\'t be deleted',
+    lockedPageBadge: 'Locked',
+    lockedPageHint: 'This page is locked — AI tools and batch operations skip it',
     pageTypes: {
       concept: 'Concepts',
       person: 'People',

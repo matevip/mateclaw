@@ -46,8 +46,20 @@ export interface WikiPage {
   version: number
   lastUpdatedBy: string
   pageType?: string | null
+  // RFC-051 PR-2: locked=1 blocks AI/tool/UI deletion (combined with pageType=system
+  // for the built-in overview/log pages, but users can lock any page).
+  locked?: number | null
+  // RFC-051 PR-7: archived=1 hides the page from default list/search/related.
+  archived?: number | null
   createTime: string
   updateTime: string
+}
+
+/** RFC-051 PR-8: shared protection check used by viewer + list to gate delete UI. */
+export function isProtectedPage(page: WikiPage | null | undefined): boolean {
+  if (!page) return false
+  if (page.pageType === 'system') return true
+  return page.locked === 1
 }
 
 export const useWikiStore = defineStore('wiki', () => {

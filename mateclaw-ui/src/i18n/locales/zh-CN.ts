@@ -1350,6 +1350,10 @@ export default {
     loadMore: '加载更多 {n} 条',
     filteredByRaw: '按原始材料过滤',
     clearFilter: '清除过滤',
+    systemPageBadge: '系统页',
+    systemPageHint: 'overview / log 是知识库自带的系统页，无法删除',
+    lockedPageBadge: '已锁定',
+    lockedPageHint: '该页被手动锁定，AI 工具与批量操作不会修改或删除',
     pageTypes: {
       concept: '概念',
       person: '人物',

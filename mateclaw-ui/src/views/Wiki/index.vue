@@ -121,20 +121,29 @@
                   <div v-if="!collapsedGroups.has(group.type)" class="group-items">
                     <div
                       v-for="page in paginatedGroupPages(group)" :key="page.slug"
-                      class="page-item" :class="{ active: !batchMode && store.currentPage?.slug === page.slug }"
+                      class="page-item"
+                      :class="{
+                        active: !batchMode && store.currentPage?.slug === page.slug,
+                        'page-item--system': page.pageType === 'system'
+                      }"
                       @click="batchMode ? toggleSelect(page.slug) : openPage(page.slug)"
                     >
+                      <!-- RFC-051 PR-8: batch checkbox is disabled for protected pages so a stray
+                           batch-delete can't drag in overview/log or any locked page. -->
                       <input
                         v-if="batchMode"
                         type="checkbox"
                         :checked="selectedSlugs.includes(page.slug)"
+                        :disabled="isProtectedPage(page)"
                         class="page-checkbox"
-                        @click.stop="toggleSelect(page.slug)"
+                        @click.stop="!isProtectedPage(page) && toggleSelect(page.slug)"
                       />
                       <div class="page-item-body">
                         <div class="page-item-title">{{ page.title }}</div>
                         <div class="page-item-meta">
                           <span v-if="page.lastUpdatedBy === 'manual'" class="edit-dot manual" title="Manual edit"></span>
+                          <span v-if="page.pageType === 'system'" class="page-flag page-flag--system">{{ t('wiki.systemPageBadge') }}</span>
+                          <span v-else-if="page.locked === 1" class="page-flag page-flag--locked">{{ t('wiki.lockedPageBadge') }}</span>
                           <span class="meta-text">v{{ page.version }}</span>
                         </div>
                       </div>
@@ -156,20 +165,27 @@
               <div class="page-list" v-else>
                 <div
                   v-for="page in paginatedSearch" :key="page.slug"
-                  class="page-item" :class="{ active: !batchMode && store.currentPage?.slug === page.slug }"
+                  class="page-item"
+                  :class="{
+                    active: !batchMode && store.currentPage?.slug === page.slug,
+                    'page-item--system': page.pageType === 'system'
+                  }"
                   @click="batchMode ? toggleSelect(page.slug) : openPage(page.slug)"
                 >
                   <input
                     v-if="batchMode"
                     type="checkbox"
                     :checked="selectedSlugs.includes(page.slug)"
+                    :disabled="isProtectedPage(page)"
                     class="page-checkbox"
-                    @click.stop="toggleSelect(page.slug)"
+                    @click.stop="!isProtectedPage(page) && toggleSelect(page.slug)"
                   />
                   <div class="page-item-body">
                     <div class="page-item-title">{{ page.title }}</div>
                     <div class="page-item-meta">
                       <span class="type-chip">{{ formatGroupLabel(page.pageType || 'other') }}</span>
+                      <span v-if="page.pageType === 'system'" class="page-flag page-flag--system">{{ t('wiki.systemPageBadge') }}</span>
+                      <span v-else-if="page.locked === 1" class="page-flag page-flag--locked">{{ t('wiki.lockedPageBadge') }}</span>
                       <span class="meta-text">v{{ page.version }}</span>
                     </div>
                   </div>
@@ -255,7 +271,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useWikiStore } from '@/stores/useWikiStore'
+import { useWikiStore, isProtectedPage } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
 import RawMaterialPanel from './components/RawMaterialPanel.vue'
 import WikiPageViewer from './components/WikiPageViewer.vue'
@@ -631,6 +647,15 @@ onMounted(() => {
 .edit-dot { width: 5px; height: 5px; border-radius: 9999px; flex-shrink: 0; }
 .edit-dot.manual { background: var(--mc-primary); }
 .page-checkbox { flex-shrink: 0; cursor: pointer; }
+.page-checkbox:disabled { cursor: not-allowed; opacity: 0.4; }
+
+/* RFC-051 PR-8: protection flag chips inside the page-item meta line. */
+.page-flag { font-size: 10px; padding: 1px 6px; border-radius: 99px; font-weight: 600; }
+.page-flag--system { background: var(--mc-primary-bg); color: var(--mc-primary); border: 1px solid var(--mc-primary); }
+.page-flag--locked { background: var(--mc-bg-elevated); color: var(--mc-text-secondary); border: 1px solid var(--mc-border-light); }
+
+/* Subtle accent on the row itself so system pages read as "managed by the system". */
+.page-item--system { border-left: 2px solid var(--mc-primary); padding-left: 6px; }
 
 .load-more-btn {
   width: 100%;
