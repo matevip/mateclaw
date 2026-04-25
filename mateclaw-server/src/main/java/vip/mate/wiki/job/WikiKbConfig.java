@@ -36,4 +36,15 @@ public class WikiKbConfig {
 
     /** Global fallback model chain for all steps in this KB */
     private List<Long> fallbackModelIds;
+
+    /**
+     * RFC-051 PR-6b follow-up: per-KB opt-in for structured route output.
+     * <p>
+     * Different KBs run different chat models — DashScope and Anthropic
+     * follow the format hint reliably; weaker locally-served Ollama models
+     * may not. Keeping the flag per-KB lets users flip it where it pays
+     * off. {@code null} (the common case) falls back to
+     * {@link vip.mate.wiki.WikiProperties#isUseStructuredRoute()}.
+     */
+    private Boolean useStructuredRoute;
 }

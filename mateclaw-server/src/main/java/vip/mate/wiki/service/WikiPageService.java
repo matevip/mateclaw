@@ -68,24 +68,28 @@ public class WikiPageService {
     }
 
     /**
-     * 列出知识库的所有页面（不含 content）
+     * 列出知识库的所有页面（不含 content）。
+     * RFC-051 PR-7: archived 页面默认不返回。
      */
     public List<WikiPageEntity> listByKbId(Long kbId) {
         List<WikiPageEntity> pages = pageMapper.selectList(
                 new LambdaQueryWrapper<WikiPageEntity>()
                         .eq(WikiPageEntity::getKbId, kbId)
+                        .ne(WikiPageEntity::getArchived, 1)
                         .orderByAsc(WikiPageEntity::getTitle));
         pages.forEach(p -> p.setContent(null));
         return pages;
     }
 
     /**
-     * 列出知识库所有页面（含 content，用于全文搜索）
+     * 列出知识库所有页面（含 content，用于全文搜索）。
+     * RFC-051 PR-7: archived 页面不参与 enrich / 全文搜索遍历。
      */
     public List<WikiPageEntity> listByKbIdWithContent(Long kbId) {
         return pageMapper.selectList(
                 new LambdaQueryWrapper<WikiPageEntity>()
                         .eq(WikiPageEntity::getKbId, kbId)
+                        .ne(WikiPageEntity::getArchived, 1)
                         .orderByAsc(WikiPageEntity::getTitle));
     }
 
@@ -226,6 +230,10 @@ public class WikiPageService {
         List<WikiPageEntity> pages = pageMapper.selectList(
                 new LambdaQueryWrapper<WikiPageEntity>()
                         .eq(WikiPageEntity::getKbId, kbId)
+                        // RFC-051 PR-7: a raw's archived pages stop showing up in the
+                        // sidebar's "filter by raw" listing. Lineage is still queryable
+                        // by hitting the page directly via slug.
+                        .ne(WikiPageEntity::getArchived, 1)
                         .like(WikiPageEntity::getSourceRawIds, rawId.toString())
                         .orderByAsc(WikiPageEntity::getTitle));
         pages.forEach(p -> p.setContent(null));

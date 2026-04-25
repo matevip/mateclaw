@@ -284,9 +284,25 @@ public class WikiProcessingService {
             String finalStatus;
             String finalDetail = null;
             if (totalPages == 0) {
-                rawService.updateProcessingStatus(rawId, "failed", "No pages generated from LLM response");
-                finalStatus = "failed";
-                finalDetail = "No pages generated from LLM response";
+                // RFC-051 follow-up: previously this was an unconditional "failed".
+                // But chunks were already persisted (and the materials are searchable
+                // via wiki_semantic_search) — the only thing that actually went wrong
+                // was the LLM not synthesizing pages. Treat that as partial when chunks
+                // landed: search works, the agent can still wiki_compile_page on demand,
+                // and the row is rerun-able. Reserve "failed" for the case where nothing
+                // got indexed at all.
+                if (totalChunks > 0) {
+                    finalDetail = "Indexed " + totalChunks
+                            + " chunk(s) but no pages were generated. Search and wiki_compile_page still work; reprocess to retry page generation.";
+                    rawService.updateProcessingStatus(rawId, "partial", finalDetail);
+                    finalStatus = "partial";
+                    log.info("[Wiki] Eager produced 0 pages but {} chunks indexed; marking partial for raw={}",
+                            totalChunks, rawId);
+                } else {
+                    rawService.updateProcessingStatus(rawId, "failed", "No pages generated from LLM response");
+                    finalStatus = "failed";
+                    finalDetail = "No pages generated from LLM response";
+                }
             } else if (failedChunks > 0 || failedPages > 0) {
                 // 部分成功：chunk 整体失败 或 chunk 内有 page 失败
                 // （M2 v2 follow-up：page 级失败原本被计入 completed，现在正确归 partial）
@@ -362,7 +378,10 @@ public class WikiProcessingService {
             // 如果未来加了事务包裹 processRawMaterial，这里的异步任务需要改用
             // TransactionSynchronizationManager.registerSynchronization(afterCommit)
             // 否则新线程会查不到 chunk（事务未提交）导致 embedding 静默跳过。
-            if (totalPages > 0) {
+            // RFC-051 follow-up: trigger embedding whenever chunks landed, not only when
+            // pages were produced. Otherwise the partial-with-no-pages case above ends up
+            // with chunks in DB but never embedded, so semantic search silently misses them.
+            if (totalChunks > 0) {
                 final Long fKbId = kb.getId();
                 WIKI_EXECUTOR.submit(() -> {
                     try {
@@ -667,9 +686,11 @@ public class WikiProcessingService {
                 .replace("{raw_content}", textContent);
 
         // RFC-051 PR-6b: optionally inject Spring AI's structured-output hint so the
-        // LLM produces strict RouteResult JSON. Default off; flip via mate.wiki.use-structured-route.
+        // LLM produces strict RouteResult JSON. KB config wins; falls back to global
+        // mate.wiki.use-structured-route default when the KB hasn't expressed a preference.
+        boolean useStructured = resolveStructuredRouteFlag(kb);
         org.springframework.ai.converter.BeanOutputConverter<vip.mate.wiki.dto.RouteResult> routeConverter =
-                properties.isUseStructuredRoute()
+                useStructured
                         ? new org.springframework.ai.converter.BeanOutputConverter<>(vip.mate.wiki.dto.RouteResult.class)
                         : null;
         if (routeConverter != null) {
@@ -1787,6 +1808,24 @@ public class WikiProcessingService {
             }
             log.warn("[Wiki] Failed to parse JSON response: {}", e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * RFC-051 PR-6b follow-up: KB-level override for structured route output,
+     * falling back to the global property when the KB hasn't set a preference.
+     * Parse failures fall back to global too — never block ingest on bad config.
+     */
+    private boolean resolveStructuredRouteFlag(WikiKnowledgeBaseEntity kb) {
+        boolean fallback = properties.isUseStructuredRoute();
+        if (kb == null || kb.getConfigContent() == null) return fallback;
+        try {
+            WikiKbConfig config = objectMapper.readValue(kb.getConfigContent(), WikiKbConfig.class);
+            return config.getUseStructuredRoute() != null
+                    ? config.getUseStructuredRoute()
+                    : fallback;
+        } catch (Exception e) {
+            return fallback;
         }
     }
 
