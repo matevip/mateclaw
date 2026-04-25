@@ -55,6 +55,10 @@ public class WikiTool {
     @Autowired(required = false)
     private WikiRawMaterialMapper rawMaterialMapper;
 
+    /** RFC-051 PR-4: optional on-demand compile. Tool surface skipped when missing. */
+    @Autowired(required = false)
+    private WikiCompileService compileService;
+
     public WikiTool(WikiPageService pageService,
                      WikiKnowledgeBaseService kbService,
                      WikiRawMaterialService rawService,
@@ -359,6 +363,90 @@ public class WikiTool {
                 .set("title", page.getTitle())
                 .set("slug", page.getSlug())
                 .set("kbId", kbId)
+                .toString();
+    }
+
+    // ==================== RFC-051 PR-4: on-demand compile + batch read ====================
+
+    @Tool(description = """
+            Compile (or update) a single wiki page about a topic from existing chunks.
+            Use this AFTER lazy ingest when search has surfaced relevant content but no
+            page exists yet. The page will cite only the evidence chunks the compile
+            prompt actually used — not every chunk of the source raw material.
+            Set slug to control the page slug; otherwise it's derived from the topic.
+            """)
+    public String wiki_compile_page(
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Topic to compile a page about (natural language)") String topic,
+            @ToolParam(description = "Optional explicit slug for the page", required = false) String slug,
+            @ToolParam(description = "Max evidence chunks (default 8, max 20)", required = false) Integer maxEvidenceChunks) {
+
+        if (topic == null || topic.isBlank()) {
+            return error("topic is required");
+        }
+        Long kbId = resolveKbId(agentId);
+        if (kbId == null) return error("No wiki knowledge base found for this agent");
+        if (compileService == null) return error("Compile service not available");
+
+        try {
+            WikiCompileService.CompileResult res = compileService.compilePage(kbId, topic, slug, maxEvidenceChunks);
+            return JSONUtil.createObj()
+                    .set("ok", true)
+                    .set("slug", res.slug())
+                    .set("title", res.title())
+                    .set("evidenceChunks", res.evidenceChunkCount())
+                    .set("created", res.created())
+                    .toString();
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return error(e.getMessage());
+        } catch (Exception e) {
+            log.warn("[WikiTool] wiki_compile_page failed: {}", e.getMessage());
+            return error("Compile failed: " + e.getMessage());
+        }
+    }
+
+    @Tool(description = """
+            Read multiple wiki pages in one call. Prefer this over multiple wiki_read_page
+            calls when you already know the slugs you need. The response is capped per
+            page; protected/system pages can still be read explicitly here.
+            """)
+    public String wiki_read_many(
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Comma-separated slugs (max 10)") String slugs,
+            @ToolParam(description = "Max chars returned per page (default 2000, max 8000)", required = false) Integer maxCharsPerPage) {
+
+        if (slugs == null || slugs.isBlank()) return error("slugs is required");
+        Long kbId = resolveKbId(agentId);
+        if (kbId == null) return error("No wiki knowledge base found for this agent");
+
+        int cap = (maxCharsPerPage == null || maxCharsPerPage <= 0) ? 2000 : Math.min(8000, maxCharsPerPage);
+        List<String> slugList = Arrays.stream(slugs.split(","))
+                .map(String::trim).filter(s -> !s.isEmpty()).limit(10).toList();
+        if (slugList.isEmpty()) return error("No valid slugs supplied");
+
+        JSONArray arr = new JSONArray();
+        for (String s : slugList) {
+            WikiPageEntity page = pageService.getBySlug(kbId, s);
+            if (page == null) {
+                arr.add(JSONUtil.createObj().set("slug", s).set("found", false));
+                continue;
+            }
+            String content = page.getContent() == null ? "" : page.getContent();
+            boolean truncated = content.length() > cap;
+            if (truncated) content = content.substring(0, cap) + "\n…(truncated)";
+            arr.add(JSONUtil.createObj()
+                    .set("slug", s)
+                    .set("found", true)
+                    .set("title", page.getTitle())
+                    .set("summary", page.getSummary())
+                    .set("content", content)
+                    .set("truncated", truncated));
+            pageService.trackReference(kbId, s);
+        }
+        return JSONUtil.createObj()
+                .set("kbId", kbId)
+                .set("requestedCount", slugList.size())
+                .set("pages", arr)
                 .toString();
     }
 

@@ -62,6 +62,36 @@ public class WikiCitationService {
         log.debug("[WikiCitation] Built citations for pageId={}, kbId={}", pageId, kbId);
     }
 
+    /**
+     * RFC-051 PR-4: rebuild citations from a specific list of evidence chunks
+     * rather than the union of all chunks for the page's source raws. Used by
+     * {@code WikiCompileService} so on-demand pages cite only the chunks the
+     * compile prompt actually saw — keeping relation/citation signals clean.
+     * <p>
+     * Falls back to the raw-level rebuild if the evidence list is null/empty,
+     * so callers don't have to special-case "no evidence found".
+     */
+    public void buildCitations(Long pageId, Long kbId, List<Long> evidenceChunkIds) {
+        if (evidenceChunkIds == null || evidenceChunkIds.isEmpty()) {
+            buildCitations(pageId, kbId);
+            return;
+        }
+        WikiPageEntity page = pageMapper.selectById(pageId);
+        if (page == null) return;
+
+        citationMapper.softDeleteByPageId(pageId);
+        for (Long chunkId : evidenceChunkIds) {
+            WikiPageCitationEntity citation = new WikiPageCitationEntity();
+            citation.setPageId(pageId);
+            citation.setChunkId(chunkId);
+            citation.setConfidence(BigDecimal.ONE);
+            citation.setCreatedBy("compile");
+            citationMapper.insert(citation);
+        }
+        log.info("[WikiCitation] Built {} evidence citations for pageId={}, kbId={}",
+                evidenceChunkIds.size(), pageId, kbId);
+    }
+
     private List<Long> parseRawIds(String json) {
         if (json == null || json.isBlank()) return List.of();
         try {
