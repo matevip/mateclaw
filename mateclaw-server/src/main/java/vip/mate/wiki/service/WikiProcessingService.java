@@ -484,6 +484,13 @@ public class WikiProcessingService {
                     return;
                 }
                 try {
+                    // RFC-051 PR-9: skip remaining chunks if the user deleted the raw
+                    // while earlier chunks were still in flight. Counts as a "failed chunk"
+                    // for terminal-status accounting (not actually failed, just abandoned).
+                    if (isAborted(raw.getId(), "chunk " + (chunkIndex + 1) + "/" + totalChunks)) {
+                        failedChunks.incrementAndGet();
+                        return;
+                    }
                     log.info("[Wiki] Processing chunk {}/{}: {} chars", chunkIndex + 1, totalChunks, chunk.length());
                     int pages = processChunk(kb, raw, chunk, existingPagesIndex, documentMap);
                     totalPages.addAndGet(pages);
@@ -606,6 +613,7 @@ public class WikiProcessingService {
                 new SystemMessage(systemPrompt),
                 new UserMessage(userPrompt)
         ));
+        if (isAborted(raw.getId(), "single-chunk legacy")) return 0;
         String llmResponse = callLlmWithResilientRetry(prompt, "chunk of raw=" + raw.getId(),
                 kb.getId(), vip.mate.wiki.job.WikiJobStep.CREATE_PAGE);
 
@@ -672,6 +680,7 @@ public class WikiProcessingService {
                 new SystemMessage(routeSystem),
                 new UserMessage(routeUser)
         ));
+        if (isAborted(rawId, "route phase")) return 0;
         String routeResponse = callLlmWithResilientRetry(routePrompt, "route chunk of raw=" + rawId,
                 kbId, vip.mate.wiki.job.WikiJobStep.ROUTE);
 
@@ -900,6 +909,10 @@ public class WikiProcessingService {
                     new UserMessage(batchUser)
             ));
 
+            if (isAborted(rawId, "batch-create sub-batch " + (bStart / batchSize + 1))) {
+                // Abandon remaining sub-batches; return however many pages we already created.
+                return totalCreated;
+            }
             String batchResponse = callLlmWithResilientRetry(batchPrompt,
                     "batch-create " + subBatch.size() + " pages of raw=" + rawId
                     + " subBatch=" + (bStart / batchSize + 1),
@@ -1091,6 +1104,7 @@ public class WikiProcessingService {
                 new SystemMessage(createSystem),
                 new UserMessage(createUser)
         ));
+        if (isAborted(raw.getId(), "retry-create slug=" + slug)) return null;
         return callLlmWithResilientRetry(prompt, "retry-create slug=" + slug + " of raw=" + raw.getId(),
                 kb.getId(), vip.mate.wiki.job.WikiJobStep.CREATE_PAGE);
     }
@@ -1112,6 +1126,11 @@ public class WikiProcessingService {
                                      String pageType) {
         Long kbId = kb.getId();
         Long rawId = raw.getId();
+
+        // RFC-051 PR-9: refuse to materialize a page (or merge into an existing one) tied
+        // to a raw the user just deleted. Prevents zombie pages whose source_raw_ids point
+        // at a tombstoned row.
+        if (isAborted(rawId, "savePageContent slug=" + slug)) return false;
 
         // Fallback 0: cross-spelling canonical match (DB has same concept under different slug)
         WikiPageEntity existingByCanonical = pageService.findByCanonicalSlug(kbId, slug);
@@ -1220,6 +1239,7 @@ public class WikiProcessingService {
                 new SystemMessage(mergeSystem),
                 new UserMessage(mergeUser)
         ));
+        if (isAborted(rawId, "merge slug=" + slug)) return false;
         String response = callLlmWithResilientRetry(prompt,
                 "merge page slug=" + slug + " of raw=" + rawId,
                 kbId, vip.mate.wiki.job.WikiJobStep.MERGE_PAGE);
@@ -1342,6 +1362,7 @@ public class WikiProcessingService {
                 new UserMessage(user)
         ));
         try {
+            if (isAborted(raw.getId(), "doc analysis")) return "";
             String response = callLlmWithResilientRetry(prompt, "analyze doc raw=" + raw.getId(),
                     kb.getId(), vip.mate.wiki.job.WikiJobStep.ROUTE);
             JsonNode json = parseJsonResponse(response);
@@ -1707,6 +1728,7 @@ public class WikiProcessingService {
                 new SystemMessage(createSystem),
                 new UserMessage(createUser)
         ));
+        if (isAborted(raw.getId(), "repair page=" + page.getSlug())) return;
         String response = callLlmWithResilientRetry(prompt, "repair page=" + page.getSlug(),
                 kb.getId(), vip.mate.wiki.job.WikiJobStep.MERGE_PAGE);
         com.fasterxml.jackson.databind.JsonNode pageJson = parseJsonResponse(response);
@@ -1784,6 +1806,28 @@ public class WikiProcessingService {
     }
 
     /**
+     * RFC-051 PR-9: returns {@code true} when the caller should bail out of an
+     * in-flight processing path because the raw material has been deleted.
+     * <p>
+     * {@link WikiRawMaterialService#delete(Long)} is a logical delete (the
+     * {@code @TableLogic} column flips to 1), so {@code selectById} returns
+     * {@code null} as soon as the deletion commits. Sprinkling this check
+     * right before each LLM call keeps token spend bounded by a single
+     * in-flight call after the user clicks delete.
+     *
+     * @param rawId the raw material id this processing path is about
+     * @param ctx   short string used in the log line
+     * @return {@code true} if the raw is gone; caller should stop work
+     */
+    private boolean isAborted(Long rawId, String ctx) {
+        if (rawService.getById(rawId) == null) {
+            log.info("[Wiki] Aborting {} for raw={}: raw was deleted mid-processing", ctx, rawId);
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * RFC-051 PR-1c: bridge from {@link DocumentPreprocessService.Chunker} to
      * the existing sentence-boundary chunker. Returns {@code [start, end]}
      * pairs over the supplied text.
@@ -1835,6 +1879,14 @@ public class WikiProcessingService {
                 kbService.updateStatus(kbId, "active");
                 progressBus.broadcast(kbId, WikiProgressBus.EVENT_RAW_FAILED,
                         java.util.Map.of("rawId", rawId, "error", "No text content available"));
+                return;
+            }
+
+            // RFC-051 PR-9: text extraction can take many seconds on large binaries.
+            // If the user deleted the raw during that window, persisting chunks for a
+            // tombstoned row is wasted work that the cascade-cleanup already covered.
+            if (isAborted(rawId, "lazy ingest after extract")) {
+                kbService.updateStatus(kbId, "active");
                 return;
             }
 
