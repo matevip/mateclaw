@@ -22,9 +22,9 @@ public interface WikiPageMapper extends BaseMapper<WikiPageEntity> {
      * DB keyword search (H2 + MySQL compatible LIKE).
      * Does not SELECT content CLOB to avoid loading large blobs into Java heap.
      */
-    @Select("SELECT id, kb_id, slug, title, summary, source_raw_ids, last_updated_by " +
+    @Select("SELECT id, kb_id, slug, title, summary, source_raw_ids, last_updated_by, page_type " +
             "FROM mate_wiki_page " +
-            "WHERE kb_id = #{kbId} AND deleted = 0 " +
+            "WHERE kb_id = #{kbId} AND deleted = 0 AND archived = 0 " +
             "AND (LOWER(title) LIKE #{pattern} OR LOWER(summary) LIKE #{pattern} " +
             "     OR LOWER(content) LIKE #{pattern}) " +
             "ORDER BY title LIMIT 20")
@@ -37,14 +37,14 @@ public interface WikiPageMapper extends BaseMapper<WikiPageEntity> {
      */
     @Select("<script>SELECT id, slug, title, summary, page_type AS pageType FROM mate_wiki_page " +
             "WHERE id IN <foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach> " +
-            "AND deleted = 0</script>")
+            "AND deleted = 0 AND archived = 0</script>")
     List<WikiPageLite> selectBatchLite(@Param("ids") Collection<Long> ids);
 
     /**
      * List all pages as lightweight projections (no content).
      */
     @Select("SELECT id, slug, title, summary, page_type AS pageType FROM mate_wiki_page " +
-            "WHERE kb_id = #{kbId} AND deleted = 0 ORDER BY update_time DESC")
+            "WHERE kb_id = #{kbId} AND deleted = 0 AND archived = 0 ORDER BY update_time DESC")
     List<WikiPageLite> selectAllLite(@Param("kbId") Long kbId);
 
     /**
@@ -59,7 +59,7 @@ public interface WikiPageMapper extends BaseMapper<WikiPageEntity> {
      * Phase 1 (fast): search only title + summary columns.
      */
     @Select("SELECT id FROM mate_wiki_page " +
-            "WHERE kb_id = #{kbId} AND deleted = 0 " +
+            "WHERE kb_id = #{kbId} AND deleted = 0 AND archived = 0 " +
             "AND (LOWER(title) LIKE #{kw} OR LOWER(summary) LIKE #{kw}) " +
             "LIMIT #{limit}")
     List<Long> searchFastIds(@Param("kbId") Long kbId,
@@ -70,7 +70,7 @@ public interface WikiPageMapper extends BaseMapper<WikiPageEntity> {
      * Phase 2 (slow): search full content, excluding already-found IDs.
      */
     @Select("<script>SELECT id FROM mate_wiki_page " +
-            "WHERE kb_id = #{kbId} AND deleted = 0 " +
+            "WHERE kb_id = #{kbId} AND deleted = 0 AND archived = 0 " +
             "AND LOWER(content) LIKE #{kw} " +
             "<if test='excludeIds != null and !excludeIds.isEmpty()'>" +
             "AND id NOT IN <foreach collection='excludeIds' item='id' open='(' separator=',' close=')'>#{id}</foreach>" +

@@ -65,6 +65,14 @@ public class WikiPageEntity {
      */
     private Integer locked;
 
+    /**
+     * RFC-051 PR-7: soft-archive flag. {@code archived=1} hides the page from
+     * default list / search / related results without destroying it. Used to
+     * tuck away pages that are no longer relevant but whose history (citations,
+     * source-raw lineage) should stay queryable.
+     */
+    private Integer archived;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

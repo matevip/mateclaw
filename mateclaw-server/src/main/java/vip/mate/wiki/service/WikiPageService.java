@@ -98,11 +98,15 @@ public class WikiPageService {
         if (cached != null && !cached.isExpired()) {
             return cached.data;
         }
+        // RFC-051 PR-7: archived pages are hidden from default summary listings;
+        // PR-2 added page_type so callers can filter system pages too.
         List<WikiPageEntity> pages = pageMapper.selectList(
                 new LambdaQueryWrapper<WikiPageEntity>()
                         .select(WikiPageEntity::getSlug, WikiPageEntity::getTitle,
-                                WikiPageEntity::getSummary, WikiPageEntity::getLastUpdatedBy)
+                                WikiPageEntity::getSummary, WikiPageEntity::getLastUpdatedBy,
+                                WikiPageEntity::getPageType)
                         .eq(WikiPageEntity::getKbId, kbId)
+                        .ne(WikiPageEntity::getArchived, 1)
                         .orderByAsc(WikiPageEntity::getTitle));
         summaryCache.put(kbId, new CachedSummaries(pages, System.currentTimeMillis() + SUMMARY_CACHE_TTL_MS));
         return pages;
@@ -403,6 +407,33 @@ public class WikiPageService {
                         .eq(WikiPageEntity::getKbId, kbId)
                         .eq(WikiPageEntity::getSlug, slug));
         evictSummaryCache(kbId);
+    }
+
+    /**
+     * RFC-051 PR-7: flip the {@code archived} flag.
+     * <p>
+     * Archive hides the page from default list/search/related results without
+     * destroying it. Citation lineage and source-raw links survive, so an
+     * archived page can still be unarchived later or audited from raw history.
+     * Refuses to archive a system page since those are part of the KB's spine.
+     *
+     * @param archive true to archive, false to unarchive
+     * @return true on a state change, false if no-op (page missing or already in target state)
+     */
+    @Transactional
+    public boolean setArchived(Long kbId, String slug, boolean archive) {
+        WikiPageEntity existing = getBySlug(kbId, slug);
+        if (existing == null) return false;
+        if ("system".equals(existing.getPageType())) {
+            log.warn("[Wiki] Refusing to archive system page kbId={}, slug={}", kbId, slug);
+            return false;
+        }
+        int target = archive ? 1 : 0;
+        if (existing.getArchived() != null && existing.getArchived() == target) return false;
+        existing.setArchived(target);
+        pageMapper.updateById(existing);
+        evictSummaryCache(kbId);
+        return true;
     }
 
     /**

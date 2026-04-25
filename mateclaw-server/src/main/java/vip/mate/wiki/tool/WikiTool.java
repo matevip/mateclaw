@@ -451,6 +451,46 @@ public class WikiTool {
     }
 
     @Tool(description = """
+            Archive a wiki page so it stops showing up in list / search / related
+            results, without destroying it. Use this when a page is no longer
+            relevant but its history (citations, raw lineage) should stay queryable.
+            System pages (overview / log) cannot be archived.
+            """)
+    public String wiki_archive_page(
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Page slug to archive") String slug) {
+        return setArchivedTool(agentId, slug, true, "archived");
+    }
+
+    @Tool(description = """
+            Unarchive a previously archived wiki page so it shows up in default
+            list / search / related results again. No-op when the page wasn't archived.
+            """)
+    public String wiki_unarchive_page(
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Page slug to unarchive") String slug) {
+        return setArchivedTool(agentId, slug, false, "unarchived");
+    }
+
+    private String setArchivedTool(Long agentId, String slug, boolean archive, String verb) {
+        if (slug == null || slug.isBlank()) return error("slug is required");
+        Long kbId = resolveKbId(agentId);
+        if (kbId == null) return error("No wiki knowledge base found for this agent");
+        boolean changed;
+        try {
+            changed = pageService.setArchived(kbId, slug, archive);
+        } catch (Exception e) {
+            return error(verb + " failed: " + e.getMessage());
+        }
+        return JSONUtil.createObj()
+                .set("ok", true)
+                .set("slug", slug)
+                .set("changed", changed)
+                .set("message", changed ? "Page " + verb : "Page already in that state (or not found)")
+                .toString();
+    }
+
+    @Tool(description = """
             Delete an AI-generated wiki page. Cannot delete manually curated pages.
             """)
     public String wiki_delete_page(
