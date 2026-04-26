@@ -37,6 +37,7 @@ public class WikiLogService {
 
     private final WikiPageService pageService;
     private final WikiPageMapper pageMapper;
+    private final WikiScaffoldService scaffoldService;
 
     /** Common entry types so callers don't have to invent strings. */
     public enum EventType {
@@ -46,7 +47,9 @@ public class WikiLogService {
     /**
      * Append a single bullet under today's section header. Idempotent in the
      * sense that two simultaneous calls produce two bullets — never crashes,
-     * never overwrites prior content.
+     * never overwrites prior content. Auto-heals when the log page is missing
+     * by triggering scaffold once and retrying — covers KBs created before the
+     * scaffold migration shipped.
      *
      * @param kbId  knowledge base id
      * @param event high-level category
@@ -56,9 +59,12 @@ public class WikiLogService {
         if (kbId == null || event == null || body == null || body.isBlank()) return;
         WikiPageEntity log = pageService.getBySlug(kbId, WikiScaffoldService.LOG_SLUG);
         if (log == null) {
-            // Caller is expected to ensure scaffold first; bail quietly.
-            WikiLogService.log.debug("[WikiLog] No log page for kbId={}, skipping append", kbId);
-            return;
+            scaffoldService.ensureScaffold(kbId);
+            log = pageService.getBySlug(kbId, WikiScaffoldService.LOG_SLUG);
+            if (log == null) {
+                WikiLogService.log.debug("[WikiLog] No log page for kbId={} after scaffold, skipping append", kbId);
+                return;
+            }
         }
         try {
             String existing = log.getContent() == null ? "# Log\n" : log.getContent();

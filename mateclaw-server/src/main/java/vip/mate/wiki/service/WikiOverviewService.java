@@ -13,6 +13,7 @@ import vip.mate.wiki.repository.WikiRawMaterialMapper;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 
 /**
  * RFC-051 PR-2b: deterministic overview rebuilder.
@@ -45,20 +46,29 @@ public class WikiOverviewService {
     private final WikiPageMapper pageMapper;
     private final WikiRawMaterialMapper rawMapper;
     private final WikiChunkMapper chunkMapper;
+    private final WikiScaffoldService scaffoldService;
 
     private static final DateTimeFormatter ISO = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+    /** Number of raw materials surfaced in the "Recent Updates" section. */
+    private static final int RECENT_UPDATES_LIMIT = 5;
 
     /**
      * Rebuild the marker region of the overview page for {@code kbId}.
-     * No-op when the overview page is missing — call
-     * {@code WikiScaffoldService.ensureScaffold} first.
+     * Auto-heals when the overview page is missing by triggering
+     * {@link WikiScaffoldService#ensureScaffold(Long)} once and retrying — this
+     * covers KBs created before the scaffold migration shipped.
      */
     public void rebuild(Long kbId) {
         if (kbId == null) return;
         WikiPageEntity overview = pageService.getBySlug(kbId, WikiScaffoldService.OVERVIEW_SLUG);
         if (overview == null) {
-            log.debug("[WikiOverview] No overview page for kbId={}, skipping rebuild", kbId);
-            return;
+            // Self-heal for legacy KBs: scaffold then retry once.
+            scaffoldService.ensureScaffold(kbId);
+            overview = pageService.getBySlug(kbId, WikiScaffoldService.OVERVIEW_SLUG);
+            if (overview == null) {
+                log.debug("[WikiOverview] No overview page for kbId={} after scaffold, skipping rebuild", kbId);
+                return;
+            }
         }
         try {
             String stats = computeStatsBlock(kbId);
@@ -115,14 +125,58 @@ public class WikiOverviewService {
                 - Chunks: %d
                 - Last ingest: %s
 
+                ## Recent Updates
+
+                %s
+
                 ## Coverage
 
                 - Embedding coverage: %d / %d (%d%%)
                 - Pages with wikilinks: %d / %d (%d%%)
                 """.formatted(
                 rawCount, pageCount, chunkCount, lastIngest,
+                renderRecentUpdates(kbId),
                 embeddedChunks, chunkCount, embedPct,
                 pagesWithLinks, pageCount, linkPct);
+    }
+
+    /**
+     * Render the most recently processed sources as a Markdown bullet list,
+     * one bullet per raw material — title, source type, ingest time, and
+     * chunk count. Sources still {@code pending} or never processed are
+     * skipped (they'd dilute the "what just changed" signal). Empty wikis
+     * surface a single "No sources ingested yet." line.
+     */
+    private String renderRecentUpdates(Long kbId) {
+        List<WikiRawMaterialEntity> recent = rawMapper.selectList(
+                new LambdaQueryWrapper<WikiRawMaterialEntity>()
+                        .eq(WikiRawMaterialEntity::getKbId, kbId)
+                        .isNotNull(WikiRawMaterialEntity::getLastProcessedAt)
+                        .orderByDesc(WikiRawMaterialEntity::getLastProcessedAt)
+                        .last("LIMIT " + RECENT_UPDATES_LIMIT));
+        if (recent == null || recent.isEmpty()) {
+            return "_No sources ingested yet._";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (WikiRawMaterialEntity raw : recent) {
+            long chunks = chunkMapper.selectCount(
+                    new LambdaQueryWrapper<WikiChunkEntity>()
+                            .eq(WikiChunkEntity::getRawId, raw.getId()));
+            String when = raw.getLastProcessedAt().format(ISO);
+            String title = raw.getTitle() == null || raw.getTitle().isBlank()
+                    ? ("source #" + raw.getId()) : raw.getTitle();
+            String type = raw.getSourceType() == null ? "?" : raw.getSourceType();
+            String status = raw.getProcessingStatus() == null ? "" : raw.getProcessingStatus();
+            String statusBadge = "partial".equals(status) ? " ⚠ partial" : "";
+            sb.append("- ").append(when).append(" — ").append(title)
+              .append(" (").append(type).append(", ").append(chunks).append(" chunks)")
+              .append(statusBadge).append('\n');
+        }
+        // Trim the trailing newline so the text-block formatting below is clean.
+        if (sb.length() > 0 && sb.charAt(sb.length() - 1) == '\n') {
+            sb.setLength(sb.length() - 1);
+        }
+        return sb.toString();
     }
 
     String spliceMarkerRegion(String content, String newBlock) {

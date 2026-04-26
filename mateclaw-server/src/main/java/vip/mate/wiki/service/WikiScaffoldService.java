@@ -86,6 +86,21 @@ public class WikiScaffoldService {
         return "# Log\n\n## " + java.time.LocalDate.now() + " init\n\n- System pages initialized.\n";
     }
 
+    /**
+     * Default scaffold for the overview page.
+     * <p>
+     * Two distinct marker regions:
+     * <ul>
+     *   <li>{@code mate:overview:v1} — deterministic stats block, owned by
+     *       {@link WikiOverviewService} and rebuilt synchronously on every
+     *       successful ingest.</li>
+     *   <li>{@code mate:overview:narrative:v1} — LLM-narrated 2-3 sentence
+     *       summary, owned by {@code WikiNarrativeService}, rewritten
+     *       asynchronously after a debounced {@code WikiKbDirtyEvent}.</li>
+     * </ul>
+     * Anything outside both marker pairs is user-authored prose and is
+     * preserved verbatim by both writers.
+     */
     private static final String DEFAULT_OVERVIEW = """
             # Overview
 
@@ -99,7 +114,7 @@ public class WikiScaffoldService {
 
             ## Recent Updates
 
-            No updates yet.
+            _No sources ingested yet._
 
             ## Coverage
 
@@ -107,5 +122,9 @@ public class WikiScaffoldService {
             - Pages with wikilinks: 0
             - Isolated pages: 0
             <!-- mate:overview:v1:end -->
+
+            <!-- mate:overview:narrative:v1:start -->
+            _Narrative summary will appear after the first ingest._
+            <!-- mate:overview:narrative:v1:end -->
             """;
 }

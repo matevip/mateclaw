@@ -56,6 +56,7 @@ public class WikiProcessingService {
     private final ObjectMapper objectMapper;
     private final WikiProgressBus progressBus;
     private final WikiCitationService citationService;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     @org.springframework.context.annotation.Lazy
@@ -358,16 +359,25 @@ public class WikiProcessingService {
             }
 
             // RFC-051 PR-2c: log every non-failed eager ingest. Failures already get a
-            // RAW_FAILED broadcast and an error message in the raw row.
+            // RAW_FAILED broadcast and an error message in the raw row. Title goes first
+            // so the log reads as "what just landed" instead of an opaque raw id.
             if (logService != null && !"failed".equals(finalStatus)) {
+                String title = (raw.getTitle() == null || raw.getTitle().isBlank())
+                        ? ("raw#" + rawId) : raw.getTitle();
                 logService.append(kb.getId(), WikiLogService.EventType.INGEST,
-                        "eager " + finalStatus + " raw=" + rawId
+                        "eager " + finalStatus + " · " + title
                                 + " · " + totalPages + " pages · " + totalChunks + " chunks");
             }
             // RFC-051 PR-2b: refresh overview stats whenever a raw lands in a terminal state
             // (completed or partial). Failures don't shift the stats meaningfully.
             if (overviewService != null && !"failed".equals(finalStatus)) {
                 overviewService.rebuild(kb.getId());
+            }
+            // Tier 2: signal "KB content is dirty" so WikiNarrativeService can
+            // schedule (debounced) an LLM-generated overview narrative refresh.
+            // Stats rebuild above is sync; narrative regen runs after-commit.
+            if (!"failed".equals(finalStatus)) {
+                eventPublisher.publishEvent(new vip.mate.wiki.event.WikiKbDirtyEvent(this, kb.getId()));
             }
 
             log.info("[Wiki] Processing completed for raw={}, kbId={}, generatedPages={}, totalPages={}",
@@ -1977,13 +1987,18 @@ public class WikiProcessingService {
                             "kbPageCount", pageCount,
                             "totalChunks", totalChunks));
 
-            // RFC-051 PR-2c: write an activity log entry.
+            // RFC-051 PR-2c: write an activity log entry. Lead with title so the log
+            // is human-readable; raw id is implied by chunk lineage.
             if (logService != null) {
+                String title = (raw.getTitle() == null || raw.getTitle().isBlank())
+                        ? ("raw#" + rawId) : raw.getTitle();
                 logService.append(kbId, WikiLogService.EventType.INGEST,
-                        "lazy ingest raw=" + rawId + " · " + totalChunks + " chunks");
+                        "lazy ingest · " + title + " · " + totalChunks + " chunks");
             }
             // RFC-051 PR-2b: refresh overview stats.
             if (overviewService != null) overviewService.rebuild(kbId);
+            // Tier 2: dirty event drives the LLM-narrated overview section.
+            eventPublisher.publishEvent(new vip.mate.wiki.event.WikiKbDirtyEvent(this, kbId));
 
             log.info("[Wiki] Lazy processing completed for raw={}, kbId={}, chunks={}",
                     rawId, kbId, totalChunks);
