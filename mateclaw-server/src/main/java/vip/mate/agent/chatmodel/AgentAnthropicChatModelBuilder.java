@@ -187,8 +187,12 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
      * Apply 10s connect / 180s read timeouts. The 180s read covers the case
      * where nginx caps the gateway at 60s but a real long thinking response
      * needs more — the upper retry layer takes over once we time out.
+     *
+     * <p>Package-private + static so {@code AgentClaudeCodeChatModelBuilder}
+     * (RFC-062) can apply the same timeouts to its OAuth RestClient without
+     * duplicating the snippet.</p>
      */
-    private RestClient.Builder applyHttpTimeouts(RestClient.Builder builder) {
+    static RestClient.Builder applyHttpTimeouts(RestClient.Builder builder) {
         HttpClient httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();

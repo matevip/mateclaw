@@ -364,7 +364,12 @@ public class ModelDiscoveryService {
             case DASHSCOPE_NATIVE -> fetchDashScopeModels(provider);
             case GEMINI_NATIVE -> fetchGeminiModels(provider);
             case ANTHROPIC_MESSAGES -> fetchAnthropicModels(provider);
-            case OPENAI_CHATGPT -> throw new MateClawException("err.llm.chatgpt_no_discovery", "ChatGPT OAuth provider 不支持模型发现");
+            // Claude Code OAuth provider has a fixed model catalog (Anthropic
+            // doesn't expose model discovery on Bearer-auth requests). Models
+            // are seeded via Flyway, not discovered.
+            case OPENAI_CHATGPT, ANTHROPIC_CLAUDE_CODE ->
+                    throw new MateClawException("err.llm.oauth_no_discovery",
+                            "OAuth provider 不支持模型发现");
         };
     }
 
@@ -456,7 +461,9 @@ public class ModelDiscoveryService {
             case DASHSCOPE_NATIVE -> sendDashScopeTestPrompt(provider, modelId);
             case GEMINI_NATIVE -> sendGeminiTestPrompt(provider, modelId);
             case ANTHROPIC_MESSAGES -> sendAnthropicTestPrompt(provider, modelId);
-            case OPENAI_CHATGPT -> throw new MateClawException("err.llm.chatgpt_no_test", "ChatGPT OAuth provider 不支持模型测试");
+            case OPENAI_CHATGPT, ANTHROPIC_CLAUDE_CODE ->
+                    throw new MateClawException("err.llm.oauth_no_test",
+                            "OAuth provider 不支持模型测试");
         };
     }
 

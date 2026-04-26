@@ -58,7 +58,9 @@ public record CachePlanContext(
     /** 协议是否原生支持 cache_control 标记。DashScope/Ollama/Gemini 自有缓存机制，无需接入。 */
     public boolean protocolSupportsCacheControl() {
         return switch (protocol) {
-            case ANTHROPIC_MESSAGES, OPENAI_CHATGPT -> true;
+            // Claude Code OAuth (RFC-062) tunnels through the same Messages API,
+            // so it inherits Anthropic-native cache_control support.
+            case ANTHROPIC_MESSAGES, ANTHROPIC_CLAUDE_CODE, OPENAI_CHATGPT -> true;
             case OPENAI_COMPATIBLE, DASHSCOPE_NATIVE, GEMINI_NATIVE -> false;
         };
     }
