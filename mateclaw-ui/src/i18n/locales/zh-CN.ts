@@ -481,7 +481,7 @@ export default {
       sttProvider: '选择首选 STT Provider，auto 模式自动选择可用的 Provider。',
       sttFallbackEnabled: '首选 Provider 失败时自动尝试其他已配置的 Provider。',
       openaiSttInfo: '复用模型管理中的 OpenAI API Key。使用 Whisper 模型，支持多语言自动识别。',
-      dashscopeSttInfo: '复用模型管理中的 DashScope API Key。使用 Paraformer 模型，中文识别效果优秀。',
+      dashscopeSttInfo: '复用模型管理中的 DashScope API Key。使用 Paraformer Realtime（WebSocket 流式），中文识别效果优秀，亚秒级延迟。',
       // 音乐生成
       musicEnabled: '开启后 Agent 可通过 music_generate 工具生成音乐。Google Lyria 复用 Google Key。',
       musicProvider: '选择首选音乐 Provider，auto 模式优先使用 Google Lyria。',
@@ -1827,16 +1827,19 @@ export default {
   talk: {
     title: '语音模式',
     ready: '就绪',
+    connecting: '连接中...',
     listening: '收听中...',
     processing: '思考中...',
     speaking: '回复中...',
     holdToTalk: '按住说话',
     releaseToSend: '松开发送',
+    retry: '点击重新连接',
     you: '你',
     ai: 'AI',
     micError: '无法访问麦克风',
-    connectionError: '连接错误',
+    connectionError: '连接错误，点击按钮重试',
     playbackError: '音频播放失败',
+    tooShort: '录音过短，请按住按钮多说几秒',
   },
   browser: {
     timeline: {

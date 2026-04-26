@@ -118,7 +118,10 @@ public class TalkModeWebSocketHandler extends AbstractWebSocketHandler {
             sendJson(session, Map.of("type", "state", "state", "processing"));
 
             // 2. STT: 音频转文字
-            Map<String, Object> sttResult = sttService.transcribe(audioData, "audio.webm", "audio/webm", null);
+            // 前端用 WavRecorder（Web Audio API + 手写 PCM WAV 编码）— 见
+            // mateclaw-ui/src/utils/wavEncoder.ts. WebM/Opus 被 DashScope
+            // Paraformer 拒收，WAV 是所有 STT provider 都接受的最大公约数。
+            Map<String, Object> sttResult = sttService.transcribe(audioData, "audio.wav", "audio/wav", null);
             if (!Boolean.TRUE.equals(sttResult.get("success"))) {
                 sendJson(session, Map.of("type", "error", "message", "Speech recognition failed: " + sttResult.get("error")));
                 sendJson(session, Map.of("type", "state", "state", "idle"));

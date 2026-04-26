@@ -333,6 +333,22 @@ MERGE INTO mate_system_setting (id, setting_key, setting_value, description, cre
 KEY (id)
 VALUES (1000000013, 'searxngBaseUrl', '', 'SearXNG 实例地址（Docker 部署时自动配置）', NOW(), NOW());
 
+-- 语音识别（STT）默认配置 —— 默认启用，用户只需在模型管理中配置 OpenAI / DashScope API Key 即可使用
+-- 用 setting_key 的 skip-if-exists 写法（不再走 MERGE BY id），避免与
+-- 旧版 UI 已经写入的运行时 snowflake id 在 setting_key UNIQUE 索引上撞车。
+-- V46 迁移走的是同一套语义。
+INSERT INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+SELECT 1000000020, 'sttEnabled', 'true', '启用语音识别（TalkMode 麦克风输入）', NOW(), NOW()
+WHERE NOT EXISTS (SELECT 1 FROM mate_system_setting WHERE setting_key = 'sttEnabled');
+
+INSERT INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+SELECT 1000000021, 'sttProvider', 'auto', 'STT 提供商：auto / openai / dashscope', NOW(), NOW()
+WHERE NOT EXISTS (SELECT 1 FROM mate_system_setting WHERE setting_key = 'sttProvider');
+
+INSERT INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+SELECT 1000000022, 'sttFallbackEnabled', 'true', '主 provider 失败时自动尝试备选 provider', NOW(), NOW()
+WHERE NOT EXISTS (SELECT 1 FROM mate_system_setting WHERE setting_key = 'sttFallbackEnabled');
+
 -- 内置工具：日期时间
 MERGE INTO mate_tool (id, name, display_name, description, tool_type, bean_name, icon, enabled, builtin, create_time, update_time, deleted)
 KEY (id)

@@ -329,6 +329,22 @@ MERGE INTO mate_system_setting (id, setting_key, setting_value, description, cre
 KEY (id)
 VALUES (1000000013, 'searxngBaseUrl', '', 'SearXNG instance base URL (auto-configured in Docker)', NOW(), NOW());
 
+-- Speech-to-text (STT) defaults — enabled out of the box so users only need to configure an API key.
+-- Skip-if-exists on setting_key (NOT MERGE BY id) so we don't trip the
+-- UNIQUE index when an existing user has the row at a runtime-assigned id
+-- from toggling the UI before this seed shipped. V46 covers the same.
+INSERT INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+SELECT 1000000020, 'sttEnabled', 'true', 'Enable speech-to-text (TalkMode mic input)', NOW(), NOW()
+WHERE NOT EXISTS (SELECT 1 FROM mate_system_setting WHERE setting_key = 'sttEnabled');
+
+INSERT INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+SELECT 1000000021, 'sttProvider', 'auto', 'STT provider: auto / openai / dashscope', NOW(), NOW()
+WHERE NOT EXISTS (SELECT 1 FROM mate_system_setting WHERE setting_key = 'sttProvider');
+
+INSERT INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
+SELECT 1000000022, 'sttFallbackEnabled', 'true', 'Try alternate STT provider when the primary fails', NOW(), NOW()
+WHERE NOT EXISTS (SELECT 1 FROM mate_system_setting WHERE setting_key = 'sttFallbackEnabled');
+
 -- Built-in tool: Date & Time
 MERGE INTO mate_tool (id, name, display_name, description, tool_type, bean_name, icon, enabled, builtin, create_time, update_time, deleted)
 KEY (id)
