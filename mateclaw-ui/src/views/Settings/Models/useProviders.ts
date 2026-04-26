@@ -1,7 +1,7 @@
 import { computed, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
-import { modelApi, oauthApi, providerPoolApi } from '@/api'
+import { claudeCodeOAuthApi, modelApi, oauthApi, providerPoolApi } from '@/api'
 import type { ProviderPoolEntry } from '@/api'
 import type { ActiveModelsInfo, DiscoverResult, ProviderInfo, ProviderModelInfo, TestResult } from '@/types'
 
@@ -445,6 +445,7 @@ export function useProviders() {
     'zhipu-intl': '/icons/providers/zhipu.svg',
     'volcengine': '/icons/providers/volcengine.svg',
     'openai-chatgpt': '/icons/providers/openai.svg',
+    'anthropic-claude-code': '/icons/providers/anthropic.svg',
   }
 
   function getProviderIcon(providerId: string): string {
@@ -453,7 +454,34 @@ export function useProviders() {
 
   // ==================== OAuth ====================
 
-  async function handleOAuthLogin() {
+  /** Refresh editingProvider after a load so the modal state stays in sync. */
+  async function reloadProvidersAndSync() {
+    await loadProviders()
+    if (editingProvider.value) {
+      const updated = providers.value.find(p => p.id === editingProvider.value!.id)
+      if (updated) editingProvider.value = updated
+    }
+  }
+
+  async function handleOAuthLogin(providerId?: string) {
+    // RFC-062: Claude Code OAuth piggybacks on the user's local Claude Code
+    // install. There's no in-app authorize URL — the "Connect" button just
+    // re-reads credentials from disk so a user who logged in via Claude Code
+    // sees the connection appear without restarting the server.
+    if (providerId === 'anthropic-claude-code') {
+      try {
+        const res: any = await claudeCodeOAuthApi.reload()
+        if (res.data?.connected && !res.data?.expired) {
+          ElMessage.success(t('settings.model.oauthLoginSuccess'))
+        } else {
+          ElMessage.warning(t('settings.model.claudeCodeOauthInstructions'))
+        }
+        await reloadProvidersAndSync()
+      } catch (e: any) {
+        ElMessage.error(e.msg || 'Claude Code OAuth detection failed')
+      }
+      return
+    }
     try {
       const res: any = await oauthApi.authorize()
       const { authorizeUrl } = res.data
@@ -467,12 +495,7 @@ export function useProviders() {
             clearInterval(pollInterval)
             if (authWindow && !authWindow.closed) authWindow.close()
             ElMessage.success(t('settings.model.oauthLoginSuccess'))
-            await loadProviders()
-            // 刷新当前编辑的 provider
-            if (editingProvider.value) {
-              const updated = providers.value.find(p => p.id === editingProvider.value!.id)
-              if (updated) editingProvider.value = updated
-            }
+            await reloadProvidersAndSync()
           }
         } catch { /* ignore polling errors */ }
       }, 2000)
@@ -483,15 +506,18 @@ export function useProviders() {
     }
   }
 
-  async function handleOAuthRevoke() {
+  async function handleOAuthRevoke(providerId?: string) {
+    // Claude Code OAuth credentials live on disk — MateClaw doesn't manage
+    // them, so we don't expose a revoke that would clobber the user's
+    // Claude Code login. Direct them to log out from the Claude Code app.
+    if (providerId === 'anthropic-claude-code') {
+      ElMessage.info(t('settings.model.claudeCodeOauthRevokeHint'))
+      return
+    }
     try {
       await oauthApi.revoke()
       ElMessage.success(t('settings.model.oauthRevokeSuccess'))
-      await loadProviders()
-      if (editingProvider.value) {
-        const updated = providers.value.find(p => p.id === editingProvider.value!.id)
-        if (updated) editingProvider.value = updated
-      }
+      await reloadProvidersAndSync()
     } catch (e: any) {
       ElMessage.error(e.msg || 'OAuth revoke failed')
     }

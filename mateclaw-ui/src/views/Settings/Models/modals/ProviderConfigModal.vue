@@ -38,20 +38,26 @@
                 v-if="!editingProvider?.oauthConnected"
                 class="btn-oauth"
                 type="button"
-                @click="$emit('oauthLogin')"
+                @click="$emit('oauthLogin', editingProvider?.id)"
               >
-                {{ t('settings.model.oauthLogin') }}
+                {{ editingProvider?.id === 'anthropic-claude-code'
+                  ? t('settings.model.claudeCodeOauthDetect')
+                  : t('settings.model.oauthLogin') }}
               </button>
               <button
                 v-else
                 class="btn-oauth btn-oauth-revoke"
                 type="button"
-                @click="$emit('oauthRevoke')"
+                @click="$emit('oauthRevoke', editingProvider?.id)"
               >
                 {{ t('settings.model.oauthDisconnect') }}
               </button>
             </div>
-            <div class="field-hint">{{ t('settings.model.oauthHint') }}</div>
+            <div class="field-hint">
+              {{ editingProvider?.id === 'anthropic-claude-code'
+                ? t('settings.model.claudeCodeOauthHint')
+                : t('settings.model.oauthHint') }}
+            </div>
           </div>
           <!-- API Key 输入区域（非 OAuth 时显示） -->
           <div v-else class="form-group">
@@ -182,8 +188,10 @@ defineEmits<{
   close: []
   save: []
   toggleAdvanced: []
-  oauthLogin: []
-  oauthRevoke: []
+  // RFC-062: providerId tells the handler which OAuth flow to dispatch
+  // (anthropic-claude-code reuses local creds, openai-chatgpt opens auth URL).
+  oauthLogin: [providerId?: string]
+  oauthRevoke: [providerId?: string]
 }>()
 </script>
 

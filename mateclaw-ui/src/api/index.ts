@@ -330,6 +330,14 @@ export const oauthApi = {
   revoke: () => http.delete('/oauth/openai/revoke'),
 }
 
+// RFC-062: Claude Code OAuth piggybacks on the user's local Claude Code
+// install — no in-app authorize/revoke flow yet (PR-4). Until then the UI
+// can only check status + force a re-detect from disk.
+export const claudeCodeOAuthApi = {
+  status: () => http.get('/oauth/anthropic/status'),
+  reload: () => http.post('/oauth/anthropic/reload'),
+}
+
 // ==================== Setup ====================
 export const setupApi = {
   onboardingStatus: () => http.get('/setup/onboarding-status'),

@@ -363,6 +363,11 @@ export default {
       oauthHint: 'Sign in with your OpenAI account to use ChatGPT Plus/Pro member quota (not API credits).',
       oauthLoginSuccess: 'OpenAI OAuth login successful',
       oauthRevokeSuccess: 'OpenAI OAuth disconnected',
+      // RFC-062: Claude Code OAuth (subscription piggyback)
+      claudeCodeOauthDetect: 'Detect Claude Code Login',
+      claudeCodeOauthHint: 'Reuses your local Claude Code Pro/Max subscription. Sign in via the Claude Code app first, then click "Detect" to pick up the credentials.',
+      claudeCodeOauthInstructions: 'No Claude Code credentials found. Install Claude Code, sign in with a Pro/Max account, then click Detect again.',
+      claudeCodeOauthRevokeHint: 'Sign out from the Claude Code app to revoke. MateClaw does not modify Claude Code\'s on-disk credentials.',
       fields: {
         providerId: 'Provider ID',
         providerName: 'Provider Name',

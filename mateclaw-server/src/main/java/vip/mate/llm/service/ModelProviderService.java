@@ -4,10 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import vip.mate.exception.MateClawException;
+import vip.mate.llm.anthropic.oauth.ClaudeCodeOAuthService;
 import vip.mate.llm.event.ModelConfigChangedEvent;
 import vip.mate.llm.model.*;
 import vip.mate.llm.repository.ModelProviderMapper;
@@ -22,9 +24,14 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ModelProviderService {
 
+    /** Provider id whose OAuth token lives on local disk (Keychain / ~/.claude/.credentials.json) instead of the database. */
+    private static final String CLAUDE_CODE_PROVIDER_ID = "anthropic-claude-code";
+
     private final ModelProviderMapper modelProviderMapper;
     private final ModelConfigService modelConfigService;
     private final ApplicationEventPublisher eventPublisher;
+    /** Lazy provider — avoids forcing the bean to exist in test contexts that don't load the anthropic package. */
+    private final ObjectProvider<ClaudeCodeOAuthService> claudeCodeOAuthServiceProvider;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** Plugin-registered ChatModel instances: providerId -> ChatModel */
@@ -242,8 +249,24 @@ public class ModelProviderService {
         dto.setBaseUrl(provider.getBaseUrl());
         dto.setGenerateKwargs(readJson(provider.getGenerateKwargs()));
         dto.setAuthType(provider.getAuthType() != null ? provider.getAuthType() : "api_key");
-        dto.setOauthConnected(StringUtils.hasText(provider.getOauthAccessToken()));
-        dto.setOauthExpiresAt(provider.getOauthExpiresAt());
+        if (CLAUDE_CODE_PROVIDER_ID.equals(provider.getProviderId())) {
+            // Claude Code OAuth credentials live on disk (RFC-062), not in the
+            // mate_model_provider row. Bypass the column lookup and ask the
+            // service directly. Falls back to false if the bean isn't present
+            // (e.g. minimal test contexts).
+            ClaudeCodeOAuthService svc = claudeCodeOAuthServiceProvider.getIfAvailable();
+            if (svc != null) {
+                ClaudeCodeOAuthService.OAuthStatus status = svc.getStatus();
+                dto.setOauthConnected(status.connected() && !status.expired());
+                dto.setOauthExpiresAt(status.expiresAtMs() > 0L ? status.expiresAtMs() : null);
+            } else {
+                dto.setOauthConnected(false);
+                dto.setOauthExpiresAt(null);
+            }
+        } else {
+            dto.setOauthConnected(StringUtils.hasText(provider.getOauthAccessToken()));
+            dto.setOauthExpiresAt(provider.getOauthExpiresAt());
+        }
         dto.setFallbackPriority(provider.getFallbackPriority() != null ? provider.getFallbackPriority() : 0);
         List<ModelInfoDTO> builtinModels = new ArrayList<>();
         List<ModelInfoDTO> extraModels = new ArrayList<>();
@@ -278,6 +301,11 @@ public class ModelProviderService {
 
         // OAuth 认证的 provider：检查 OAuth token 是否存在
         if ("oauth".equals(provider.getAuthType())) {
+            // Claude Code OAuth (RFC-062) — token lives on disk, not in DB.
+            if (CLAUDE_CODE_PROVIDER_ID.equals(provider.getProviderId())) {
+                ClaudeCodeOAuthService svc = claudeCodeOAuthServiceProvider.getIfAvailable();
+                return svc != null && svc.isLoggedIn();
+            }
             return StringUtils.hasText(provider.getOauthAccessToken());
         }
 

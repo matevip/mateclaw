@@ -353,6 +353,11 @@ export default {
       oauthHint: '通过 OAuth 登录 OpenAI 账号，使用 ChatGPT Plus/Pro 会员额度（非 API 额度）。',
       oauthLoginSuccess: 'OpenAI OAuth 登录成功',
       oauthRevokeSuccess: '已断开 OpenAI OAuth 连接',
+      // RFC-062：Claude Code OAuth（订阅复用）
+      claudeCodeOauthDetect: '检测 Claude Code 登录态',
+      claudeCodeOauthHint: '复用本地 Claude Code Pro/Max 订阅。请先在 Claude Code 客户端中登录，再点击"检测"读取凭据。',
+      claudeCodeOauthInstructions: '未检测到 Claude Code 凭据。请安装 Claude Code 客户端，使用 Pro/Max 账号登录后再点击检测。',
+      claudeCodeOauthRevokeHint: '请在 Claude Code 客户端中退出登录。MateClaw 不会修改 Claude Code 的本地凭据。',
       fields: {
         providerId: 'Provider ID',
         providerName: 'Provider 名称',
