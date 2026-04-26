@@ -25,6 +25,25 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 一个后台 Flux 生产者持续产出事件，广播给所有 SseEmitter 订阅者并缓存到 buffer。
  * 新连接（重连）到来时，先回放 buffer，再接入实时流。
  *
+ * <h2>Single-instance assumption</h2>
+ * <p><strong>The {@link #runs} map is process-local memory.</strong> A reconnect
+ * request can only re-attach to a {@code RunState} that lives on the <em>same</em>
+ * JVM that originally created it. In a multi-node deployment behind a load
+ * balancer, the LB MUST be configured for sticky session by {@code conversationId}
+ * (Nginx {@code hash $arg_conversationId consistent;}, K8s Ingress
+ * cookie-based affinity, AWS ALB target-group stickiness, etc.).
+ *
+ * <p>This is an explicit CE constraint — see
+ * {@code rfcs/community/90-appendix/02-tech-debt-inventory.md §4.1} and
+ * {@code rfc-054 §0}. Cross-node SSE relay (Redis Stream / NATS / Kafka) is
+ * tracked under the EE roadmap.
+ *
+ * <p>Operator-facing diagnostics: callers should use
+ * {@link #streamExistsOnThisNode(String)} when distinguishing "stream finished
+ * normally" from "stream is on a different node" — both return {@code false}
+ * from {@link #attach(String, SseEmitter)} but mean very different things to
+ * the user.
+ *
  * @author MateClaw Team
  */
 @Slf4j
@@ -283,6 +302,24 @@ public class ChatStreamTracker {
             json = "{\"error\":\"serialization_failed\"}";
         }
         broadcast(conversationId, eventName, json);
+    }
+
+    /**
+     * Diagnostic helper for the multi-node deployment edge case (issue #17):
+     * tells the caller whether a {@link RunState} for this conversation
+     * exists on <em>this</em> JVM at all (regardless of done state).
+     *
+     * <p>{@link #attach(String, SseEmitter)} returns {@code false} both when
+     * the stream finished normally <em>and</em> when no state exists on this
+     * node. Callers that need to distinguish those two cases (e.g. to send a
+     * different SSE event to the client) should consult this method first.
+     *
+     * @return {@code true} when a RunState exists locally for this
+     *         conversationId; {@code false} when it never existed here OR was
+     *         already cleaned up after completion
+     */
+    public boolean streamExistsOnThisNode(String conversationId) {
+        return runs.containsKey(conversationId);
     }
 
     /**

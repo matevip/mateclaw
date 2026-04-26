@@ -100,11 +100,37 @@ public class ChatController {
 
             registerEmitterCallbacks(emitter, conversationId);
 
+            // Issue #17 — distinguish "stream truly completed on this node"
+            // from "stream is running on another node (multi-node deployment
+            // without sticky session)". They look identical from attach()'s
+            // boolean return, but the user-facing remediation is different.
+            boolean existsLocally = streamTracker.streamExistsOnThisNode(conversationId);
             boolean attached = streamTracker.attach(conversationId, emitter);
             if (!attached) {
-                // 没有活跃的流（已完成或服务器重启后丢失），通知前端直接结束
                 try {
-                    sendEvent(emitter, "done", Map.of("status", "completed"));
+                    if (existsLocally) {
+                        // RunState exists here but is done — stream finished normally
+                        sendEvent(emitter, "done", Map.of("status", "completed"));
+                    } else {
+                        // No RunState on this node. Either:
+                        //  (a) The stream finished long ago and was cleaned up, OR
+                        //  (b) Multi-node deployment routed this reconnect to a
+                        //      DIFFERENT node than the originating one. The CE
+                        //      build assumes single-instance (see ChatStreamTracker
+                        //      class javadoc and rfc-054 §0); LB must be configured
+                        //      for sticky session by conversationId.
+                        // We can't tell (a) from (b) at this layer, so emit an
+                        // explicit code the front-end can surface to operators.
+                        log.info("SSE reconnect: no RunState locally for conversationId={} — " +
+                                "either completed-and-cleaned or running on another node", conversationId);
+                        sendEvent(emitter, "done", Map.of(
+                                "status", "stream_not_local",
+                                "message", "Stream is not active on this node. " +
+                                        "If you're running a multi-node deployment, " +
+                                        "verify the load balancer is configured for sticky " +
+                                        "session by conversationId. See deploy/multi-node-deployment.md."
+                        ));
+                    }
                 } catch (IOException e) {
                     log.warn("SSE reconnect done send error: {}", e.getMessage());
                 }
