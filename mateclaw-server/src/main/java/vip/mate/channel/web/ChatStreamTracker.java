@@ -226,10 +226,17 @@ public class ChatStreamTracker {
     public void broadcast(String conversationId, String eventName, String jsonData) {
         RunState state = runs.get(conversationId);
 
-        // 特殊处理 "done" 事件：即使流已完成，仍然尝试发送给所有订阅者
+        // 特殊处理 "done" 事件：即使流已完成，仍然尝试发送给所有订阅者，
+        // 并且**也必须入 buffer**——这样如果客户端在生成期间 SSE 断了
+        // (broken pipe / 浏览器 tab throttle / 网络抖动)，刷新页面重连
+        // 时仍能从 buffer 回放 done 事件，UI 不再永远卡在"生成中"。
+        // 之前的设计 done 不入 buffer，配合 complete() 立即 runs.remove()
+        // 一起，使得 SSE 中途断开 = done 永远丢，是这次故障的根源。
         if ("done".equals(eventName)) {
             if (state != null) {
+                SseEvent doneEvent = new SseEvent(eventName, jsonData);
                 synchronized (state.lock) {
+                    state.buffer.add(doneEvent);
                     Iterator<SseEmitter> it = state.subscribers.iterator();
                     while (it.hasNext()) {
                         SseEmitter emitter = it.next();
@@ -323,21 +330,23 @@ public class ChatStreamTracker {
     }
 
     /**
-     * 将 emitter 附着到现有的运行中的流。
-     * 先回放 buffer 中的全部事件，再加入订阅者列表接收后续实时事件。
+     * 将 emitter 附着到现有的运行中或刚刚完成的流。
+     * 先回放 buffer 中的全部事件，再加入订阅者列表接收后续实时事件（仅当流仍在运行时）。
+     * <p>
+     * 兼容"流已完成"语义：如果 RunState 还在 map 里但 done=true，仍然回放 buffer
+     * （包含 done 事件本身），让重连客户端拿到完成信号后正常退出"生成中"状态。
+     * RunState 完成后会保留 DONE_RETENTION_MS（5 分钟），由 cleanupStaleRuns 异步清理；
+     * 这段窗口期内任何刷新页面都能拿到 done 回放。
      *
-     * @return true 如果成功附着（流正在运行），false 如果没有活跃的流
+     * @return true 如果成功附着或重放（订阅者已加入或事件已重放完毕），false 如果没有任何状态可恢复
      */
     public boolean attach(String conversationId, SseEmitter emitter) {
         RunState state = runs.get(conversationId);
-        if (state == null || state.done) {
+        if (state == null) {
             return false;
         }
         synchronized (state.lock) {
-            if (state.done) {
-                return false;
-            }
-            // 回放全部缓冲事件
+            // 回放全部缓冲事件（包含 done 事件本身——见 broadcast 的 done 分支）
             for (SseEvent event : state.buffer) {
                 try {
                     emitter.send(SseEmitter.event().name(event.name()).data(event.json()));
@@ -346,6 +355,17 @@ public class ChatStreamTracker {
                             conversationId, e.getMessage());
                     return false;
                 }
+            }
+            // 流已完成：buffer 已回放完毕（含 done event），不需要订阅后续事件
+            if (state.done) {
+                log.info("[SSE] Replayed {} buffered events to reconnecting client for completed stream: {}",
+                        state.buffer.size(), conversationId);
+                try {
+                    emitter.complete();
+                } catch (Exception ignored) {
+                    // emitter 已被 servlet 容器关掉了，无需处理
+                }
+                return true;
             }
             state.subscribers.add(emitter);
         }
@@ -396,11 +416,14 @@ public class ChatStreamTracker {
                 return false;
             }
         }
-        // 所有 Flux 都已完成，停止心跳并移除 RunState（不消费 queue）
+        // 所有 Flux 都已完成，停止心跳，标记 done 但**不立即移除 RunState**——
+        // 留给 cleanupStaleRuns 在 DONE_RETENTION_MS 后异步清理。这段窗口期内
+        // 客户端刷新页面 attach() 能从 buffer 回放 done 事件，UI 不会卡在
+        // "生成中"。之前立即 runs.remove() 是 SSE 中途断开导致 done 永远丢的根源。
         stopHeartbeat(conversationId);
-        runs.remove(conversationId);
         state.done = true;
-        log.debug("Stream fully completed (no queue drain): {}", conversationId);
+        log.debug("Stream fully completed (no queue drain): {} (kept in map for {}ms reconnect window)",
+                conversationId, DONE_RETENTION_MS);
         return true;
     }
 
@@ -428,11 +451,12 @@ public class ChatStreamTracker {
             // 最后一个 Flux：在同一个锁内消费排队消息（取队首）
             consumed = state.messageQueue.poll();
         }
-        // 锁外：停止心跳并移除 RunState
+        // 锁外：停止心跳，标记 done。**不立即移除 RunState**——保留 DONE_RETENTION_MS
+        // 让客户端可在窗口期内刷新页面通过 attach() 回放 done 事件。
         stopHeartbeat(conversationId);
-        runs.remove(conversationId);
         state.done = true;
-        log.debug("Stream fully completed: {} (hasQueuedSnapshot={})", conversationId, consumed != null);
+        log.debug("Stream fully completed: {} (hasQueuedSnapshot={}, kept in map for {}ms reconnect window)",
+                conversationId, consumed != null, DONE_RETENTION_MS);
         return new CompletionResult(true, consumed);
     }
 
