@@ -97,12 +97,18 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
         //    sampling-params handling, thinking-budget mapping, prompt cache.
         AnthropicChatOptions options = anthropicBuilder.buildAnthropicOptions(model);
 
-        return AnthropicChatModel.builder()
+        AnthropicChatModel raw = AnthropicChatModel.builder()
                 .anthropicApi(api)
                 .defaultOptions(options)
                 .retryTemplate(retry)
                 .observationRegistry(observationRegistryProvider.getIfAvailable(() -> ObservationRegistry.NOOP))
                 .build();
+
+        // 4) Wrap with the OAuth identity decorator. Anthropic's edge rate-limits /
+        //    5xxs requests that don't claim Claude Code identity in the system
+        //    prompt — symptom: 429 rate_limit_error with body "Error" on quiet
+        //    accounts. See ClaudeCodeIdentityChatModelDecorator javadoc.
+        return new ClaudeCodeIdentityChatModelDecorator(raw);
     }
 
     /**
