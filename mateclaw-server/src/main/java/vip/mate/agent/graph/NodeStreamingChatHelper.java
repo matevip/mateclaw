@@ -575,6 +575,16 @@ public class NodeStreamingChatHelper {
         // The returned Prompt shares `options` by reference with the input prompt.
         Prompt outbound = stripThinkingFromPrompt(prompt);
 
+        // RFC-049 follow-up (2026-04-27): trim trailing AssistantMessage from the
+        // outbound prompt. Triggered in practice by the summarizing→reasoning
+        // graph transition: the summarizer emits an in-turn AssistantMessage,
+        // graph state ends with it, reasoning's next LLM call sends history
+        // ending with assistant. Anthropic Claude returns 400 "does not
+        // support assistant message prefill"; some DeepSeek model variants 400
+        // similarly. The dropped assistant is summarizer scaffolding, not
+        // user-relevant content, so removing it before egress is safe.
+        outbound = dropTrailingAssistant(outbound);
+
         // PR-2 L3 (RFC-049 §2.3.2): producer-side relay stash. Extract per-assistant
         // thinking from the normalized prompt (cross-turn positions are already "" due
         // to strip), stash with the caller's original `user` field, and overwrite
@@ -1062,6 +1072,37 @@ public class NodeStreamingChatHelper {
                     strippedCount, lastUserIdx, messages.size());
         }
         return new Prompt(cleaned, prompt.getOptions());
+    }
+
+    /**
+     * Drop trailing {@link AssistantMessage} entries from a Prompt's instructions.
+     * Most LLM providers reject prompts whose history ends with an assistant turn —
+     * Anthropic Claude with a 400 "does not support assistant message prefill",
+     * DeepSeek thinking-mode variants with reasoning_content errors. The
+     * trailing assistant is typically a summarizer-emitted scaffold message that
+     * shouldn't be sent as the final user-facing prompt anyway. Returns the
+     * input unchanged if there's nothing to drop.
+     */
+    static Prompt dropTrailingAssistant(Prompt prompt) {
+        List<Message> messages = prompt.getInstructions();
+        if (messages.isEmpty()) {
+            return prompt;
+        }
+        int end = messages.size();
+        while (end > 0 && messages.get(end - 1) instanceof AssistantMessage) {
+            end--;
+        }
+        if (end == messages.size()) {
+            return prompt;
+        }
+        if (end == 0) {
+            // Refuse to produce an empty prompt — caller's bug; let provider error surface.
+            log.warn("[dropTrailingAssistant] all messages were AssistantMessage; skipping trim to avoid empty prompt");
+            return prompt;
+        }
+        log.debug("[dropTrailingAssistant] trimmed {} trailing AssistantMessage(s) from prompt (size {} -> {})",
+                messages.size() - end, messages.size(), end);
+        return new Prompt(new ArrayList<>(messages.subList(0, end)), prompt.getOptions());
     }
 
     private StreamResult buildErrorResult(String errorMsg, String conversationId, String phase) {

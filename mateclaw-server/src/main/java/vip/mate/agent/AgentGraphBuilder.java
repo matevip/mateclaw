@@ -1589,7 +1589,18 @@ public class AgentGraphBuilder {
      * those into new 400s.
      */
     private enum FallbackPolicy {
-        DEEPSEEK(null, true,  true),
+        // RFC-049 follow-up (2026-04-27): DEEPSEEK previously used (null, true, true)
+        // to "surface explicit provider error" when the producer-side relay had no
+        // captured reasoning_content. In practice this kept failing every multi-tool
+        // turn that crossed a summarizing boundary — the summarizer-produced
+        // assistant message has no reasoning_content by construction, the relay
+        // iterator has no entry for it, and DeepSeek returns 400 inside the same
+        // turn (not just multi-turn replay), aborting the whole graph at the
+        // reasoning step right after summarizing. Switching to the same " "
+        // tolerance KIMI/OPENAI use restores forward progress; the producer-side
+        // capture gap remains a real bug to fix in RFC-049 PR-3 but doesn't
+        // belong on the user-facing failure path.
+        DEEPSEEK(" ",  false, true),
         KIMI    (" ",  false, false),
         OPENAI  (" ",  false, false),
         DEFAULT (" ",  false, false);

@@ -222,6 +222,20 @@ public abstract class BaseAgent {
                 messages.add(springMessage);
             }
         }
+
+        // Tail guard: a few providers reject prompts whose history ends with an
+        // assistant message. Anthropic Claude returns 400 "does not support
+        // assistant message prefill"; DeepSeek thinking mode requires the
+        // last assistant turn's reasoning_content (which we may not have).
+        // The trailing-user-dedup above can already produce an assistant tail
+        // when the immediately-prior turn was an error / placeholder that got
+        // dropped by stage 1 / 1.5 of sanitizeForLlm. Strip remaining assistant
+        // tails defensively — the current user message is fed in separately as
+        // the final prompt by the caller, so dropping these assistant entries
+        // never loses information the LLM needs.
+        while (!messages.isEmpty() && messages.get(messages.size() - 1) instanceof AssistantMessage) {
+            messages.remove(messages.size() - 1);
+        }
         return messages;
     }
 
@@ -261,6 +275,25 @@ public abstract class BaseAgent {
         if ("assistant".equals(entity.getRole()) && isApprovalPlaceholder(entity.getContent())) {
             log.debug("[{}] Filtering approval placeholder from history: msgId={}",
                     agentName, entity.getId());
+            return null;
+        }
+
+        // Stage 1.5: drop typed-error assistant messages. These are persisted
+        // by ChatController.doOnComplete with status='error' (or carry the
+        // "[错误] " prefix injected by NodeStreamingChatHelper for legacy
+        // rows). Re-sending them as multi-turn context drives a self-replicating
+        // failure loop:
+        //   - DeepSeek thinking mode → 400 "reasoning_content must be passed back"
+        //     (we never captured a real reasoning_content for the failed turn)
+        //   - Anthropic Claude → 400 "does not support assistant message prefill"
+        //     (the trailing-user-dedup at the call site can leave an assistant
+        //      tail when the prior turn errored)
+        // Both providers' 400 then re-persist a fresh "[错误] " row, repeat.
+        if ("assistant".equals(entity.getRole())
+                && ("error".equals(entity.getStatus())
+                        || (entity.getContent() != null && entity.getContent().startsWith("[错误] ")))) {
+            log.debug("[{}] Filtering error assistant message from history: msgId={} status={}",
+                    agentName, entity.getId(), entity.getStatus());
             return null;
         }
 

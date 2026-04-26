@@ -52,8 +52,37 @@ public class ReasoningNode implements NodeAction {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    /** 单次 LLM 调用的默认最大输出 token 数，防止退化输出无限生成 */
-    private static final int DEFAULT_MAX_OUTPUT_TOKENS = 4096;
+    /**
+     * 单次 LLM 调用的默认最大输出 token 数，防止退化输出无限生成。
+     * <p>
+     * RFC-049 follow-up (2026-04-27): bumped 4096 → 16384. 4096 was hitting
+     * the cap when models emit large generative tool_call args (e.g. renderDocx
+     * with a multi-thousand-character markdown body) on top of thinking
+     * content for reasoning_effort=high — the JSON args got truncated mid-
+     * stream, the tool failed to parse, the docx was never generated. 16k is
+     * the conservative ceiling that covers typical "write a long document"
+     * tool calls without enabling true runaway loops (those are bounded by
+     * iteration count, not per-call tokens).
+     */
+    private static final int DEFAULT_MAX_OUTPUT_TOKENS = 16384;
+
+    /**
+     * Hermes-agent style enforcement clause appended to every ReasoningNode
+     * system prompt. Treats narration ("I will now …") as a protocol violation
+     * to prevent the recurring failure mode where a model says it will call a
+     * tool but emits the description as final_answer text instead.
+     */
+    private static final String TOOL_USE_ENFORCEMENT = "\n\n"
+            + "## 工具调用纪律（必读）\n\n"
+            + "- 你**必须**直接调用工具来产生结果，不允许只用文字描述\"接下来要做什么\"。\n"
+            + "- 当你说要执行某个动作（如生成文件、发送消息、调用接口、生成 docx），\n"
+            + "  你**必须**在同一条回复里**立即发出对应的 tool_call**，不允许只写文字承诺。\n"
+            + "- 禁止以\"现在 / 接下来 / 我将 / 直接生成 / 我直接\"+动作描述结束本轮回复——\n"
+            + "  这种叙述会让系统误判任务已完成，**实际上工具没被调用**，结果文件不会产生。\n"
+            + "- 如果上一次工具调用因 args JSON 截断（max_tokens 超限）失败，\n"
+            + "  请重新调用同一工具但**缩小内容**，或拆成多次顺序调用，**不要改成纯文字回答**。\n"
+            + "- 只在确实没有合适工具，或所有工具步骤都已完成、可以最终回答用户时，\n"
+            + "  才输出无 tool_call 的纯文字回答。\n";
 
     private final ChatModel chatModel;
     private final List<ToolCallback> toolCallbacks;
@@ -203,6 +232,18 @@ public class ReasoningNode implements NodeAction {
 
         // ======= 构建 Prompt =======
         String systemPrompt = accessor.systemPrompt();
+        // RFC-049 follow-up: append a tool-use enforcement clause to every
+        // ReasoningNode call. Without this, models (especially DeepSeek thinking
+        // and Claude Opus) tend to "narrate" — emit a final_answer like "现在
+        // 直接生成立项材料 docx" instead of actually calling renderDocx, which
+        // makes the graph silently terminate at final_answer_node with the
+        // narration as the user-facing reply.
+        //
+        // Pattern adopted from hermes-agent's TOOL_USE_ENFORCEMENT_GUIDANCE
+        // (`/agent/prompt_builder.py:179-191`). Appended to systemPrompt rather
+        // than woven into the AgentEntity-stored prompt so it stays out of the
+        // user-editable agent UI but is still always-on at runtime.
+        systemPrompt = systemPrompt + TOOL_USE_ENFORCEMENT;
         List<Message> messages = accessor.messages();
 
         // Guard against runaway message list growth.

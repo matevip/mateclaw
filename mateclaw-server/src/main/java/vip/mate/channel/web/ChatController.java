@@ -455,16 +455,28 @@ public class ChatController {
                         })
                         .doOnComplete(() -> {
                             if (!finalized.compareAndSet(false, true)) return;
-                            // 区分三种完成语义：
+                            // 区分四种完成语义：
                             // 1. 正常完成（stopRequested=false）→ completed
                             // 2. 用户主动停止 → stopped
                             // 3. 用户中断后续跑（interrupt-with-followup）→ interrupted
+                            // 4. LLM 客户端错误 / typed error → error
+                            //    （NodeStreamingChatHelper 把 typed error 序列化为 "[错误] "
+                            //     前缀的文本作为 content_delta 注入，accumulator 不区分，
+                            //     这里靠前缀识别。打标 status='error' 后，BaseAgent
+                            //     的 history sanitization 阶段会跳过这类消息，避免下次
+                            //     prompt 被污染——DeepSeek thinking mode 缺
+                            //     reasoning_content 立即 400，Claude 不接受 assistant
+                            //     prefill 也 400，二者循环复制错误。）
                             boolean wasStopped = streamTracker.isStopRequested(conversationId);
                             ChatStreamTracker.InterruptType interruptType = streamTracker.getInterruptType(conversationId);
                             boolean isInterruptFollowup = interruptType == ChatStreamTracker.InterruptType.USER_INTERRUPT_WITH_FOLLOWUP;
+                            boolean isError = accumulator.getContent() != null
+                                    && accumulator.getContent().startsWith("[错误] ");
                             String persistStatus;
                             if (accumulator.isAwaitingApproval()) {
                                 persistStatus = "awaiting_approval";
+                            } else if (isError) {
+                                persistStatus = "error";
                             } else if (!wasStopped) {
                                 persistStatus = "completed";
                             } else {
@@ -488,8 +500,11 @@ public class ChatController {
                                     savedAssistant = conversationService.saveMessage(conversationId, "assistant",
                                             isInterruptFollowup ? "[已中断]" : "[已停止生成]", null, persistStatus);
                                 }
-                                // 发布对话完成事件（仅正常完成时，停止/中断不触发记忆提取）
-                                if (!wasStopped) {
+                                // 发布对话完成事件（仅正常完成时；停止/中断/错误均不触发记忆提取）
+                                // RFC-049 follow-up: also skip on isError — error turns persist
+                                // garbage like "[错误] Bad request..." as the assistant reply,
+                                // which would pollute the memory extraction pipeline if propagated.
+                                if (!wasStopped && !isError) {
                                     completionPublisher.publish(agentId, conversationId, message, assistantText, "web");
                                 }
 
@@ -520,7 +535,19 @@ public class ChatController {
                                 streamTracker.clearInterruptState(conversationId);
                                 ChatStreamTracker.CompletionResult cr = streamTracker.completeAndConsumeIfLast(conversationId);
                                 if (cr.allDone()) {
-                                    if (cr.queuedInput() != null && (isInterruptFollowup || !wasStopped)) {
+                                    // RFC follow-up (2026-04-27): the previous guard
+                                    //   cr.queuedInput() != null && (isInterruptFollowup || !wasStopped)
+                                    // dropped legitimate queued messages when the user stopped
+                                    // the running turn and then sent a new message via the
+                                    // enqueue path (not the interrupt-with-followup path) —
+                                    // wasStopped=true + isInterruptFollowup=false made the
+                                    // guard false, the consumed queuedInput was discarded,
+                                    // and the user's new message vanished. The other 4 sites
+                                    // in this controller already use the simpler "if queued,
+                                    // run it" condition; align with them. If the user
+                                    // genuinely doesn't want continuation, no message would
+                                    // have been in messageQueue to begin with.
+                                    if (cr.queuedInput() != null) {
                                         startQueuedMessage(conversationId, emitter, emitterDone, cr.queuedInput(), username);
                                     } else {
                                         conversationService.updateStreamStatus(conversationId, "idle");

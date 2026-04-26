@@ -739,8 +739,20 @@ public class ToolExecutionExecutor {
                 || lower.contains("unexpected character escape sequence")
                 || lower.contains("json parse error")
                 || lower.contains("malformed json")) {
-            return "Tool execution failed: model generated invalid JSON for tool arguments. "
-                    + "或在字符串转义位置被截断。请改为分步骤写入，拆成多个文件，或缩小单次 write_file/edit_file 的内容后重试。";
+            // Truncated tool_call args — typically from max_tokens being hit while
+            // streaming a large `content` field (e.g. renderDocx with 7000+ char
+            // markdown body). The fix MUST come from the model: re-emit the same
+            // tool call with smaller content per call, OR split the work across
+            // multiple sequential tool calls. We tell the LLM directly so the
+            // next reasoning iteration knows what to do — without this, models
+            // tend to fall back to narrating the result as final_answer text.
+            return "Tool execution failed: your tool_call arguments JSON was truncated mid-stream "
+                    + "(very likely you hit max_tokens while emitting a long content field). "
+                    + "Action required: re-call the SAME tool now in your next response, but "
+                    + "(1) make the content field shorter, OR (2) split the work into multiple "
+                    + "sequential tool calls (e.g. write the doc in 2-3 chunks via separate calls). "
+                    + "Do NOT describe the result as text — you must call the tool again to actually "
+                    + "produce the output.";
         }
 
         if (lower.contains("access denied") && lower.contains("path outside allowed directories")) {
