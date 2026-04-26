@@ -743,10 +743,6 @@ public class NodeStreamingChatHelper {
                     }
 
                     // 4. 提取 token usage（通常最后一个 chunk 携带完整 usage）
-                    // E-4 probe: log metadata keys to check for x-ratelimit-* headers
-                    if (chatResponse.getMetadata() != null && log.isDebugEnabled()) {
-                        log.debug("[E4-probe] metadata keys: {}", chatResponse.getMetadata().keySet());
-                    }
                     if (chatResponse.getMetadata() != null && chatResponse.getMetadata().getUsage() != null) {
                         var usage = chatResponse.getMetadata().getUsage();
                         if (usage.getPromptTokens() != null && usage.getPromptTokens() > 0) {

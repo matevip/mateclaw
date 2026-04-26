@@ -1,10 +1,12 @@
 package vip.mate.channel.web;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
+import vip.mate.workspace.conversation.model.MessageContentPart;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -104,6 +106,18 @@ public class ChatStreamTracker {
         /** 排队的用户消息队列（支持多条排队消息，按序消费） */
         final java.util.Queue<QueuedInput> messageQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
 
+        /**
+         * Emergency save callback registered by the SSE chain owner (ChatController).
+         * Invoked from {@link #onShutdown()} so the accumulated assistant content + tool_calls
+         * are persisted before the JVM tears down — without this, a `mvn spring-boot:run`
+         * restart wipes any in-flight turn and leaves only the user message in DB.
+         * <p>
+         * The callback must be idempotent (will not be called twice for the same run, but
+         * may race with normal doOnComplete/doOnError; both paths must tolerate the other
+         * having saved already).
+         */
+        volatile Runnable emergencySaveCallback;
+
         /** 心跳定时器 */
         volatile ScheduledFuture<?> heartbeatFuture;
 
@@ -187,6 +201,18 @@ public class ChatStreamTracker {
         RunState state = runs.get(conversationId);
         if (state != null) {
             state.disposable = disposable;
+        }
+    }
+
+    /**
+     * Register an emergency-save callback for this run, invoked from {@link #onShutdown()}
+     * before the JVM tears down. The callback should snapshot the current accumulator
+     * state and persist it as the assistant message (status="interrupted").
+     */
+    public void setEmergencySaveCallback(String conversationId, Runnable callback) {
+        RunState state = runs.get(conversationId);
+        if (state != null) {
+            state.emergencySaveCallback = callback;
         }
     }
 
@@ -577,6 +603,11 @@ public class ChatStreamTracker {
      * @return true 如果成功请求了中断
      */
     public boolean requestInterrupt(String conversationId, String queuedMessage, Long agentId, boolean persisted) {
+        return requestInterrupt(conversationId, queuedMessage, agentId, persisted, null);
+    }
+
+    public boolean requestInterrupt(String conversationId, String queuedMessage, Long agentId,
+                                    boolean persisted, List<MessageContentPart> contentParts) {
         RunState state = runs.get(conversationId);
         if (state == null || state.done) {
             return false;
@@ -589,7 +620,7 @@ public class ChatStreamTracker {
             Disposable d = state.disposable;
             canInterrupt = d != null && !d.isDisposed();
             // 无论是否可中断，都入队（支持多条排队消息）
-            state.messageQueue.offer(new QueuedInput(queuedMessage, agentId, persisted));
+            state.messageQueue.offer(new QueuedInput(queuedMessage, agentId, persisted, contentParts));
             if (canInterrupt) {
                 state.interruptType = InterruptType.USER_INTERRUPT_WITH_FOLLOWUP;
                 state.stopRequested.set(true);
@@ -636,11 +667,16 @@ public class ChatStreamTracker {
      * 将消息加入队列但不中断当前执行（用于不可中断阶段）。
      */
     public boolean enqueueMessage(String conversationId, String message, Long agentId, boolean persisted) {
+        return enqueueMessage(conversationId, message, agentId, persisted, null);
+    }
+
+    public boolean enqueueMessage(String conversationId, String message, Long agentId, boolean persisted,
+                                  List<MessageContentPart> contentParts) {
         RunState state = runs.get(conversationId);
         if (state == null || state.done) {
             return false;
         }
-        state.messageQueue.offer(new QueuedInput(message, agentId, persisted));
+        state.messageQueue.offer(new QueuedInput(message, agentId, persisted, contentParts));
         // broadcast 在锁外
         try {
             String json = objectMapper.writeValueAsString(Map.of(
@@ -656,9 +692,14 @@ public class ChatStreamTracker {
     }
 
     /**
-     * 排队输入的原子快照（message + agentId + persisted 一起返回，避免分离读取导致不一致）
+     * 排队输入的原子快照（message + agentId + persisted + contentParts 一起返回，避免分离读取导致不一致）
      */
-    public record QueuedInput(String message, Long agentId, boolean persisted) {}
+    public record QueuedInput(String message, Long agentId, boolean persisted,
+                              List<MessageContentPart> contentParts) {
+        public QueuedInput(String message, Long agentId, boolean persisted) {
+            this(message, agentId, persisted, null);
+        }
+    }
 
     /**
      * 原子消费排队的输入（流完成/中断后调用）。
@@ -903,6 +944,66 @@ public class ChatStreamTracker {
         if (evicted > 0) {
             log.info("[SSE] Cleanup completed: evicted {} stale RunState entries, {} remaining",
                     evicted, runs.size());
+        }
+    }
+
+    /**
+     * Flush in-flight runs before JVM shutdown.
+     * <p>
+     * Spring closes singleton beans in reverse construction order; ConversationService /
+     * Hikari outlive ChatStreamTracker, so saveMessage from {@link #onShutdown()} still
+     * has a working DB connection. Without this, a {@code mvn spring-boot:run} restart or
+     * SIGTERM during a turn races against the Reactor cancellation: the doOnError /
+     * doOnComplete saveMessage may not run before HikariPool shuts down, leaving the
+     * conversation with only the user message and no assistant reply (the
+     * "对话框里除了问题外什么也没留下" symptom seen in production logs at 07:23:02).
+     * <p>
+     * Behavior:
+     * <ol>
+     *   <li>Walk every active (not-done) RunState.</li>
+     *   <li>Invoke its registered emergencySaveCallback synchronously — the callback
+     *       (set by ChatController) snapshots the current accumulator and persists it
+     *       as an "interrupted" assistant message.</li>
+     *   <li>Dispose the Reactor disposable so the LLM stream terminates promptly.</li>
+     * </ol>
+     * The callback must tolerate normal doOnError/doOnComplete having raced and saved
+     * already; the latest commit wins for that conversation.
+     */
+    @PreDestroy
+    public void onShutdown() {
+        int active = (int) runs.values().stream().filter(s -> !s.done).count();
+        if (active == 0) {
+            log.info("[ChatStreamTracker] Shutdown: no active runs to flush");
+            return;
+        }
+        log.warn("[ChatStreamTracker] Shutdown: flushing {} active run(s) before JVM exit",
+                active);
+        for (Map.Entry<String, RunState> entry : runs.entrySet()) {
+            RunState state = entry.getValue();
+            if (state.done) continue;
+            String cid = entry.getKey();
+            try {
+                Runnable callback = state.emergencySaveCallback;
+                if (callback != null) {
+                    log.info("[ChatStreamTracker] Emergency-saving in-flight run: {}", cid);
+                    callback.run();
+                } else {
+                    log.warn("[ChatStreamTracker] No emergency-save callback for active run: {} " +
+                            "(content may be lost)", cid);
+                }
+            } catch (Exception e) {
+                log.error("[ChatStreamTracker] Emergency save failed for {}: {}",
+                        cid, e.getMessage(), e);
+            }
+            try {
+                Disposable d = state.disposable;
+                if (d != null && !d.isDisposed()) {
+                    d.dispose();
+                }
+            } catch (Exception e) {
+                log.warn("[ChatStreamTracker] Disposable.dispose failed for {}: {}",
+                        cid, e.getMessage());
+            }
         }
     }
 }

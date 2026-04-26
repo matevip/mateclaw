@@ -288,18 +288,21 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       if (streamPhase.value !== 'summarizing_observations') {
         streamPhase.value = options.thinkingLevel?.value === 'off' ? 'streaming' : 'thinking'
       }
-      // Segments: all thinking deltas merge into one segment (not split by tool_call interruptions)
+      // Segments: per-round thinking. When tool_call_started / phase change closes the running
+      // thinking segment (status='completed'), a fresh thinking_delta opens a new segment instead
+      // of reopening the closed one. Without this split, multi-round ReAct (3 reasoning + 2
+      // summarizing rounds) accumulates 9K+ chars in a single bubble.
       const segs = currentSegments.value
-      // Reuse an existing thinking segment regardless of status (running or completed)
-      let thinkSeg = segs.find((s: MessageSegment) => s.type === 'thinking')
+      let thinkSeg = segs.findLast((s: MessageSegment) =>
+        s.type === 'thinking' && s.status === 'running'
+      )
       if (!thinkSeg) {
         thinkSeg = { id: genSegId(), type: 'thinking', status: 'running', thinkingText: '', timestamp: Date.now() }
-        // Insert at front — thinking always appears at the top
-        segs.unshift(thinkSeg)
+        // Append in timeline order (interleaved with tool_calls) — old behavior unshift'd to top,
+        // but with per-round splitting that misorders rounds 2+ relative to their tool calls.
+        segs.push(thinkSeg)
         flushSegmentsToMessage()
       }
-      // Re-mark as running when new thinking content arrives
-      thinkSeg.status = 'running'
       thinkSeg.thinkingText = (thinkSeg.thinkingText || '') + (data.delta || '')
     }
   })
@@ -595,6 +598,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           ...msg,
           metadata: { ...metadata, currentPhase: data.phase }
         } as any)
+      }
+      // Close any running thinking/content segment on phase transition so the next thinking_delta
+      // (e.g. summarizing → reasoning) starts a fresh round-scoped segment instead of growing the
+      // previous one unbounded.
+      const segs = currentSegments.value
+      for (const seg of segs) {
+        if (seg.status === 'running' && (seg.type === 'thinking' || seg.type === 'content')) {
+          seg.status = 'completed'
+        }
       }
     }
   })

@@ -738,6 +738,10 @@ public class ChatController {
 
                 // 将 Disposable 注册到 StreamTracker，以便 stop 端点可以取消它
                 streamTracker.setDisposable(conversationId, disposable);
+                // JVM 关闭时优雅落盘：避免 mvn spring-boot:run 重启 / SIGTERM 把
+                // 进行中 turn 的 assistant 消息丢失（doOnError 来不及在 Hikari 关闭前执行）
+                streamTracker.setEmergencySaveCallback(conversationId,
+                        () -> emergencySaveAccumulator(conversationId, accumulator));
 
             } catch (Exception e) {
                 log.error("SSE setup error: {}", e.getMessage());
@@ -773,12 +777,15 @@ public class ChatController {
     }
 
     /**
-     * 中断当前流并排队一条后续消息。
+     * 在执行中追加一条后续消息：仅入队，等当前 turn 自然结束后再启动。
      * <p>
-     * 与 stop 的区别：interrupt 会在当前 turn 安全结束后自动启动排队消息。
-     * 如果当前阶段不可中断（awaiting_approval），消息会被排队但不打断当前执行。
+     * 对齐 Claude Code 行为：流式输出过程中收到新输入不会强制 dispose 当前 LLM 调用，
+     * 而是仅入队。当前 turn 跑到 doOnComplete/doOnError 后由 startQueuedMessage 接管。
+     * <p>
+     * 旧行为（dispose 当前 disposable + 立即重启）会导致部分 LLM 输出被丢弃 + token 浪费，
+     * 已废弃。如果未来需要"立即打断"语义，应该走 /stop（用户主动取消）+ 重新发起新消息的路径。
      */
-    @Operation(summary = "中断并排队后续消息")
+    @Operation(summary = "排队后续消息（不打断当前流）")
     @PostMapping("/{conversationId}/interrupt")
     public R<Map<String, Object>> interruptStream(
             @PathVariable String conversationId,
@@ -797,34 +804,20 @@ public class ChatController {
         Long agentId = request.getAgentId();
         List<MessageContentPart> contentParts = request.getContentParts();
 
-        // 判断当前阶段是否可中断
-        // awaiting_approval 阶段不直接中断，只排队
+        // 判断当前阶段（仅用于 reason 字段，行为对所有阶段一致：仅入队）
         boolean isAwaitingApproval = approvalService.findPendingByConversation(conversationId) != null;
 
-        if (isAwaitingApproval) {
-            // 不可中断：排队但不打断。先持久化（含 contentParts）再入队（persisted=true）
-            conversationService.saveMessage(conversationId, "user", message, contentParts, "queued");
-            boolean queued = streamTracker.enqueueMessage(conversationId, message, agentId, true);
-            log.info("Interrupt requested during approval, message queued: conversationId={}, user={}, queueSize={}",
-                    conversationId, username, streamTracker.getQueueSize(conversationId));
-            return R.ok(Map.of(
-                    "interrupted", false,
-                    "queued", queued,
-                    "reason", "awaiting_approval"
-            ));
-        }
-
-        // 可中断：先持久化（含 contentParts）再打断并入队（persisted=true）
-        conversationService.saveMessage(conversationId, "user", message, contentParts, "queued");
-        boolean interrupted = streamTracker.requestInterrupt(conversationId, message, agentId, true);
-        log.info("Interrupt requested: conversationId={}, user={}, interrupted={}, queueSize={}",
-                conversationId, username, interrupted, streamTracker.getQueueSize(conversationId));
+        // 仅入队、不 dispose。延迟持久化到 startQueuedMessage（让 Asst-N 先在 doOnComplete 落库，
+        // 否则 listMessages ORDER BY create_time ASC 会把 Q(N+1) 排到 Asst-N 前面）
+        boolean queued = streamTracker.enqueueMessage(conversationId, message, agentId, false, contentParts);
+        log.info("Enqueued follow-up message during running turn: conversationId={}, user={}, queueSize={}, awaitingApproval={}",
+                conversationId, username, streamTracker.getQueueSize(conversationId), isAwaitingApproval);
 
         return R.ok(Map.of(
-                "interrupted", interrupted,
-                "queued", true,
+                "interrupted", false,
+                "queued", queued,
                 "queueSize", streamTracker.getQueueSize(conversationId),
-                "reason", interrupted ? "interrupted" : "queued"
+                "reason", isAwaitingApproval ? "awaiting_approval" : "queued"
         ));
     }
 
@@ -1009,9 +1002,12 @@ public class ChatController {
         log.info("Starting queued message: conversationId={}, agentId={}, message={}",
                 conversationId, agentId, queuedMessage.substring(0, Math.min(30, queuedMessage.length())));
 
-        // 持久化排队的用户消息（幂等：如果 /interrupt 已提前持久化则跳过）
+        // 持久化排队的用户消息（含 contentParts；幂等：如果 /interrupt 已提前持久化则跳过）。
+        // 这里持久化是为了确保 user 消息在 assistant 消息（doOnError/doOnCancel 已写入）之后落库，
+        // 让 listMessages ORDER BY create_time ASC 后顺序正确：Q1 → Asst1 → Q2 → Asst2。
         if (queuedMessage != null && !queuedMessage.isBlank() && !preConsumedInput.persisted()) {
-            conversationService.saveMessage(conversationId, "user", queuedMessage);
+            conversationService.saveMessage(conversationId, "user", queuedMessage,
+                    preConsumedInput.contentParts(), "queued");
         }
 
         // 广播 queued_input_started 事件
@@ -1122,6 +1118,8 @@ public class ChatController {
                 })
                 .subscribe();
         streamTracker.setDisposable(conversationId, disposable);
+        streamTracker.setEmergencySaveCallback(conversationId,
+                () -> emergencySaveAccumulator(conversationId, accumulator));
     }
 
     private void sendEvent(SseEmitter emitter, String name, Object data) throws IOException {
@@ -1168,6 +1166,40 @@ public class ChatController {
             payload.put("assistantMessageId", savedAssistant.getId());
         }
         return payload;
+    }
+
+    /**
+     * Snapshot the accumulator and persist it as an assistant message during JVM shutdown.
+     * Invoked from {@link ChatStreamTracker#onShutdown()} so any in-flight turn doesn't
+     * lose its already-streamed content + tool calls when the process exits.
+     * <p>
+     * Idempotent w.r.t. the normal doOnComplete/doOnError save: if those paths already
+     * persisted the message, this writes a second row with status="interrupted_shutdown",
+     * which is rare in practice (race window is sub-second between dispose and save) and
+     * acceptable. Skipping save when nothing to save avoids empty rows.
+     */
+    private void emergencySaveAccumulator(String conversationId, StreamAccumulator accumulator) {
+        try {
+            String text = accumulator.getContent();
+            List<MessageContentPart> parts = accumulator.toAssistantParts();
+            if (text.isBlank() && parts.isEmpty()) {
+                return;
+            }
+            String savedText = text.isBlank() ? "[已中断 — 服务重启]" : text;
+            conversationService.saveMessage(conversationId, "assistant", savedText, parts,
+                    "interrupted_shutdown",
+                    accumulator.getPromptTokens(),
+                    accumulator.getCompletionTokens(),
+                    accumulator.getRuntimeModelName(),
+                    accumulator.getRuntimeProviderId(),
+                    accumulator.toMetadataJson());
+            log.info("[ChatController] Emergency-saved in-flight assistant message: " +
+                    "conversationId={}, textLen={}, partsCount={}",
+                    conversationId, text.length(), parts.size());
+        } catch (Exception e) {
+            log.error("[ChatController] Emergency save failed for {}: {}",
+                    conversationId, e.getMessage(), e);
+        }
     }
 
     private List<MessageContentPart> normalizeRequestParts(ChatStreamRequest request) {

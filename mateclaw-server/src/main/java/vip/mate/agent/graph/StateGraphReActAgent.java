@@ -175,6 +175,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             // 防重保护：同 chatStructuredStream
             AtomicBoolean finalAnswerEmitted = new AtomicBoolean(false);
             AtomicBoolean finalThinkingEmitted = new AtomicBoolean(false);
+            AtomicReference<String> lastEmittedStreamedContent = new AtomicReference<>("");
 
             return compiledGraph.stream(inputs, config)
                     .flatMapIterable(output -> {
@@ -191,6 +192,14 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
 
                         boolean contentAlreadyStreamed = output.state().value(CONTENT_STREAMED, false);
                         boolean thinkingAlreadyStreamed = output.state().value(THINKING_STREAMED, false);
+
+                        // 与 chatStructuredStream 一致：把每轮 STREAMED_CONTENT 用 persistOnly 推给 Accumulator，
+                        // 否则中间叙述（reasoning narrative + summarize）只在 SSE 上出现一次，刷新后丢失。
+                        String streamed = output.state().<String>value(STREAMED_CONTENT).orElse("");
+                        if (!streamed.isEmpty() && !streamed.equals(lastEmittedStreamedContent.get())) {
+                            lastEmittedStreamedContent.set(streamed);
+                            deltas.add(AgentService.StreamDelta.persistOnly(streamed, null));
+                        }
 
                         if (hasFinalAnswer(output) && finalAnswerEmitted.compareAndSet(false, true)) {
                             String answer = extractFinalAnswer(output);
@@ -265,6 +274,9 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             // 用 compareAndSet 保证只取第一次，避免 content/thinking 被重复追加
             AtomicBoolean finalAnswerEmitted = new AtomicBoolean(false);
             AtomicBoolean finalThinkingEmitted = new AtomicBoolean(false);
+            // STREAMED_CONTENT 是 REPLACE 策略（每轮 ReasoningNode/SummarizingNode 覆写），
+            // 用 lastEmitted 跟踪已发送的值，避免在 ActionNode/ObservationNode 的 NodeOutput 上重复发送同一段内容。
+            AtomicReference<String> lastEmittedStreamedContent = new AtomicReference<>("");
 
             return compiledGraph.stream(inputs, config)
                     .flatMapIterable(output -> {
@@ -286,6 +298,16 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                                 .value(CONTENT_STREAMED, false);
                         boolean thinkingAlreadyStreamed = output.state()
                                 .value(THINKING_STREAMED, false);
+
+                        // 2a. 中间叙述内容持久化：每轮 ReasoningNode（带 tool_calls）和 SummarizingNode
+                        //     都把当轮 LLM 输出写入 STREAMED_CONTENT。NodeStreamingChatHelper 已实时广播
+                        //     给前端，但 Accumulator 不在 SSE 订阅链路上，必须用 persistOnly StreamDelta
+                        //     补一刀，否则刷新后正文文字全部丢失（只剩 final_answer + tool_call 卡片）。
+                        String streamed = output.state().<String>value(STREAMED_CONTENT).orElse("");
+                        if (!streamed.isEmpty() && !streamed.equals(lastEmittedStreamedContent.get())) {
+                            lastEmittedStreamedContent.set(streamed);
+                            deltas.add(AgentService.StreamDelta.persistOnly(streamed, null));
+                        }
 
                         if (hasFinalAnswer(output) && finalAnswerEmitted.compareAndSet(false, true)) {
                             String answer = extractFinalAnswer(output);

@@ -183,6 +183,9 @@ public class SummarizingNode implements NodeAction {
                 // 摘要的 content 已流式推送，但它不是最终回答，标记防重即可
                 .contentStreamed(true)
                 .thinkingStreamed(!result.thinking().isEmpty())
+                // 把当轮 summary 文本写入 STREAMED_CONTENT，让 StateGraphReActAgent 用 persistOnly
+                // StreamDelta 推给 Accumulator 持久化（用户刷新页面后能看到摘要正文，否则只剩 tool_call 卡片）
+                .streamedContent(summaryContent)
                 .mergeUsage(state, result)
                 // 不设 finishReason — summarizing 不是终止，循环继续
                 .events(List.of(GraphEventPublisher.phase("summarized", Map.of(
