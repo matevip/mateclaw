@@ -291,6 +291,8 @@ import StreamLoadingBar from '@/components/chat/StreamLoadingBar.vue'
 import TalkMode from '@/components/chat/TalkMode.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import { useEChartsRenderer } from '@/composables/useEChartsRenderer'
+import { useKatexRenderer } from '@/composables/useKatexRenderer'
+import { useMermaidRenderer } from '@/composables/useMermaidRenderer'
 
 // ============ Talk Mode ============
 const showTalkMode = ref(false)
@@ -555,9 +557,13 @@ async function collectFilesFromEntries(dirEntries: FileSystemDirectoryEntry[]): 
 const messageListRef = ref<InstanceType<typeof MessageList> | null>(null)
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 
-// ECharts: extract DOM element from MessageList component ref
+// Post-render augmentations (ECharts, KaTeX, Mermaid) all watch the same
+// MessageList container — placeholders emitted by useMarkdownRenderer get
+// upgraded in place after Vue paints the rendered Markdown HTML.
 const echartsContainerRef = computed(() => messageListRef.value?.$el as HTMLElement | null)
 const { startObserving: startECharts, dispose: disposeECharts } = useEChartsRenderer(echartsContainerRef)
+const { startObserving: startKatex, dispose: disposeKatex } = useKatexRenderer(echartsContainerRef)
+const { startObserving: startMermaid, dispose: disposeMermaid } = useMermaidRenderer(echartsContainerRef)
 
 // 使用 useChat composable
 const {
@@ -767,6 +773,8 @@ onMounted(async () => {
   document.addEventListener('keydown', handleKeyboardShortcuts)
   document.addEventListener('click', handleCodeCopy)
   startECharts()
+  startKatex()
+  startMermaid()
   mobileQuery = window.matchMedia('(max-width: 768px)')
   handleMobileChange(mobileQuery)
   mobileQuery.addEventListener('change', handleMobileChange)
@@ -782,6 +790,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeyboardShortcuts)
   document.removeEventListener('click', handleCodeCopy)
   disposeECharts()
+  disposeKatex()
+  disposeMermaid()
   mobileQuery?.removeEventListener('change', handleMobileChange)
   mediumQuery?.removeEventListener('change', handleConvMediumChange)
   if (activityPollTimer !== null) {
@@ -1442,6 +1452,12 @@ function formatConversationTime(time?: string) {
 function handleCodeCopy(e: MouseEvent) {
   const btn = (e.target as HTMLElement).closest('.code-block__copy') as HTMLElement | null
   if (!btn) return
+  // The copy button now sits inside <details><summary> for collapsible code
+  // blocks. Without preventDefault the click would also toggle the details
+  // open state — a regression introduced when we wrapped long blocks in
+  // <details>. stopPropagation guards against any future ancestor handlers.
+  e.preventDefault()
+  e.stopPropagation()
   const encoded = btn.getAttribute('data-code')
   if (!encoded) return
   const code = decodeURIComponent(encoded)

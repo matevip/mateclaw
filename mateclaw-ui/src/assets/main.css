@@ -117,6 +117,8 @@
   --mc-attachment-color: #7B3F1E;
   --mc-thinking-bg: #F5F0EB;
   --mc-thinking-text: #5A4030;
+  --mc-mermaid-bg: #FAFAF8;
+  --mc-mermaid-border: #DDD5CC;
   --mc-thinking-hover: rgba(217, 119, 87, 0.1);
   --mc-thinking-icon-bg: rgba(217, 119, 87, 0.12);
   --mc-thinking-border: rgba(217, 119, 87, 0.2);
@@ -232,6 +234,8 @@ html.dark {
   --mc-attachment-color: #F0C4A0;
   --mc-thinking-bg: #231C17;
   --mc-thinking-text: #C4A898;
+  --mc-mermaid-bg: #1A1410;
+  --mc-mermaid-border: #3D3028;
   --mc-thinking-hover: rgba(224, 136, 96, 0.1);
   --mc-thinking-icon-bg: rgba(224, 136, 96, 0.12);
   --mc-thinking-border: rgba(224, 136, 96, 0.2);

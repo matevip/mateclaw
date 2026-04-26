@@ -1597,6 +1597,103 @@ watch(isGenerating, (generating) => {
   border-radius: 0;
 }
 
+/* ===== Code block: line numbers via CSS counter (keeps DOM minimal) ===== */
+.markdown-body :deep(.code-block ol.hljs-lines) {
+  counter-reset: ln;
+  padding: 12px 16px;
+  margin: 0;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+.markdown-body :deep(.code-block ol.hljs-lines > li) {
+  counter-increment: ln;
+  padding-left: 3.5em;
+  position: relative;
+  white-space: pre;
+  min-height: 1.3em;
+}
+.markdown-body :deep(.code-block ol.hljs-lines > li::before) {
+  content: counter(ln);
+  position: absolute;
+  left: 0;
+  width: 2.8em;
+  text-align: right;
+  color: #94a3b8;
+  user-select: none;
+  opacity: 0.55;
+  font-size: 0.92em;
+}
+/* Highlighted line spans inherit highlight.js colours; keep them on the line itself. */
+
+/* ===== Code block: collapsible (long blocks / large JSON) ===== */
+.markdown-body :deep(details.code-block--collapsible) {
+  /* Reuse the .code-block visuals — already applied via the shared class. */
+}
+.markdown-body :deep(details.code-block--collapsible > summary) {
+  list-style: none;
+  cursor: pointer;
+}
+.markdown-body :deep(details.code-block--collapsible > summary::-webkit-details-marker) {
+  display: none;
+}
+.markdown-body :deep(.code-block__lines) {
+  display: none;
+  font-size: 11px;
+  color: #94a3b8;
+  margin: 0 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  user-select: none;
+}
+/* Show line-count badge only when the block is collapsible AND collapsed. */
+.markdown-body :deep(details.code-block--collapsible:not([open]) .code-block__lines) {
+  display: inline-block;
+}
+.markdown-body :deep(details.code-block--collapsible:not([open]) > pre) {
+  display: none;
+}
+
+/* ===== Mermaid block ===== */
+.markdown-body :deep(.mermaid-block) {
+  margin: 14px 0;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--mc-mermaid-bg, #f8fafc);
+  border: 1px solid var(--mc-mermaid-border, #e2e8f0);
+  text-align: center;
+  overflow-x: auto;
+}
+.markdown-body :deep(.mermaid-block svg) {
+  max-width: 100%;
+  height: auto;
+}
+.markdown-body :deep(.mermaid-block.mermaid-error) {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+  text-align: left;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+/* ===== KaTeX inline / block ===== */
+.markdown-body :deep(.katex-inline) {
+  font-size: 1em;
+}
+.markdown-body :deep(.katex-block) {
+  display: block;
+  margin: 12px 0;
+  text-align: center;
+  overflow-x: auto;
+}
+.markdown-body :deep(.katex-error) {
+  color: #b91c1c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+}
+
 .markdown-body :deep(img) {
   max-width: 100%;
   height: auto;

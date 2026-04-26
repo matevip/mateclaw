@@ -1238,6 +1238,7 @@ export default {
     addText: 'Add Text',
     noRawMaterials: 'No raw materials yet',
     reprocess: 'Reprocess',
+    resume: 'Resume',
     processAll: 'Process All Pending',
     materialTitle: 'Title',
     materialContent: 'Content',

@@ -1248,6 +1248,7 @@ export default {
     addText: '添加文本',
     noRawMaterials: '暂无原始材料',
     reprocess: '重新处理',
+    resume: '继续生成',
     processAll: '处理所有待处理材料',
     materialTitle: '标题',
     materialContent: '内容',

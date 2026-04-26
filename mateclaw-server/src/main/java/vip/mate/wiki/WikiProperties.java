@@ -92,10 +92,11 @@ public class WikiProperties {
      * Pages planned by route are chunked into sub-batches of this size;
      * a local liveIndex is updated between sub-batches so later pages can
      * link to earlier ones created in the same chunk.
-     * Default 5: keeps output tokens per call predictable while covering
-     * the typical 3–5 creates per chunk in a single call.
+     * Default 2: keeps total output tokens well under typical provider caps
+     * (~2k–3k completion tokens) so the FILE-block JSON doesn't get truncated
+     * mid-object. Raising this risks unparseable JSON skips on long content.
      */
-    private int batchCreatePageSize = 3;
+    private int batchCreatePageSize = 2;
 
     /**
      * RFC-047: Minimum chunk length (chars) for the chunk-fallback mechanism.

@@ -154,7 +154,16 @@
           </div>
           <div class="raw-item-actions">
             <button
-              v-if="raw.processingStatus === 'failed' || raw.processingStatus === 'completed' || raw.processingStatus === 'partial'"
+              v-if="raw.processingStatus === 'partial'"
+              class="btn-icon btn-icon-resume" :title="t('wiki.resume')"
+              @click="reprocess(raw.id)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+                <polygon points="6 4 20 12 6 20 6 4"/>
+              </svg>
+            </button>
+            <button
+              v-else-if="raw.processingStatus === 'failed' || raw.processingStatus === 'completed'"
               class="btn-icon" :title="t('wiki.reprocess')"
               @click="reprocess(raw.id)"
             >
@@ -686,6 +695,8 @@ async function handleScanDir() {
 .btn-icon { width: 30px; height: 30px; border: 1px solid var(--mc-border-light); background: var(--mc-bg-elevated); cursor: pointer; border-radius: 8px; color: var(--mc-text-secondary); transition: all 0.15s; display: flex; align-items: center; justify-content: center; }
 .btn-icon:hover { background: var(--mc-bg-sunken); color: var(--mc-primary); border-color: var(--mc-border); }
 .btn-icon-danger:hover { background: var(--mc-danger-bg); color: var(--mc-danger); border-color: var(--mc-danger); }
+.btn-icon-resume { color: var(--mc-primary); border-color: var(--mc-primary); background: var(--mc-primary-bg); }
+.btn-icon-resume:hover { background: var(--mc-primary); color: #fff; border-color: var(--mc-primary); }
 
 /* Status badges */
 .status-badge { font-size: 10px; padding: 2px 8px; border-radius: 9999px; text-transform: uppercase; font-weight: 500; letter-spacing: 0.02em; }
