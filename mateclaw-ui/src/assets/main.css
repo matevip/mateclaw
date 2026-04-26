@@ -86,13 +86,15 @@
   --mc-input-border: #DDD5CC;
   --mc-input-text: #1C1410;
 
-  /* code blocks */
-  --mc-code-bg: #1E1814;
-  --mc-code-header-bg: #2A221C;
-  --mc-code-header-border: rgba(255, 255, 255, 0.06);
-  --mc-code-lang-color: #A09080;
-  --mc-code-copy-color: #8A7A6A;
-  --mc-code-text: #abb2bf;
+  /* code blocks — light mode: warm beige bg, dark text */
+  --mc-code-bg: #FAF6F1;
+  --mc-code-header-bg: #EFE8DE;
+  --mc-code-header-border: rgba(28, 20, 16, 0.08);
+  --mc-code-lang-color: #6B5344;
+  --mc-code-copy-color: #6B5344;
+  --mc-code-copy-hover-bg: rgba(28, 20, 16, 0.06);
+  --mc-code-copy-hover-color: #1C1410;
+  --mc-code-text: #1C1410;
   --mc-code-shadow: rgba(0, 0, 0, 0.08);
 
   /* inline code */
@@ -119,6 +121,9 @@
   --mc-thinking-text: #5A4030;
   --mc-mermaid-bg: #FAFAF8;
   --mc-mermaid-border: #DDD5CC;
+  /* Code block gutter: now theme-aware along with --mc-code-bg.
+     Light mode = darker gutter on light bg; dark fork below flips it. */
+  --mc-code-line-number: rgba(28, 20, 16, 0.38);
   --mc-thinking-hover: rgba(217, 119, 87, 0.1);
   --mc-thinking-icon-bg: rgba(217, 119, 87, 0.12);
   --mc-thinking-border: rgba(217, 119, 87, 0.2);
@@ -203,12 +208,14 @@ html.dark {
   --mc-input-border: #3D3028;
   --mc-input-text: #F0EAE4;
 
-  /* code blocks */
+  /* code blocks — dark mode: deep brown bg, soft text */
   --mc-code-bg: #161210;
   --mc-code-header-bg: #1E1814;
   --mc-code-header-border: rgba(255, 255, 255, 0.06);
   --mc-code-lang-color: #8A7060;
-  --mc-code-copy-color: #7A6050;
+  --mc-code-copy-color: #8A7060;
+  --mc-code-copy-hover-bg: rgba(255, 255, 255, 0.08);
+  --mc-code-copy-hover-color: #F0EAE4;
   --mc-code-text: #abb2bf;
   --mc-code-shadow: rgba(0, 0, 0, 0.2);
 
@@ -236,6 +243,7 @@ html.dark {
   --mc-thinking-text: #C4A898;
   --mc-mermaid-bg: #1A1410;
   --mc-mermaid-border: #3D3028;
+  --mc-code-line-number: rgba(138, 112, 96, 0.95);
   --mc-thinking-hover: rgba(224, 136, 96, 0.1);
   --mc-thinking-icon-bg: rgba(224, 136, 96, 0.12);
   --mc-thinking-border: rgba(224, 136, 96, 0.2);
@@ -369,46 +377,151 @@ html.dark body::before {
   line-height: 1.7;
 }
 
-/* code-block container (from useMarkdownRenderer) */
+/* code-block container (from useMarkdownRenderer)
+   ---------------------------------------------------------------
+   These rules live globally so they apply consistently to every
+   markdown-body context (chat bubbles, agent context preview, etc.)
+   and don't depend on the Vue scope hash. The ! markers on padding
+   and height defeat the global `.markdown-body pre` rule and any
+   stray <summary> browser defaults that previously inflated the
+   header to 400+px tall. */
 .markdown-body .code-block {
   margin: 14px 0;
   border-radius: 12px;
   overflow: hidden;
   background: var(--mc-code-bg);
+  border: 1px solid var(--mc-code-header-border);
 }
 .markdown-body .code-block__header {
-  display: flex;
+  display: flex !important;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
-  background: rgba(0, 0, 0, 0.2);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 0 14px !important;
+  margin: 0 !important;
+  /* Hard cap — earlier versions (auto / min-height: 0) were being inflated
+     by the SVG inside the copy button rendering at its UA-default 300×150
+     when DOMPurify normalised attributes. Fixed height + overflow:hidden
+     defeats that regardless of child sizing. */
+  height: 38px !important;
+  min-height: 38px !important;
+  max-height: 38px !important;
+  line-height: 1 !important;
+  font-size: 12px !important;
+  background: var(--mc-code-header-bg);
+  border-bottom: 1px solid var(--mc-code-header-border);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+/* Defence in depth: pin the icon to its declared 14×14 even if the inline
+   width/height attrs get normalised away. Without this the SVG can default
+   to 300×150, which is what was inflating the header. */
+.markdown-body .code-block__header svg {
+  width: 14px !important;
+  height: 14px !important;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: middle;
+}
+.markdown-body .code-block__header > * {
+  flex-shrink: 0;
+  min-width: 0;
 }
 .markdown-body .code-block__lang {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--mc-code-lang-color);
   font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.markdown-body .code-block__lines {
+  /* Hidden by default — only shown for collapsed details (rule below). */
+  display: none;
 }
 .markdown-body .code-block__copy {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 8px;
+  padding: 3px 8px;
   background: transparent;
   border: none;
   border-radius: 6px;
-  color: #94a3b8;
+  color: var(--mc-code-copy-color);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 .markdown-body .code-block__copy:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #e2e8f0;
+  background: var(--mc-code-copy-hover-bg);
+  color: var(--mc-code-copy-hover-color);
 }
+/* Kill the GLOBAL .markdown-body pre padding (16px) and margin (14px) — those
+   are what created the visible "tall header" gap between summary and code. */
 .markdown-body .code-block pre {
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+.markdown-body .code-block pre code,
+.markdown-body .code-block pre code.hljs {
+  background: transparent !important;
+  padding: 0 !important;
+  color: var(--mc-code-text);
+  display: block;
+  line-height: 1.55;
+}
+/* Line-numbered gutter via CSS counter */
+.markdown-body .code-block ol.hljs-lines {
+  counter-reset: ln;
+  padding: 12px 0;
   margin: 0;
-  border-radius: 0;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+.markdown-body .code-block ol.hljs-lines > li {
+  counter-increment: ln;
+  display: block;
+  padding: 0 16px 0 4em;
+  position: relative;
+  white-space: pre;
+  min-height: 1.55em;
+  line-height: 1.55;
+}
+.markdown-body .code-block ol.hljs-lines > li::before {
+  content: counter(ln);
+  position: absolute;
+  left: 0;
+  width: 3em;
+  text-align: right;
+  color: var(--mc-code-line-number);
+  user-select: none;
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
+/* <details>/<summary> reset — strip browser-default marker spacing that
+   pushed the header sky-high. */
+.markdown-body details.code-block--collapsible > summary {
+  display: block;
+  list-style: none;
+  cursor: pointer;
+}
+.markdown-body details.code-block--collapsible > summary::-webkit-details-marker,
+.markdown-body details.code-block--collapsible > summary::marker {
+  display: none;
+  content: '';
+}
+/* Show the line-count badge only when the block is collapsed. */
+.markdown-body details.code-block--collapsible:not([open]) .code-block__lines {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--mc-code-lang-color);
+  margin: 0 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--mc-code-copy-hover-bg);
+  user-select: none;
+}
+.markdown-body details.code-block--collapsible:not([open]) > pre {
+  display: none;
 }
 
 /* ECharts chart block */
@@ -584,23 +697,43 @@ html.dark .mc-surface-card {
   }
 }
 
-/* highlight.js token colors (One Dark inspired — works on dark bg) */
-.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-literal { color: #c678dd; }
-.hljs-string, .hljs-attr { color: #98c379; }
-.hljs-number, .hljs-literal { color: #d19a66; }
-.hljs-comment, .hljs-quote { color: #5c6370; font-style: italic; }
-.hljs-function .hljs-title, .hljs-title.function_ { color: #61afef; }
-.hljs-type, .hljs-title.class_ { color: #e5c07b; }
-.hljs-variable, .hljs-template-variable { color: #e06c75; }
-.hljs-tag { color: #e06c75; }
-.hljs-name { color: #e06c75; }
-.hljs-attribute { color: #d19a66; }
-.hljs-symbol, .hljs-bullet { color: #56b6c2; }
-.hljs-meta { color: #61afef; }
-.hljs-params { color: #abb2bf; }
-.hljs-section { color: #e06c75; font-weight: bold; }
-.hljs-addition { color: #98c379; background: rgba(152, 195, 121, 0.1); }
-.hljs-deletion { color: #e06c75; background: rgba(224, 108, 117, 0.1); }
+/* highlight.js token colors — Atom One Light (works on the warm beige
+   light-mode code bg). Dark mode swaps to One Dark in the html.dark block
+   below so colours stay legible against the deep brown #161210. */
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-literal { color: #a626a4; }
+.hljs-string, .hljs-attr { color: #50a14f; }
+.hljs-number { color: #c18401; }
+.hljs-comment, .hljs-quote { color: #a0a1a7; font-style: italic; }
+.hljs-function .hljs-title, .hljs-title.function_ { color: #4078f2; }
+.hljs-type, .hljs-title.class_ { color: #c18401; }
+.hljs-variable, .hljs-template-variable { color: #e45649; }
+.hljs-tag { color: #e45649; }
+.hljs-name { color: #e45649; }
+.hljs-attribute { color: #c18401; }
+.hljs-symbol, .hljs-bullet { color: #0184bc; }
+.hljs-meta { color: #4078f2; }
+.hljs-params { color: #383a42; }
+.hljs-section { color: #e45649; font-weight: bold; }
+.hljs-addition { color: #50a14f; background: rgba(80, 161, 79, 0.1); }
+.hljs-deletion { color: #e45649; background: rgba(228, 86, 73, 0.1); }
+
+/* Dark mode: One Dark token palette */
+html.dark .hljs-keyword, html.dark .hljs-selector-tag, html.dark .hljs-built_in, html.dark .hljs-literal { color: #c678dd; }
+html.dark .hljs-string, html.dark .hljs-attr { color: #98c379; }
+html.dark .hljs-number { color: #d19a66; }
+html.dark .hljs-comment, html.dark .hljs-quote { color: #5c6370; font-style: italic; }
+html.dark .hljs-function .hljs-title, html.dark .hljs-title.function_ { color: #61afef; }
+html.dark .hljs-type, html.dark .hljs-title.class_ { color: #e5c07b; }
+html.dark .hljs-variable, html.dark .hljs-template-variable { color: #e06c75; }
+html.dark .hljs-tag { color: #e06c75; }
+html.dark .hljs-name { color: #e06c75; }
+html.dark .hljs-attribute { color: #d19a66; }
+html.dark .hljs-symbol, html.dark .hljs-bullet { color: #56b6c2; }
+html.dark .hljs-meta { color: #61afef; }
+html.dark .hljs-params { color: #abb2bf; }
+html.dark .hljs-section { color: #e06c75; font-weight: bold; }
+html.dark .hljs-addition { color: #98c379; background: rgba(152, 195, 121, 0.1); }
+html.dark .hljs-deletion { color: #e06c75; background: rgba(224, 108, 117, 0.1); }
 
 .markdown-body p { margin: 8px 0; }
 .markdown-body ul, .markdown-body ol { padding-left: 1.5rem; margin: 8px 0; }

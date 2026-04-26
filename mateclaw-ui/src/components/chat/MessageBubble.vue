@@ -1551,108 +1551,11 @@ watch(isGenerating, (generating) => {
   font-size: 0.92em;
 }
 
-.markdown-body :deep(.code-block) {
-  margin: 14px 0;
-  border-radius: 12px;
-  overflow: hidden;
-  background: var(--mc-code-bg, #1e293b);
-}
-
-.markdown-body :deep(.code-block__header) {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  background: rgba(0, 0, 0, 0.2);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.markdown-body :deep(.code-block__lang) {
-  font-size: 12px;
-  color: #94a3b8;
-  font-weight: 500;
-}
-
-.markdown-body :deep(.code-block__copy) {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: #94a3b8;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.markdown-body :deep(.code-block__copy:hover) {
-  background: rgba(255, 255, 255, 0.1);
-  color: #e2e8f0;
-}
-
-.markdown-body :deep(.code-block pre) {
-  margin: 0;
-  border-radius: 0;
-}
-
-/* ===== Code block: line numbers via CSS counter (keeps DOM minimal) ===== */
-.markdown-body :deep(.code-block ol.hljs-lines) {
-  counter-reset: ln;
-  padding: 12px 16px;
-  margin: 0;
-  list-style: none;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-}
-.markdown-body :deep(.code-block ol.hljs-lines > li) {
-  counter-increment: ln;
-  padding-left: 3.5em;
-  position: relative;
-  white-space: pre;
-  min-height: 1.3em;
-}
-.markdown-body :deep(.code-block ol.hljs-lines > li::before) {
-  content: counter(ln);
-  position: absolute;
-  left: 0;
-  width: 2.8em;
-  text-align: right;
-  color: #94a3b8;
-  user-select: none;
-  opacity: 0.55;
-  font-size: 0.92em;
-}
-/* Highlighted line spans inherit highlight.js colours; keep them on the line itself. */
-
-/* ===== Code block: collapsible (long blocks / large JSON) ===== */
-.markdown-body :deep(details.code-block--collapsible) {
-  /* Reuse the .code-block visuals — already applied via the shared class. */
-}
-.markdown-body :deep(details.code-block--collapsible > summary) {
-  list-style: none;
-  cursor: pointer;
-}
-.markdown-body :deep(details.code-block--collapsible > summary::-webkit-details-marker) {
-  display: none;
-}
-.markdown-body :deep(.code-block__lines) {
-  display: none;
-  font-size: 11px;
-  color: #94a3b8;
-  margin: 0 12px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  user-select: none;
-}
-/* Show line-count badge only when the block is collapsible AND collapsed. */
-.markdown-body :deep(details.code-block--collapsible:not([open]) .code-block__lines) {
-  display: inline-block;
-}
-.markdown-body :deep(details.code-block--collapsible:not([open]) > pre) {
-  display: none;
-}
+/* Code-block CSS lives globally in main.css now (.markdown-body .code-block*)
+   so the rules apply consistently across MessageBubble, AgentContext, and
+   any future markdown-body context, and don't depend on Vue's per-component
+   scope hash. Keep this comment as a breadcrumb so future edits don't get
+   re-added here by reflex. */
 
 /* ===== Mermaid block ===== */
 .markdown-body :deep(.mermaid-block) {

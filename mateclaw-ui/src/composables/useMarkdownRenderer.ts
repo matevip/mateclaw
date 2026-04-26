@@ -220,27 +220,32 @@ const customRenderer = {
     // giant JSON blobs, which are typically noisy tool-call output.
     const openByDefault = !isLongJson
 
-    const headerHtml = `<div class="code-block__header">`
-      + `<span class="code-block__lang">${escapeHtml(langLabel)}</span>`
+    // Header content: lang badge (left) — line-count badge (only shown when
+    // collapsed) — copy button (right). We render the SAME inner content into
+    // either a <div class="code-block__header"> (non-collapsible) or directly
+    // into <summary class="code-block__header"> (collapsible). Nesting a div
+    // inside <summary> caused weird browser-native height behavior and made
+    // the header visibly inflate; flattening fixes it.
+    const headerInner = `<span class="code-block__lang">${escapeHtml(langLabel)}</span>`
       + `<span class="code-block__lines">${lineCount} lines</span>`
       + `<button class="code-block__copy" type="button" data-code="${encodedCode}" aria-label="Copy code">`
       + `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`
       + `<span class="code-block__copy-text">Copy</span>`
-      + `</button></div>`
+      + `</button>`
 
     const codeBody = `<pre><code class="hljs${langClass}">${linesHtml}</code></pre>`
 
     if (shouldCollapse) {
-      // <details>/<summary> gives a native, no-JS collapse affordance. The
-      // summary holds the header (lang badge + line count + copy button); the
-      // <pre> sits in the <details> body and is hidden by CSS until expanded.
       const openAttr = openByDefault ? ' open' : ''
       return `<details class="code-block code-block--collapsible"${openAttr}>`
-        + `<summary>${headerHtml}</summary>`
+        + `<summary class="code-block__header">${headerInner}</summary>`
         + codeBody
         + `</details>`
     }
-    return `<div class="code-block">${headerHtml}${codeBody}</div>`
+    return `<div class="code-block">`
+      + `<div class="code-block__header">${headerInner}</div>`
+      + codeBody
+      + `</div>`
   },
 
   link({ href, title, tokens }: Tokens.Link): string {
