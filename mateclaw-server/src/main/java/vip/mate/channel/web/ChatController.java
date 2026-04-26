@@ -711,17 +711,21 @@ public class ChatController {
                             log.info("SSE doOnError cleanup: conversationId={}, allDone={}, isInterruptFollowup={}, hasQueued={}",
                                     conversationId, cr.allDone(), isInterruptFollowup, cr.queuedInput() != null);
                             if (cr.allDone()) {
-                                // 修复：非用户主动停止时也消费排队消息
-                                // isUserStop && !isInterruptFollowup = 用户点了 Stop，不应续跑
-                                boolean userExplicitStop = isUserStop && !isInterruptFollowup;
-                                if (cr.queuedInput() != null && !userExplicitStop) {
+                                // RFC follow-up (2026-04-27): the previous guard
+                                //   cr.queuedInput()!=null && !(isUserStop && !isInterruptFollowup)
+                                // tried to suppress continuation when the user "explicitly
+                                // stopped" without an interrupt-with-followup. But the
+                                // frontend's enqueue path doesn't set interruptType — it
+                                // just calls requestStop + offers to messageQueue. From the
+                                // server's POV that's "isUserStop=true, isInterruptFollowup=
+                                // false, queue has content", which the guard mis-classified
+                                // as "abort" and silently dropped the user's freshly-typed
+                                // follow-up. Whoever puts a message in messageQueue means it
+                                // — just run it. Aligns with doOnComplete and the 4 other
+                                // queue-launch sites in this controller.
+                                if (cr.queuedInput() != null) {
                                     startQueuedMessage(conversationId, emitter, emitterDone, cr.queuedInput(), username);
                                 } else {
-                                    // 即使不续跑，如果有排队消息也要持久化用户消息（防丢失，幂等）
-                                    if (cr.queuedInput() != null && !cr.queuedInput().persisted()) {
-                                        conversationService.saveMessage(conversationId, "user",
-                                                cr.queuedInput().message(), null, "queued");
-                                    }
                                     conversationService.updateStreamStatus(conversationId, "idle");
                                     completeEmitterQuietly(emitter, emitterDone);
                                 }
