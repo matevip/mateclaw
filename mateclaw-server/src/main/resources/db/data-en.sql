@@ -264,12 +264,13 @@ MERGE INTO mate_model_config (id, name, provider, model_name, description, tempe
 -- Claude 4.7 series (direct Anthropic + OpenRouter). Sonnet/Opus.
 -- Note: Claude 4.7 forbids temperature/top_p/top_k — handled in AgentAnthropicChatModelBuilder.
 (1000000270, 'Claude Opus 4.7', 'anthropic', 'claude-opus-4-7', 'Anthropic Claude Opus 4.7 (xhigh adaptive thinking)', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
-(1000000271, 'Claude Sonnet 4.7', 'anthropic', 'claude-sonnet-4-7', 'Anthropic Claude Sonnet 4.7', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+-- Anthropic only released Opus 4.7 — Sonnet stays at 4.6 until further notice.
+(1000000271, 'Claude Sonnet 4.6', 'anthropic', 'claude-sonnet-4-6', 'Anthropic Claude Sonnet 4.6 (latest Sonnet — 4.7 not yet released)', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000272, 'Claude Opus 4.7', 'openrouter', 'anthropic/claude-opus-4-7', 'Claude Opus 4.7 via OpenRouter', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
-(1000000273, 'Claude Sonnet 4.7', 'openrouter', 'anthropic/claude-sonnet-4-7', 'Claude Sonnet 4.7 via OpenRouter', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000273, 'Claude Sonnet 4.6', 'openrouter', 'anthropic/claude-sonnet-4-6', 'Claude Sonnet 4.6 via OpenRouter', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 -- RFC-062: Claude 4.7 via Claude Code OAuth subscription (Pro/Max plan).
 (1000000280, 'Claude Opus 4.7', 'anthropic-claude-code', 'claude-opus-4-7', 'Claude Opus 4.7 via Claude Code Pro/Max subscription', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
-(1000000281, 'Claude Sonnet 4.7', 'anthropic-claude-code', 'claude-sonnet-4-7', 'Claude Sonnet 4.7 via Claude Code Pro/Max subscription', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0);
+(1000000281, 'Claude Sonnet 4.6', 'anthropic-claude-code', 'claude-sonnet-4-6', 'Claude Sonnet 4.6 via Claude Code Pro/Max subscription', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0);
 
 -- Default system settings
 MERGE INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)

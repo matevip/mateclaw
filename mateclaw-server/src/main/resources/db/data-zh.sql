@@ -268,12 +268,13 @@ MERGE INTO mate_model_config (id, name, provider, model_name, description, tempe
 -- Claude 4.7 系列（直连 Anthropic + OpenRouter）
 -- 注意：Claude 4.7 禁止 temperature / top_p / top_k 参数，已在 AgentAnthropicChatModelBuilder 中适配
 (1000000270, 'Claude Opus 4.7', 'anthropic', 'claude-opus-4-7', 'Anthropic Claude Opus 4.7（xhigh 自适应思考）', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
-(1000000271, 'Claude Sonnet 4.7', 'anthropic', 'claude-sonnet-4-7', 'Anthropic Claude Sonnet 4.7', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+-- Anthropic 仅发布了 Opus 4.7，Sonnet 暂时仍是 4.6
+(1000000271, 'Claude Sonnet 4.6', 'anthropic', 'claude-sonnet-4-6', 'Anthropic 最新 Sonnet (Sonnet 4.7 暂未发布)', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000272, 'Claude Opus 4.7', 'openrouter', 'anthropic/claude-opus-4-7', 'OpenRouter 代理 Claude Opus 4.7', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
-(1000000273, 'Claude Sonnet 4.7', 'openrouter', 'anthropic/claude-sonnet-4-7', 'OpenRouter 代理 Claude Sonnet 4.7', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000273, 'Claude Sonnet 4.6', 'openrouter', 'anthropic/claude-sonnet-4-6', 'OpenRouter 代理 Claude Sonnet 4.6', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 -- RFC-062：通过 Claude Code Pro/Max 订阅调用 Claude 4.7
 (1000000280, 'Claude Opus 4.7', 'anthropic-claude-code', 'claude-opus-4-7', '通过 Claude Code Pro/Max 订阅调用 Claude Opus 4.7', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
-(1000000281, 'Claude Sonnet 4.7', 'anthropic-claude-code', 'claude-sonnet-4-7', '通过 Claude Code Pro/Max 订阅调用 Claude Sonnet 4.7', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0);
+(1000000281, 'Claude Sonnet 4.6', 'anthropic-claude-code', 'claude-sonnet-4-6', '通过 Claude Code Pro/Max 订阅调用 Claude Sonnet 4.6', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0);
 
 -- 默认系统设置
 MERGE INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
