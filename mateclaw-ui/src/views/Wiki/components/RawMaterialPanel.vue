@@ -172,6 +172,13 @@
                 <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
               </svg>
             </button>
+            <button
+              v-if="raw.processingStatus !== 'uploading'"
+              class="btn-icon" :title="t('wiki.download')"
+              @click="downloadRaw(raw)"
+            >
+              <el-icon :size="14"><Download /></el-icon>
+            </button>
             <button class="btn-icon btn-icon-danger" :title="t('common.delete')" @click="deleteRaw(raw.id)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="3 6 5 6 21 6"/>
@@ -251,6 +258,7 @@
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
+import { Download } from '@element-plus/icons-vue'
 import { useWikiStore } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
 import JobStageBar from './JobStageBar.vue'
@@ -546,6 +554,30 @@ async function deleteRaw(rawId: number) {
   if (!store.currentKB) return
   await wikiApi.deleteRaw(store.currentKB.id, rawId)
   await store.fetchRawMaterials(store.currentKB.id)
+}
+
+async function downloadRaw(raw: { id: number; title?: string }) {
+  if (!store.currentKB) return
+  try {
+    // The http interceptor returns the raw body for non-R-shaped responses,
+    // so this resolves directly to the Blob (no .data unwrap needed).
+    const blob = (await wikiApi.downloadRaw(store.currentKB.id, raw.id)) as unknown as Blob
+    let filename = raw.title && raw.title.trim().length > 0 ? raw.title : `raw-${raw.id}`
+    if (!filename.includes('.')) filename += '.txt'
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    // Revoke on next tick — some browsers cancel the in-flight download if we
+    // revoke synchronously before the click handler returns.
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    ElMessage.error(`${t('wiki.downloadFailed')}: ${msg}`)
+  }
 }
 
 async function processAll() {

@@ -1249,6 +1249,8 @@ export default {
     noRawMaterials: '暂无原始材料',
     reprocess: '重新处理',
     resume: '继续生成',
+    download: '下载原始文件',
+    downloadFailed: '下载失败',
     processAll: '处理所有待处理材料',
     materialTitle: '标题',
     materialContent: '内容',

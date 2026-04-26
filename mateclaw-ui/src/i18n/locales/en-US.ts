@@ -1239,6 +1239,8 @@ export default {
     noRawMaterials: 'No raw materials yet',
     reprocess: 'Reprocess',
     resume: 'Resume',
+    download: 'Download original file',
+    downloadFailed: 'Download failed',
     processAll: 'Process All Pending',
     materialTitle: 'Title',
     materialContent: 'Content',

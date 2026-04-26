@@ -296,6 +296,80 @@ public class WikiController {
         return R.ok();
     }
 
+    @RequireWorkspaceRole("viewer")
+    @Operation(summary = "下载原始材料")
+    @GetMapping("/knowledge-bases/{kbId}/raw/{rawId}/download")
+    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> downloadRaw(
+            @PathVariable Long kbId,
+            @PathVariable Long rawId,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) throws IOException {
+        verifyKBWorkspace(kbId, workspaceId);
+        WikiRawMaterialEntity raw = rawService.getById(rawId);
+        if (raw == null || !kbId.equals(raw.getKbId())) {
+            return org.springframework.http.ResponseEntity.notFound().build();
+        }
+
+        String rawTitle = raw.getTitle();
+        String filename = (rawTitle != null && !rawTitle.isBlank())
+                ? rawTitle : ("source-" + rawId);
+
+        org.springframework.core.io.Resource resource;
+        long contentLength;
+        org.springframework.http.MediaType mediaType;
+        String sourceType = raw.getSourceType();
+
+        if ("text".equals(sourceType)) {
+            // Text materials live in the DB column — re-encode the stored content as bytes.
+            String content = raw.getOriginalContent();
+            if (content == null) {
+                return org.springframework.http.ResponseEntity.notFound().build();
+            }
+            byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+            resource = new org.springframework.core.io.ByteArrayResource(bytes);
+            contentLength = bytes.length;
+            mediaType = org.springframework.http.MediaType.parseMediaType("text/plain;charset=UTF-8");
+            // Manually-pasted text rows often have no extension on the title — give the
+            // download a sane suffix so the OS knows what to do with it.
+            if (!filename.contains(".")) filename = filename + ".txt";
+        } else {
+            // Binary materials live on disk — sandbox to the configured upload dir so
+            // a tampered source_path can't escape and serve arbitrary files.
+            String sourcePath = raw.getSourcePath();
+            if (sourcePath == null || sourcePath.isBlank()) {
+                return org.springframework.http.ResponseEntity.notFound().build();
+            }
+            Path path = Paths.get(sourcePath).toAbsolutePath().normalize();
+            Path uploadDir = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
+            if (!path.startsWith(uploadDir)) {
+                log.warn("[Wiki] Download rejected: rawId={} path={} outside uploadDir={}",
+                        rawId, path, uploadDir);
+                return org.springframework.http.ResponseEntity
+                        .status(org.springframework.http.HttpStatus.FORBIDDEN).build();
+            }
+            if (!Files.isRegularFile(path)) {
+                return org.springframework.http.ResponseEntity.notFound().build();
+            }
+            resource = new org.springframework.core.io.FileSystemResource(path);
+            contentLength = Files.size(path);
+            mediaType = org.springframework.http.MediaType.APPLICATION_OCTET_STREAM;
+        }
+
+        // RFC 5987 — provide both ASCII-safe filename= (for old browsers) and
+        // UTF-8 filename*= so non-ASCII titles (e.g. 中医诊断学.docx) survive intact.
+        String asciiFallback = filename.replaceAll("[^\\x20-\\x7E]", "_")
+                .replace("\"", "_").replace("\\", "_");
+        String encoded = java.net.URLEncoder.encode(filename, StandardCharsets.UTF_8)
+                .replace("+", "%20");
+        String contentDisposition = "attachment; filename=\"" + asciiFallback
+                + "\"; filename*=UTF-8''" + encoded;
+
+        return org.springframework.http.ResponseEntity.ok()
+                .contentType(mediaType)
+                .contentLength(contentLength)
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
+                .body(resource);
+    }
+
     // ==================== Wiki Pages ====================
 
     @RequireWorkspaceRole("viewer")
