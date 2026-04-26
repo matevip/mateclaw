@@ -122,15 +122,26 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
         String xApp = apiHeaders.xApp();
         String betas = apiHeaders.allBetas();
 
+        // Real Claude Code is an Electron + Node app that uses the official
+        // Anthropic JS SDK. The SDK auto-sets `accept: application/json` and
+        // `anthropic-dangerous-direct-browser-access: true` on every request.
+        // Spring AI's Java client doesn't, so Anthropic's edge fingerprint
+        // sees the missing headers and treats the traffic as suspicious —
+        // rate-limited harder than spec'd. Reference: openclaw
+        // anthropic-transport-stream.ts:567-574.
         RestClient.Builder restClientBuilder = AgentAnthropicChatModelBuilder.applyHttpTimeouts(
                         restClientBuilderProvider.getIfAvailable(RestClient::builder))
                 .defaultHeader(HttpHeaders.AUTHORIZATION, authHeader)
                 .defaultHeader(HttpHeaders.USER_AGENT, userAgent)
+                .defaultHeader(HttpHeaders.ACCEPT, "application/json")
+                .defaultHeader("anthropic-dangerous-direct-browser-access", "true")
                 .defaultHeader("x-app", xApp);
 
         WebClient.Builder webClientBuilder = webClientBuilderProvider.getIfAvailable(WebClient::builder)
                 .defaultHeader(HttpHeaders.AUTHORIZATION, authHeader)
                 .defaultHeader(HttpHeaders.USER_AGENT, userAgent)
+                .defaultHeader(HttpHeaders.ACCEPT, "application/json")
+                .defaultHeader("anthropic-dangerous-direct-browser-access", "true")
                 .defaultHeader("x-app", xApp);
 
         // NoopApiKey.getValue() returns "" → Spring AI's addDefaultHeadersIfMissing
