@@ -966,7 +966,30 @@ public class WikiProcessingService {
             for (WikiBatchCreateParser.ParsedPage pp : parsedPages) {
                 JsonNode pageJson = parseJsonResponse(pp.rawJson());
                 if (pageJson == null) {
-                    log.warn("[Wiki] BatchCreate: unparseable JSON for slug='{}', skipping", pp.slug());
+                    // Truncated or malformed JSON inside the FILE block — by far the most
+                    // common batch-create failure mode (provider hits max-tokens mid-object).
+                    // Recover by re-issuing this slug as a single-page LLM call: tiny payload,
+                    // tiny truncation risk. Up to 2 attempts.
+                    log.info("[Wiki] BatchCreate: unparseable JSON for slug='{}', retrying individually",
+                            pp.slug());
+                    final String headerSlug = pp.slug();
+                    JsonNode retryMeta = subBatch.stream()
+                            .filter(m -> headerSlug.equals(m.path("slug").asText("")))
+                            .findFirst().orElse(null);
+                    if (retryMeta != null) {
+                        int delta = tryCreateOneWithRetry(kb, raw, chunkText, liveIndex, retryMeta, 2,
+                                created, pc, rawId, kbId, headerSlug);
+                        if (delta > 0) totalCreated++;
+                    } else if (pc != null) {
+                        // Sub-batch's parsed FILE header references a slug that wasn't in the
+                        // planned metas — nothing useful to retry. Tick progress and move on.
+                        int d = pc.done.incrementAndGet();
+                        pc.failed.incrementAndGet();
+                        rawService.updateProgress(rawId, "phase-b", d, pc.total.get());
+                        progressBus.broadcast(kbId, WikiProgressBus.EVENT_CHUNK_DONE,
+                                java.util.Map.of("rawId", rawId, "kind", "create",
+                                        "ok", false, "done", d, "total", pc.total.get()));
+                    }
                     continue;
                 }
                 // Use slug from JSON body; fall back to FILE header slug
@@ -980,44 +1003,23 @@ public class WikiProcessingService {
                     log.info("[Wiki] BatchCreate: blank content for slug='{}', retrying individually", slug);
                     final String blankSlug = slug;
                     final String headerSlug = pp.slug();
-                    // Find the original meta from subBatch for this slug so retrySingleCreate has title+summary
+                    // The LLM occasionally renames a slug between the FILE header and the
+                    // JSON body, so match either when finding the meta to retry against.
                     JsonNode retryMeta = subBatch.stream()
                             .filter(m -> blankSlug.equals(m.path("slug").asText(""))
                                     || headerSlug.equals(m.path("slug").asText("")))
                             .findFirst().orElse(null);
-                    boolean ok = false;
                     if (retryMeta != null) {
-                        try {
-                            String retryResult = retrySingleCreate(kb, raw, chunkText, liveIndex.toString(), retryMeta);
-                            if (retryResult != null) {
-                                JsonNode retryJson = parseJsonResponse(retryResult);
-                                if (retryJson != null) {
-                                    String rContent = retryJson.path("content").asText("");
-                                    String rTitle = retryJson.path("title").asText(title);
-                                    String rSummary = retryJson.path("summary").asText(pageSummary);
-                                    if (!rContent.isBlank()) {
-                                        boolean wasCreated = savePageContent(kb, raw, slug, rTitle, rContent, rSummary);
-                                        if (wasCreated) {
-                                            created.incrementAndGet();
-                                            totalCreated++;
-                                            String brief = rSummary.length() > 100 ? rSummary.substring(0, 100) : rSummary;
-                                            liveIndex.append("\n- ").append(slug).append(": ").append(brief);
-                                        }
-                                        ok = true;
-                                    }
-                                }
-                            }
-                        } catch (Exception retryEx) {
-                            log.warn("[Wiki] BatchCreate: blank-content retry for slug='{}' failed: {}", slug, retryEx.getMessage());
-                        }
-                    }
-                    if (pc != null) {
+                        int delta = tryCreateOneWithRetry(kb, raw, chunkText, liveIndex, retryMeta, 2,
+                                created, pc, rawId, kbId, slug);
+                        if (delta > 0) totalCreated++;
+                    } else if (pc != null) {
                         int d = pc.done.incrementAndGet();
-                        if (!ok) pc.failed.incrementAndGet();
+                        pc.failed.incrementAndGet();
                         rawService.updateProgress(rawId, "phase-b", d, pc.total.get());
                         progressBus.broadcast(kbId, WikiProgressBus.EVENT_CHUNK_DONE,
                                 java.util.Map.of("rawId", rawId, "kind", "create-retry",
-                                        "ok", ok, "done", d, "total", pc.total.get()));
+                                        "ok", false, "done", d, "total", pc.total.get()));
                     }
                     continue;
                 }
@@ -1064,45 +1066,9 @@ public class WikiProcessingService {
                 if (missingSlug.isBlank() || returnedSlugs.contains(missingSlug)) continue;
                 log.info("[Wiki] BatchCreate sub-batch {}: slug='{}' missing, retrying individually",
                         subBatchNum, missingSlug);
-                boolean ok = false;
-                try {
-                    String retryResult = retrySingleCreate(kb, raw, chunkText, liveIndex.toString(),
-                            missingMeta);
-                    if (retryResult != null) {
-                        JsonNode retryJson = parseJsonResponse(retryResult);
-                        if (retryJson != null) {
-                            String slug = retryJson.path("slug").asText(missingSlug);
-                            if (slug.isBlank()) slug = missingSlug;
-                            String title = retryJson.path("title").asText("");
-                            String content = retryJson.path("content").asText("");
-                            String pageSummary = retryJson.path("summary").asText("");
-                            if (!content.isBlank()) {
-                                boolean wasCreated = savePageContent(kb, raw, slug, title, content, pageSummary);
-                                if (wasCreated) {
-                                    created.incrementAndGet();
-                                    totalCreated++;
-                                    String brief = pageSummary.length() > 100
-                                            ? pageSummary.substring(0, 100) : pageSummary;
-                                    liveIndex.append("\n- ").append(slug).append(": ").append(brief);
-                                }
-                                ok = true;
-                                log.info("[Wiki] BatchCreate sub-batch {}: retry for slug='{}' succeeded",
-                                        subBatchNum, missingSlug);
-                            }
-                        }
-                    }
-                } catch (Exception retryEx) {
-                    log.warn("[Wiki] BatchCreate sub-batch {}: retry for slug='{}' failed: {}",
-                            subBatchNum, missingSlug, retryEx.getMessage());
-                }
-                if (pc != null) {
-                    int d = pc.done.incrementAndGet();
-                    if (!ok) pc.failed.incrementAndGet();
-                    rawService.updateProgress(rawId, "phase-b", d, pc.total.get());
-                    progressBus.broadcast(kbId, WikiProgressBus.EVENT_CHUNK_DONE,
-                            java.util.Map.of("rawId", rawId, "kind", "create-retry",
-                                    "ok", ok, "done", d, "total", pc.total.get()));
-                }
+                int delta = tryCreateOneWithRetry(kb, raw, chunkText, liveIndex, missingMeta, 2,
+                        created, pc, rawId, kbId, missingSlug);
+                if (delta > 0) totalCreated++;
             }
         }
         return totalCreated;
@@ -1138,6 +1104,100 @@ public class WikiProcessingService {
         if (isAborted(raw.getId(), "retry-create slug=" + slug)) return null;
         return callLlmWithResilientRetry(prompt, "retry-create slug=" + slug + " of raw=" + raw.getId(),
                 kb.getId(), vip.mate.wiki.job.WikiJobStep.CREATE_PAGE);
+    }
+
+    /**
+     * Recover one slug that BatchCreate failed to deliver — calls
+     * {@link #retrySingleCreate} up to {@code maxAttempts} times, retrying on
+     * any of: null response, unparseable JSON, blank content, thrown exception.
+     * Each attempt is an independent single-page LLM call: small payload, low
+     * truncation risk — two attempts is enough to recover from transient
+     * provider hiccups without ballooning latency.
+     *
+     * <p>This consolidates what used to be three near-identical inline retry
+     * blocks (omitted slug / blank content / unparseable JSON) into one path
+     * with consistent attempt count, log lines, and progress accounting.
+     *
+     * <p>Side effects on success: {@code created} is incremented (only when a
+     * brand-new page is persisted, not on dedupe), {@code liveIndex} grows so
+     * subsequent batched pages can wikilink to this one, and {@code pc} ticks
+     * one {@code done} regardless of outcome with {@code failed} on exhaustion.
+     *
+     * @param slugForLog logical slug used in log messages — the actual write
+     *                   slug comes from the LLM response or retryMeta.slug
+     * @return 1 if a new page was persisted, 0 if a parseable response landed
+     *         but the slug already existed (dedup), -1 if all attempts failed
+     */
+    private int tryCreateOneWithRetry(WikiKnowledgeBaseEntity kb,
+                                       WikiRawMaterialEntity raw,
+                                       String chunkText,
+                                       StringBuilder liveIndex,
+                                       JsonNode retryMeta,
+                                       int maxAttempts,
+                                       AtomicInteger created,
+                                       ProgressCounter pc,
+                                       Long rawId,
+                                       Long kbId,
+                                       String slugForLog) {
+        String metaSlug = retryMeta.path("slug").asText("");
+        String fallbackTitle = retryMeta.path("title").asText("");
+        String fallbackSummary = retryMeta.path("summary").asText("");
+        int delta = -1;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                String retryResult = retrySingleCreate(kb, raw, chunkText, liveIndex.toString(), retryMeta);
+                if (retryResult == null) {
+                    log.warn("[Wiki] retry-create slug='{}' attempt {}/{}: null response",
+                            slugForLog, attempt, maxAttempts);
+                    continue;
+                }
+                JsonNode retryJson = parseJsonResponse(retryResult);
+                if (retryJson == null) {
+                    log.warn("[Wiki] retry-create slug='{}' attempt {}/{}: unparseable JSON",
+                            slugForLog, attempt, maxAttempts);
+                    continue;
+                }
+                String resolvedSlug = retryJson.path("slug").asText(metaSlug);
+                if (resolvedSlug.isBlank()) resolvedSlug = metaSlug;
+                String content = retryJson.path("content").asText("");
+                if (content.isBlank()) {
+                    log.warn("[Wiki] retry-create slug='{}' attempt {}/{}: blank content",
+                            slugForLog, attempt, maxAttempts);
+                    continue;
+                }
+                String title = retryJson.path("title").asText(fallbackTitle);
+                String summary = retryJson.path("summary").asText(fallbackSummary);
+                boolean wasCreated = savePageContent(kb, raw, resolvedSlug, title, content, summary);
+                if (wasCreated) {
+                    created.incrementAndGet();
+                    String brief = summary.length() > 100 ? summary.substring(0, 100) : summary;
+                    liveIndex.append("\n- ").append(resolvedSlug).append(": ").append(brief);
+                    delta = 1;
+                } else {
+                    delta = 0;
+                }
+                log.info("[Wiki] retry-create slug='{}' succeeded on attempt {}/{} (newPage={})",
+                        slugForLog, attempt, maxAttempts, wasCreated);
+                break;
+            } catch (Exception e) {
+                log.warn("[Wiki] retry-create slug='{}' attempt {}/{} threw: {}",
+                        slugForLog, attempt, maxAttempts, e.getMessage());
+            }
+        }
+        if (delta < 0) {
+            log.warn("[Wiki] retry-create slug='{}' exhausted {} attempts — giving up",
+                    slugForLog, maxAttempts);
+        }
+        if (pc != null) {
+            int d = pc.done.incrementAndGet();
+            if (delta < 0) pc.failed.incrementAndGet();
+            rawService.updateProgress(rawId, "phase-b", d, pc.total.get());
+            progressBus.broadcast(kbId, WikiProgressBus.EVENT_CHUNK_DONE,
+                    java.util.Map.of("rawId", rawId, "kind", "create-retry",
+                            "ok", delta >= 0, "done", d, "total", pc.total.get()));
+        }
+        return delta;
     }
 
     /**
