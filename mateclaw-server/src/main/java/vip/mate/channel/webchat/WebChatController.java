@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import vip.mate.channel.web.Utf8SseEmitter;
 import vip.mate.agent.AgentService;
 import vip.mate.channel.model.ChannelEntity;
 import vip.mate.channel.service.ChannelService;
@@ -61,7 +62,8 @@ public class WebChatController {
             @RequestHeader("X-MC-Key") String apiKey,
             @RequestBody WebChatRequest request) {
 
-        SseEmitter emitter = new SseEmitter(10 * 60 * 1000L);
+        // RFC-058 PR-1: Utf8SseEmitter 显式 charset=UTF-8，防止中文 SSE 乱码
+        SseEmitter emitter = new Utf8SseEmitter(10 * 60 * 1000L);
 
         // 验证 API Key 并获取关联的 Channel 配置
         ChannelEntity channel = resolveChannel(apiKey);

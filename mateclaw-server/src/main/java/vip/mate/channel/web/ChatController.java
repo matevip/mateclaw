@@ -79,7 +79,8 @@ public class ChatController {
 
         String conversationId = request.getConversationId() != null ? request.getConversationId() : "default";
         // SSE 超时设为 10 分钟，覆盖 servlet 默认的 30s，避免长回答被中断
-        SseEmitter emitter = new SseEmitter(10 * 60 * 1000L);
+        // RFC-058 PR-1: Utf8SseEmitter 显式声明 charset=UTF-8，防止中文在 Windows 中文 Chrome / 部分代理处乱码
+        SseEmitter emitter = new Utf8SseEmitter(10 * 60 * 1000L);
 
         // ---- 分支 A：断线重连 ----
         if (Boolean.TRUE.equals(request.getReconnect())) {

@@ -8,6 +8,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import vip.mate.channel.web.ChatStreamTracker;
+import vip.mate.channel.web.Utf8SseEmitter;
 import vip.mate.common.result.R;
 import vip.mate.wiki.service.WikiKnowledgeBaseService;
 import vip.mate.wiki.service.WikiResearchService;
@@ -98,7 +99,8 @@ public class WikiResearchController {
     @GetMapping(value = "/stream/{sessionId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@PathVariable String sessionId) {
         // 10 分钟超时（research 典型 < 1 分钟，10 分钟给重连留余地）
-        SseEmitter emitter = new SseEmitter(10 * 60 * 1000L);
+        // RFC-058 PR-1: Utf8SseEmitter 显式 charset=UTF-8，防止中文 SSE 乱码
+        SseEmitter emitter = new Utf8SseEmitter(10 * 60 * 1000L);
 
         boolean attached = streamTracker.attach(sessionId, emitter);
         if (!attached) {

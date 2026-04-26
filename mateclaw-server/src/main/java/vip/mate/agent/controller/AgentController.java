@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import vip.mate.channel.web.Utf8SseEmitter;
 import vip.mate.agent.AgentService;
 import vip.mate.agent.AgentState;
 import vip.mate.agent.model.AgentEntity;
@@ -105,7 +106,8 @@ public class AgentController {
         AgentEntity agent = agentService.getAgent(id);
         verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, workspaceId);
 
-        SseEmitter emitter = new SseEmitter(5 * 60 * 1000L);
+        // RFC-058 PR-1: Utf8SseEmitter 显式 charset=UTF-8，防止中文 SSE 乱码
+        SseEmitter emitter = new Utf8SseEmitter(5 * 60 * 1000L);
         sseExecutor.execute(() -> {
             try {
                 agentService.chatStream(id, message, conversationId)

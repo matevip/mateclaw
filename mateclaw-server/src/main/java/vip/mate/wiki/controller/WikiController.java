@@ -9,6 +9,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import vip.mate.channel.web.Utf8SseEmitter;
 import vip.mate.common.result.R;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
@@ -472,7 +473,8 @@ public class WikiController {
     public SseEmitter subscribeProgress(@PathVariable Long kbId,
                                          @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyKBWorkspace(kbId, workspaceId);
-        SseEmitter emitter = new SseEmitter(30L * 60 * 1000); // 30min
+        // RFC-058 PR-1: Utf8SseEmitter 显式 charset=UTF-8，防止中文 SSE 乱码
+        SseEmitter emitter = new Utf8SseEmitter(30L * 60 * 1000); // 30min
         progressBus.subscribe(kbId, emitter);
 
         emitter.onCompletion(() -> {
