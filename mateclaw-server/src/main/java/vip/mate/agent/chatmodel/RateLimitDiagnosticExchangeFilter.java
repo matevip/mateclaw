@@ -41,9 +41,34 @@ class RateLimitDiagnosticExchangeFilter implements ExchangeFilterFunction {
     public Mono<ClientResponse> filter(ClientRequest request, ExchangeFunction next) {
         return next.exchange(request).doOnNext(response -> {
             if (response.statusCode().value() == 429) {
+                // Log REQUEST headers too — Spring AI's AnthropicApi.Builder
+                // calls clone() + defaultHeaders(consumer) on the rest/web
+                // client builder we hand in, and we want to verify our OAuth
+                // fingerprint headers actually survived that flow. If they
+                // didn't, no amount of correct fingerprinting fixes it.
+                logRequestHeaders(request.headers());
                 logHeaders(response.headers().asHttpHeaders());
             }
         });
+    }
+
+    private static void logRequestHeaders(HttpHeaders requestHeaders) {
+        StringBuilder sb = new StringBuilder("[Anthropic 429] outgoing request headers (sanitized): ");
+        boolean any = false;
+        for (var entry : requestHeaders.entrySet()) {
+            String name = entry.getKey().toLowerCase();
+            // Skip Authorization — never log Bearer tokens. Just show "Bearer <redacted>".
+            String displayValue;
+            if (name.equals("authorization")) {
+                displayValue = "Bearer <redacted>";
+            } else {
+                displayValue = String.join(",", entry.getValue());
+            }
+            if (any) sb.append(", ");
+            sb.append(name).append('=').append(displayValue);
+            any = true;
+        }
+        log.warn(sb.toString());
     }
 
     private static void logHeaders(HttpHeaders headers) {

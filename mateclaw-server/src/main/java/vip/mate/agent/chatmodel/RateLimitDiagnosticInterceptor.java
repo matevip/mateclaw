@@ -52,9 +52,27 @@ class RateLimitDiagnosticInterceptor implements ClientHttpRequestInterceptor {
                                          ClientHttpRequestExecution execution) throws IOException {
         ClientHttpResponse response = execution.execute(request, body);
         if (response.getStatusCode().value() == 429) {
+            // Log REQUEST headers too so we can verify Spring AI didn't strip
+            // our OAuth fingerprint when it cloned the rest client builder.
+            logRequestHeaders(request.getHeaders());
             logHeaders(response.getHeaders());
         }
         return response;
+    }
+
+    private static void logRequestHeaders(HttpHeaders requestHeaders) {
+        StringBuilder sb = new StringBuilder("[Anthropic 429] outgoing request headers (sanitized): ");
+        boolean any = false;
+        for (var entry : requestHeaders.entrySet()) {
+            String name = entry.getKey().toLowerCase();
+            String displayValue = name.equals("authorization")
+                    ? "Bearer <redacted>"
+                    : String.join(",", entry.getValue());
+            if (any) sb.append(", ");
+            sb.append(name).append('=').append(displayValue);
+            any = true;
+        }
+        log.warn(sb.toString());
     }
 
     private static void logHeaders(HttpHeaders headers) {
