@@ -465,6 +465,7 @@ export default {
       klingSecretKey: 'Kling Secret Key',
       runwayApiKey: 'Runway API Key',
       minimaxApiKey: 'MiniMax API Key',
+      minimaxRegion: 'MiniMax API Region',
     },
     hints: {
       provider: 'Current implementation applies DashScope model options at runtime.',
@@ -518,6 +519,7 @@ export default {
       klingSecretKey: 'Paired with Access Key for JWT authentication.',
       runwayApiKey: 'Get from runwayml.com. Supports gen4.5, gen4_turbo flagship models.',
       minimaxApiKey: 'Get from minimaxi.com. Hailuo video with free quota, excellent for Chinese scenes.',
+      minimaxRegion: 'Choose the API host. Mainland China accounts must use the CN endpoint; others use Global.',
     },
     searchTitle: 'Search Service',
     searchDesc: 'Configure the built-in search tool provider and API credentials',
@@ -564,6 +566,8 @@ export default {
       freeQuota: 'Free Quota Available',
       configuredInModels: 'See Model Settings',
     },
+    minimaxRegionGlobal: 'Global (api.minimax.io)',
+    minimaxRegionCn: 'China (api.minimaxi.com)',
     actions: {
       setDefault: 'Set Default',
       saveSystem: 'Save System Settings',

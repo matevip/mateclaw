@@ -21,6 +21,13 @@ import java.util.Set;
  * <p>
  * API 文档: https://platform.minimaxi.com/document/video-generation
  * 鉴权: Bearer Token
+ * <p>
+ * Region 切换：根据 {@link SystemSettingsDTO#getMinimaxRegion()} 选 host：
+ * <ul>
+ *   <li>{@code "global"} (默认) → {@code https://api.minimax.io}</li>
+ *   <li>{@code "cn"} → {@code https://api.minimaxi.com} (mainland-CN
+ *       lower-latency endpoint; required for accounts registered in CN).</li>
+ * </ul>
  *
  * @author MateClaw Team
  */
@@ -31,8 +38,43 @@ public class MiniMaxVideoProvider implements VideoGenerationProvider {
 
     private final ObjectMapper objectMapper;
 
-    private static final String BASE_URL = "https://api.minimax.io";
+    /** Global endpoint (used by accounts on api.minimax.io). */
+    static final String BASE_URL_GLOBAL = "https://api.minimax.io";
+
+    /** China endpoint (api.minimaxi.com — same JSON shape, different host). */
+    static final String BASE_URL_CN = "https://api.minimaxi.com";
+
+    /** Region value selecting the CN endpoint. Anything else → global. */
+    static final String REGION_CN = "cn";
+
     private static final String DEFAULT_MODEL = "MiniMax-Hailuo-2.3";
+
+    /**
+     * Full MiniMax video model catalog (matches openclaw
+     * {@code extensions/minimax/provider-models.ts}). Includes both T2V
+     * (Hailuo family) and I2V (I2V-01-* family) entries.
+     */
+    private static final List<String> MODEL_CATALOG = List.of(
+            // T2V (text-to-video)
+            "MiniMax-Hailuo-2.3",
+            "MiniMax-Hailuo-2.3-Fast",
+            "MiniMax-Hailuo-02",
+            // I2V (image-to-video)
+            "I2V-01-Director",
+            "I2V-01-live",
+            "I2V-01"
+    );
+
+    /**
+     * Resolve the MiniMax base URL from the system settings region. Package-private
+     * for unit tests — the only branching point that needs verification.
+     */
+    static String resolveBaseUrl(SystemSettingsDTO config) {
+        if (config != null && REGION_CN.equalsIgnoreCase(config.getMinimaxRegion())) {
+            return BASE_URL_CN;
+        }
+        return BASE_URL_GLOBAL;
+    }
 
     @Override
     public String id() {
@@ -67,7 +109,7 @@ public class MiniMaxVideoProvider implements VideoGenerationProvider {
                 .supportedDurations(List.of(6, 10))
                 .maxDurationSeconds(10)
                 .defaultModel(DEFAULT_MODEL)
-                .models(List.of("MiniMax-Hailuo-2.3", "MiniMax-Hailuo-2.3-Fast", "I2V-01-live"))
+                .models(MODEL_CATALOG)
                 .build();
     }
 
@@ -80,6 +122,7 @@ public class MiniMaxVideoProvider implements VideoGenerationProvider {
     public VideoSubmitResult submit(VideoGenerationRequest request, SystemSettingsDTO config) {
         try {
             String apiKey = config.getMinimaxApiKey();
+            String baseUrl = resolveBaseUrl(config);
             String model = request.getModel() != null ? request.getModel() : DEFAULT_MODEL;
 
             ObjectNode body = objectMapper.createObjectNode();
@@ -93,7 +136,7 @@ public class MiniMaxVideoProvider implements VideoGenerationProvider {
                 body.put("duration", request.getDurationSeconds());
             }
 
-            HttpResponse response = HttpRequest.post(BASE_URL + "/v1/video_generation")
+            HttpResponse response = HttpRequest.post(baseUrl + "/v1/video_generation")
                     .header("Authorization", "Bearer " + apiKey)
                     .header("Content-Type", "application/json")
                     .body(body.toString())
@@ -106,11 +149,11 @@ public class MiniMaxVideoProvider implements VideoGenerationProvider {
             int statusCode = result.path("base_resp").path("status_code").asInt(-1);
             if (statusCode == 0 && result.has("task_id")) {
                 String taskId = result.get("task_id").asText();
-                log.info("[MiniMax] Submitted task: {} (model={})", taskId, model);
+                log.info("[MiniMax] Submitted task: {} (model={}, host={})", taskId, model, baseUrl);
                 return VideoSubmitResult.success(taskId, id());
             } else {
                 String errMsg = result.path("base_resp").path("status_msg").asText("未知错误");
-                log.warn("[MiniMax] Submit failed: {}", errMsg);
+                log.warn("[MiniMax] Submit failed (host={}): {}", baseUrl, errMsg);
                 return VideoSubmitResult.failure(id(), errMsg);
             }
         } catch (Exception e) {
@@ -123,9 +166,10 @@ public class MiniMaxVideoProvider implements VideoGenerationProvider {
     public TaskPollResult checkStatus(String providerTaskId, SystemSettingsDTO config) {
         try {
             String apiKey = config.getMinimaxApiKey();
+            String baseUrl = resolveBaseUrl(config);
 
             HttpResponse response = HttpRequest.get(
-                            BASE_URL + "/v1/query/video_generation?task_id=" + providerTaskId)
+                            baseUrl + "/v1/query/video_generation?task_id=" + providerTaskId)
                     .header("Authorization", "Bearer " + apiKey)
                     .timeout(15_000)
                     .execute();
@@ -138,7 +182,7 @@ public class MiniMaxVideoProvider implements VideoGenerationProvider {
                     // 优先取 video_url，备选 file_id
                     String videoUrl = result.has("video_url") ? result.get("video_url").asText(null) : null;
                     if (videoUrl == null && result.has("file_id")) {
-                        videoUrl = resolveFileUrl(result.get("file_id").asText(), apiKey);
+                        videoUrl = resolveFileUrl(result.get("file_id").asText(), apiKey, baseUrl);
                     }
                     yield TaskPollResult.succeeded(videoUrl, null, result.toString());
                 }
@@ -156,12 +200,13 @@ public class MiniMaxVideoProvider implements VideoGenerationProvider {
     }
 
     /**
-     * 通过 file_id 获取视频下载 URL
+     * 通过 file_id 获取视频下载 URL。Region must match the host that produced
+     * the file_id — otherwise the cross-host lookup 404s.
      */
-    private String resolveFileUrl(String fileId, String apiKey) {
+    private String resolveFileUrl(String fileId, String apiKey, String baseUrl) {
         try {
             HttpResponse response = HttpRequest.get(
-                            BASE_URL + "/v1/files/retrieve?file_id=" + fileId)
+                            baseUrl + "/v1/files/retrieve?file_id=" + fileId)
                     .header("Authorization", "Bearer " + apiKey)
                     .timeout(10_000)
                     .execute();

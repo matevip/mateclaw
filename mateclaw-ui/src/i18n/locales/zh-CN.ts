@@ -460,6 +460,7 @@ export default {
       klingSecretKey: '可灵 Secret Key',
       runwayApiKey: 'Runway API Key',
       minimaxApiKey: 'MiniMax API Key',
+      minimaxRegion: 'MiniMax API 区域',
     },
     hints: {
       provider: '当前版本会把 DashScope 模型参数真实应用到 Agent 调用链路。',
@@ -518,6 +519,7 @@ export default {
       klingSecretKey: '与 Access Key 配对使用，用于 JWT 签名鉴权。',
       runwayApiKey: '从 runwayml.com 获取。支持 gen4.5、gen4_turbo 等旗舰模型。',
       minimaxApiKey: '从 minimaxi.com 获取。海螺 Hailuo 视频，有免费额度，中文场景优秀。',
+      minimaxRegion: '选择 API 入口域名。中国账号用 CN，海外账号用 Global。',
     },
     searchTitle: '搜索服务',
     searchDesc: '配置内置搜索工具的提供商与 API 凭证',
@@ -564,6 +566,8 @@ export default {
       freeQuota: '有免费额度',
       configuredInModels: '前往模型设置查看',
     },
+    minimaxRegionGlobal: '海外（api.minimax.io）',
+    minimaxRegionCn: '中国大陆（api.minimaxi.com）',
     actions: {
       setDefault: '设为默认',
       saveSystem: '保存系统设置',

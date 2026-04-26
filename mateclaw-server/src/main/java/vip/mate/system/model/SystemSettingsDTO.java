@@ -70,6 +70,16 @@ public class SystemSettingsDTO {
     @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String minimaxApiKey;
     private String minimaxApiKeyMasked;
+    /**
+     * MiniMax API region — selects which host to call. Shared by image + video
+     * providers because the API key is the same across both:
+     * <ul>
+     *   <li>{@code "global"} (default) → {@code https://api.minimax.io}</li>
+     *   <li>{@code "cn"} → {@code https://api.minimaxi.com} (lower latency from
+     *       mainland China; required for accounts registered there).</li>
+     * </ul>
+     */
+    private String minimaxRegion;
 
     // ===== 图片生成配置 =====
     /** 是否启用图片生成能力 */

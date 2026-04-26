@@ -225,6 +225,18 @@
               />
             </div>
           </div>
+          <div class="setting-item">
+            <div class="setting-info">
+              <div class="setting-label">{{ t('settings.fields.minimaxRegion') }}</div>
+              <div class="setting-hint">{{ t('settings.hints.minimaxRegion') }}</div>
+            </div>
+            <div class="setting-control">
+              <select v-model="settings.minimaxRegion" class="form-select">
+                <option value="global">{{ t('settings.minimaxRegionGlobal') }}</option>
+                <option value="cn">{{ t('settings.minimaxRegionCn') }}</option>
+              </select>
+            </div>
+          </div>
         </div>
       </div>
     </template>
@@ -265,6 +277,8 @@ const settings = reactive({
   klingSecretKeyMasked: '',
   runwayApiKeyMasked: '',
   minimaxApiKeyMasked: '',
+  // RFC: MiniMax region 控制 image+video 共用的 API host. "global" 默认 / "cn" → api.minimaxi.com
+  minimaxRegion: 'global',
 })
 
 onMounted(async () => {
@@ -284,6 +298,7 @@ async function loadSettings() {
   settings.klingSecretKeyMasked = data.klingSecretKeyMasked ?? ''
   settings.runwayApiKeyMasked = data.runwayApiKeyMasked ?? ''
   settings.minimaxApiKeyMasked = data.minimaxApiKeyMasked ?? ''
+  settings.minimaxRegion = data.minimaxRegion ?? 'global'
   // 清空密钥输入
   zhipuApiKeyInput.value = ''
   falApiKeyInput.value = ''
@@ -306,6 +321,7 @@ async function onSaveSettings() {
   if (klingSecretKeyInput.value) payload.klingSecretKey = klingSecretKeyInput.value
   if (runwayApiKeyInput.value) payload.runwayApiKey = runwayApiKeyInput.value
   if (minimaxApiKeyInput.value) payload.minimaxApiKey = minimaxApiKeyInput.value
+  payload.minimaxRegion = settings.minimaxRegion
 
   await settingsApi.update(payload)
   await loadSettings()
