@@ -48,12 +48,12 @@ public class ClaudeCodeApiHeaders {
 
     /**
      * Comma-joined beta header list to send in {@code anthropic-beta}.
-     * <p>Order matches hermes-agent {@code anthropic_adapter._OAUTH_ONLY_BETAS +
-     * _COMMON_BETAS} (OAuth-specific betas first).
+     * <p>Order matches hermes-agent {@code anthropic_adapter} line 427:
+     * {@code common_betas + _OAUTH_ONLY_BETAS} — common betas first, OAuth betas appended.
      */
     public String allBetas() {
         return String.join(",",
-                concat(OAUTH_ONLY_BETAS, COMMON_BETAS));
+                concat(COMMON_BETAS, OAUTH_ONLY_BETAS));
     }
 
     /**

@@ -1,11 +1,14 @@
 package vip.mate.agent.chatmodel;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.anthropic.api.AnthropicApi;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.anthropic.api.AnthropicCacheOptions;
+import org.springframework.ai.anthropic.api.AnthropicCacheStrategy;
 import org.springframework.ai.model.NoopApiKey;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
@@ -63,6 +66,7 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
     private final ObjectProvider<RestClient.Builder> restClientBuilderProvider;
     private final ObjectProvider<WebClient.Builder> webClientBuilderProvider;
     private final ObjectProvider<ObservationRegistry> observationRegistryProvider;
+    private final ObjectMapper objectMapper;
 
     public AgentClaudeCodeChatModelBuilder(
             AgentAnthropicChatModelBuilder anthropicBuilder,
@@ -70,13 +74,15 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
             ClaudeCodeApiHeaders apiHeaders,
             ObjectProvider<RestClient.Builder> restClientBuilderProvider,
             ObjectProvider<WebClient.Builder> webClientBuilderProvider,
-            ObjectProvider<ObservationRegistry> observationRegistryProvider) {
+            ObjectProvider<ObservationRegistry> observationRegistryProvider,
+            ObjectMapper objectMapper) {
         this.anthropicBuilder = anthropicBuilder;
         this.oauthService = oauthService;
         this.apiHeaders = apiHeaders;
         this.restClientBuilderProvider = restClientBuilderProvider;
         this.webClientBuilderProvider = webClientBuilderProvider;
         this.observationRegistryProvider = observationRegistryProvider;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -98,6 +104,17 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
         //    sampling-params handling, thinking-budget mapping, prompt cache.
         AnthropicChatOptions options = anthropicBuilder.buildAnthropicOptions(model);
 
+        // Enable multi-block system caching so Spring AI serialises system as an
+        // array of content blocks.  Anthropic's OAuth anti-abuse gate accepts the
+        // identity prefix as a string ONLY when there is no additional content; as
+        // soon as we append the agent's actual system prompt the gate returns 429.
+        // Two separate array blocks always pass (verified 2026-04-25).
+        AnthropicCacheOptions oauthCacheOptions = AnthropicCacheOptions.builder()
+                .strategy(AnthropicCacheStrategy.SYSTEM_ONLY)
+                .multiBlockSystemCaching(true)
+                .build();
+        options.setCacheOptions(oauthCacheOptions);
+
         AnthropicChatModel raw = AnthropicChatModel.builder()
                 .anthropicApi(api)
                 .defaultOptions(options)
@@ -109,7 +126,7 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
         //    5xxs requests that don't claim Claude Code identity in the system
         //    prompt — symptom: 429 rate_limit_error with body "Error" on quiet
         //    accounts. See ClaudeCodeIdentityChatModelDecorator javadoc.
-        return new ClaudeCodeIdentityChatModelDecorator(raw);
+        return new ClaudeCodeIdentityChatModelDecorator(raw, oauthCacheOptions);
     }
 
     /**
@@ -137,6 +154,10 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
                 .defaultHeader(HttpHeaders.ACCEPT, "application/json")
                 .defaultHeader("anthropic-dangerous-direct-browser-access", "true")
                 .defaultHeader("x-app", xApp)
+                // Rewrite system string → array before the request hits the wire.
+                // Anthropic's OAuth anti-abuse gate requires system to be an array;
+                // see ClaudeCodeSystemArrayInterceptor for the full explanation.
+                .requestInterceptor(new ClaudeCodeSystemArrayInterceptor(objectMapper))
                 // Diagnostic: log Anthropic's rate-limit headers on 429 so we
                 // can tell apart "5h Pro quota exhausted" (tokens-remaining=0,
                 // retry-after huge) from "anti-abuse gate" (tokens-remaining
@@ -150,6 +171,8 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
                 .defaultHeader(HttpHeaders.ACCEPT, "application/json")
                 .defaultHeader("anthropic-dangerous-direct-browser-access", "true")
                 .defaultHeader("x-app", xApp)
+                // Rewrite system string → array (streaming path counterpart).
+                .filter(new ClaudeCodeSystemArrayExchangeFilter(objectMapper))
                 .filter(new RateLimitDiagnosticExchangeFilter());
 
         // NoopApiKey.getValue() returns "" → Spring AI's addDefaultHeadersIfMissing
