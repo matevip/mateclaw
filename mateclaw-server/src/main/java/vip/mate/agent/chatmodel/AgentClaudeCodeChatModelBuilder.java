@@ -1,5 +1,6 @@
 package vip.mate.agent.chatmodel;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.anthropic.AnthropicChatModel;
@@ -38,9 +39,10 @@ import vip.mate.llm.model.ModelProviderEntity;
  *       {@code oauth-2025-04-20} or Anthropic's edge intermittently 500s.
  *       We push these via {@link AnthropicApi.Builder#anthropicBetaFeatures}
  *       so Spring AI's existing header-merging logic still applies.</li>
- *   <li>{@code User-Agent: claude-cli/<ver> (external, cli)} and
- *       {@code x-app: cli} masquerade as the Claude Code CLI — Anthropic
- *       rejects unrecognised UAs on Bearer-auth requests with HTTP 400.</li>
+ *   <li>{@code User-Agent: claude-cli/<ver>} (bare — no suffix) and
+ *       {@code x-app: cli} masquerade as the Claude Code CLI. Suffix variants
+ *       like {@code (external, cli)} are anti-abuse fingerprints; see
+ *       {@link ClaudeCodeApiHeaders#userAgent()}.</li>
  * </ol>
  *
  * <h2>Token lifecycle</h2>
@@ -62,6 +64,7 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
     private final ObjectProvider<RestClient.Builder> restClientBuilderProvider;
     private final ObjectProvider<WebClient.Builder> webClientBuilderProvider;
     private final ObjectProvider<ObservationRegistry> observationRegistryProvider;
+    private final ObjectMapper objectMapper;
 
     public AgentClaudeCodeChatModelBuilder(
             AgentAnthropicChatModelBuilder anthropicBuilder,
@@ -69,13 +72,15 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
             ClaudeCodeApiHeaders apiHeaders,
             ObjectProvider<RestClient.Builder> restClientBuilderProvider,
             ObjectProvider<WebClient.Builder> webClientBuilderProvider,
-            ObjectProvider<ObservationRegistry> observationRegistryProvider) {
+            ObjectProvider<ObservationRegistry> observationRegistryProvider,
+            ObjectMapper objectMapper) {
         this.anthropicBuilder = anthropicBuilder;
         this.oauthService = oauthService;
         this.apiHeaders = apiHeaders;
         this.restClientBuilderProvider = restClientBuilderProvider;
         this.webClientBuilderProvider = webClientBuilderProvider;
         this.observationRegistryProvider = observationRegistryProvider;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -122,16 +127,40 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
         String xApp = apiHeaders.xApp();
         String betas = apiHeaders.allBetas();
 
+        // Real Claude Code is an Electron + Node app that uses the official
+        // Anthropic JS SDK. The SDK auto-sets `accept: application/json` and
+        // `anthropic-dangerous-direct-browser-access: true` on every request.
+        // Spring AI's Java client doesn't, so Anthropic's edge fingerprint
+        // sees the missing headers and treats the traffic as suspicious —
+        // rate-limited harder than spec'd. Reference: openclaw
+        // anthropic-transport-stream.ts:567-574.
         RestClient.Builder restClientBuilder = AgentAnthropicChatModelBuilder.applyHttpTimeouts(
                         restClientBuilderProvider.getIfAvailable(RestClient::builder))
                 .defaultHeader(HttpHeaders.AUTHORIZATION, authHeader)
                 .defaultHeader(HttpHeaders.USER_AGENT, userAgent)
-                .defaultHeader("x-app", xApp);
+                .defaultHeader(HttpHeaders.ACCEPT, "application/json")
+                .defaultHeader("anthropic-dangerous-direct-browser-access", "true")
+                .defaultHeader("x-app", xApp)
+                // Rewrite system string → array before the request hits the wire.
+                // Anthropic's OAuth anti-abuse gate requires system to be an array;
+                // see ClaudeCodeSystemArrayInterceptor for the full explanation.
+                .requestInterceptor(new ClaudeCodeSystemArrayInterceptor(objectMapper))
+                // Diagnostic: log Anthropic's rate-limit headers on 429 so we
+                // can tell apart "5h Pro quota exhausted" (tokens-remaining=0,
+                // retry-after huge) from "anti-abuse gate" (tokens-remaining
+                // large, retry-after small) from "burst limit hit" without
+                // staring at SDK internals.
+                .requestInterceptor(new RateLimitDiagnosticInterceptor());
 
         WebClient.Builder webClientBuilder = webClientBuilderProvider.getIfAvailable(WebClient::builder)
                 .defaultHeader(HttpHeaders.AUTHORIZATION, authHeader)
                 .defaultHeader(HttpHeaders.USER_AGENT, userAgent)
-                .defaultHeader("x-app", xApp);
+                .defaultHeader(HttpHeaders.ACCEPT, "application/json")
+                .defaultHeader("anthropic-dangerous-direct-browser-access", "true")
+                .defaultHeader("x-app", xApp)
+                // Rewrite system string → array (streaming path counterpart).
+                .filter(new ClaudeCodeSystemArrayExchangeFilter(objectMapper))
+                .filter(new RateLimitDiagnosticExchangeFilter());
 
         // NoopApiKey.getValue() returns "" → Spring AI's addDefaultHeadersIfMissing
         // skips x-api-key. The Builder.build() Assert.notNull on apiKey still

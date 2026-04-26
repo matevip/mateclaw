@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import vip.mate.agent.AgentGraphBuilder;
 import vip.mate.llm.chatmodel.ChatModelBuilder;
 import vip.mate.llm.model.ModelConfigEntity;
+import vip.mate.llm.model.ModelFamily;
 import vip.mate.llm.model.ModelProtocol;
 import vip.mate.llm.model.ModelProviderEntity;
 
@@ -43,11 +44,20 @@ public class AgentOpenAiCompatibleChatModelBuilder implements ChatModelBuilder {
     public ChatModel build(ModelConfigEntity model, ModelProviderEntity provider, RetryTemplate retry) {
         OpenAiApi api = agentGraphBuilder.buildOpenAiApi(provider);
         OpenAiChatOptions options = agentGraphBuilder.buildOpenAiOptions(model, provider);
-        return OpenAiChatModel.builder()
+        ChatModel raw = OpenAiChatModel.builder()
                 .openAiApi(api)
                 .defaultOptions(options)
                 .retryTemplate(retry)
                 .observationRegistry(observationRegistryProvider.getIfAvailable(() -> ObservationRegistry.NOOP))
                 .build();
+
+        // DeepSeek V4 (flash / pro) extends OpenAI's wire format with `thinking: {type}` and a
+        // strict reasoning_content replay contract. Spring AI's OpenAiChatOptions can't express
+        // those directly — wrap with a per-request payload patcher. See
+        // DeepSeekV4ThinkingDecorator javadoc.
+        if (ModelFamily.detect(model.getModelName()) == ModelFamily.DEEPSEEK_V4_REASONING) {
+            return new DeepSeekV4ThinkingDecorator(raw);
+        }
+        return raw;
     }
 }

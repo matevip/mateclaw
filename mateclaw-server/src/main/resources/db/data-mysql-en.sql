@@ -243,6 +243,9 @@ VALUES
 (1000000152, 'Kimi K2 Thinking Turbo', 'kimi-intl', 'kimi-k2-thinking-turbo', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000153, 'DeepSeek Chat', 'deepseek', 'deepseek-chat', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000154, 'DeepSeek Reasoner', 'deepseek', 'deepseek-reasoner', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+-- DeepSeek V4 (1M context, native thinking via DeepSeekV4ThinkingDecorator)
+(1000000282, 'DeepSeek V4 Flash', 'deepseek', 'deepseek-v4-flash', 'DeepSeek V4 Flash (1M context, reasoning via thinking-enabled mode)', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000283, 'DeepSeek V4 Pro', 'deepseek', 'deepseek-v4-pro', 'DeepSeek V4 Pro (1M context, reasoning via thinking-enabled mode)', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000155, 'Gemini 3.1 Pro Preview', 'gemini', 'gemini-3.1-pro-preview', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000156, 'Gemini 3 Flash Preview', 'gemini', 'gemini-3-flash-preview', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000157, 'Gemini 3.1 Flash Lite Preview', 'gemini', 'gemini-3.1-flash-lite-preview', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
