@@ -38,6 +38,9 @@ public class ReadFileTool {
     private static final int DEFAULT_MAX_LINES = 1000;
     private static final int MAX_OUTPUT_BYTES = 30 * 1024; // 30KB
 
+    /** Chat attachment upload root, mirrored from ChatController.uploadRoot. */
+    private static final Path CHAT_UPLOAD_ROOT = Paths.get("data", "chat-uploads");
+
     /**
      * 二进制文档扩展名集合 - 这些文件不应使用 read_file 读取
      */
@@ -64,12 +67,30 @@ public class ReadFileTool {
             try {
                 path = vip.mate.tool.guard.WorkspacePathGuard.validatePath(filePath);
             } catch (IllegalArgumentException e) {
-                return errorResult(filePath, e.getMessage());
+                // Sandbox rejected the literal path. The LLM may have hallucinated
+                // a Linux-style path (e.g. /app/Dockerfile) for a chat-upload that
+                // actually lives under data/chat-uploads/{conversationId}/. Retry
+                // by basename before surfacing the boundary error.
+                Path attachment = resolveChatUploadAttachment(filePath);
+                if (attachment == null) {
+                    return errorResult(filePath, e.getMessage());
+                }
+                path = attachment;
             }
 
             // 文件存在性和类型校验
             if (!Files.exists(path)) {
-                return errorResult(filePath, i18n.msg("tool.read_file.error.not_found", path));
+                // The user-uploaded chat attachment is rendered to the LLM as
+                // "[附件] foo.txt" without its stored path, so LLMs often pass
+                // just the basename or a guessed absolute path. Fall back to
+                // looking up the basename inside the current conversation's
+                // chat-upload directory before reporting not-found.
+                Path attachment = resolveChatUploadAttachment(filePath);
+                if (attachment == null) {
+                    return errorResult(filePath, i18n.msg("tool.read_file.error.not_found", path));
+                }
+                log.info("[ReadFile] Resolved chat-upload attachment fallback: {} -> {}", filePath, attachment);
+                path = attachment;
             }
             if (Files.isDirectory(path)) {
                 return errorResult(filePath, i18n.msg("tool.read_file.error.is_directory", path));
@@ -190,6 +211,60 @@ public class ReadFileTool {
                 lines.add(line);
             }
             return lines;
+        }
+    }
+
+    /**
+     * Try to resolve {@code rawPath} against the current conversation's chat-upload
+     * directory. Uploaded files land at {@code data/chat-uploads/{conversationId}/{timestamp}_{safeFilename}}
+     * (see ChatController#upload), but the LLM only sees the original filename in
+     * the rendered message ("[附件] foo.txt"). When the LLM passes a guessed path
+     * that doesn't exist, this fallback rescues the call by matching basenames.
+     *
+     * @return absolute path of the matched attachment, or null if no match
+     */
+    private Path resolveChatUploadAttachment(String rawPath) {
+        if (rawPath == null || rawPath.isBlank()) {
+            return null;
+        }
+        String conversationId = ToolExecutionContext.conversationId();
+        if (conversationId == null || conversationId.isBlank()) {
+            return null;
+        }
+        Path uploadDir = CHAT_UPLOAD_ROOT.resolve(conversationId).toAbsolutePath().normalize();
+        if (!Files.isDirectory(uploadDir)) {
+            return null;
+        }
+
+        String basename;
+        try {
+            Path requested = Paths.get(rawPath).getFileName();
+            basename = requested != null ? requested.toString() : null;
+        } catch (Exception e) {
+            return null;
+        }
+        if (basename == null || basename.isBlank()) {
+            return null;
+        }
+
+        // 1) direct match (LLM passed the stored filename)
+        Path direct = uploadDir.resolve(basename);
+        if (Files.isRegularFile(direct)) {
+            return direct;
+        }
+
+        // 2) timestamp-prefixed match: stored as "{millis}_{safeFilename}"
+        String safeBasename = basename.replaceAll("[^a-zA-Z0-9._-]", "_");
+        String suffix = "_" + safeBasename;
+        try (var stream = Files.list(uploadDir)) {
+            return stream
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().endsWith(suffix))
+                    .findFirst()
+                    .orElse(null);
+        } catch (IOException e) {
+            log.warn("[ReadFile] Failed to scan chat-upload dir {}: {}", uploadDir, e.getMessage());
+            return null;
         }
     }
 
