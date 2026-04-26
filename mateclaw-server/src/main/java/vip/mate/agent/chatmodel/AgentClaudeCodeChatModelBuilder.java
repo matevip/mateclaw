@@ -7,8 +7,6 @@ import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.anthropic.api.AnthropicApi;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.anthropic.api.AnthropicCacheOptions;
-import org.springframework.ai.anthropic.api.AnthropicCacheStrategy;
 import org.springframework.ai.model.NoopApiKey;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
@@ -104,17 +102,6 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
         //    sampling-params handling, thinking-budget mapping, prompt cache.
         AnthropicChatOptions options = anthropicBuilder.buildAnthropicOptions(model);
 
-        // Enable multi-block system caching so Spring AI serialises system as an
-        // array of content blocks.  Anthropic's OAuth anti-abuse gate accepts the
-        // identity prefix as a string ONLY when there is no additional content; as
-        // soon as we append the agent's actual system prompt the gate returns 429.
-        // Two separate array blocks always pass (verified 2026-04-25).
-        AnthropicCacheOptions oauthCacheOptions = AnthropicCacheOptions.builder()
-                .strategy(AnthropicCacheStrategy.SYSTEM_ONLY)
-                .multiBlockSystemCaching(true)
-                .build();
-        options.setCacheOptions(oauthCacheOptions);
-
         AnthropicChatModel raw = AnthropicChatModel.builder()
                 .anthropicApi(api)
                 .defaultOptions(options)
@@ -126,7 +113,7 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
         //    5xxs requests that don't claim Claude Code identity in the system
         //    prompt — symptom: 429 rate_limit_error with body "Error" on quiet
         //    accounts. See ClaudeCodeIdentityChatModelDecorator javadoc.
-        return new ClaudeCodeIdentityChatModelDecorator(raw, oauthCacheOptions);
+        return new ClaudeCodeIdentityChatModelDecorator(raw);
     }
 
     /**

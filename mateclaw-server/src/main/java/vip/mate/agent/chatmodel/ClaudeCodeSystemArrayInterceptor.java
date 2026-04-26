@@ -19,15 +19,13 @@ import java.io.IOException;
  * the wire.
  *
  * <p>Anthropic's OAuth anti-abuse gate accepts the Claude Code identity prefix
- * as a string ONLY when it is the sole content.  The moment we append the
- * agent's actual system prompt the gate returns 429.  Sending the same two
- * pieces as separate array elements always passes (verified 2026-04-25).
+ * as a string ONLY when it is the sole content.  Appending any additional text
+ * triggers a 429; two separate array elements always pass (verified 2026-04-25).
  *
- * <p>Spring AI's {@code AnthropicChatModel} can emit array format natively
- * via prompt caching, but {@code ModelOptionsUtils.copyToTarget} (Jackson-
- * based) drops the {@code @JsonIgnore cacheOptions} field, making it
- * impossible to activate through the normal options path.  This interceptor
- * works at the HTTP layer and is immune to Spring AI's internal option-merging.
+ * <p>Spring AI's native array path is guarded by {@code @JsonIgnore cacheOptions}
+ * which {@code ModelOptionsUtils.copyToTarget} drops before our settings can
+ * reach {@code buildSystemContent}.  This interceptor bypasses that by rewriting
+ * at the HTTP transport layer.
  *
  * <p>Sync (RestClient) variant; the WebFlux equivalent is
  * {@link ClaudeCodeSystemArrayExchangeFilter}.
@@ -41,7 +39,7 @@ class ClaudeCodeSystemArrayInterceptor implements ClientHttpRequestInterceptor {
     @Override
     public ClientHttpResponse intercept(HttpRequest request, byte[] body,
                                          ClientHttpRequestExecution execution) throws IOException {
-        return execution.execute(request, rewriteSystemField(body));
+        return execution.execute(request, rewriteSystemField(body, objectMapper));
     }
 
     /**
@@ -51,17 +49,17 @@ class ClaudeCodeSystemArrayInterceptor implements ClientHttpRequestInterceptor {
      * [ {"type":"text","text":"You are Claude Code..."}, {"type":"text","text":"<rest>"} ]
      * </pre>
      * Returns {@code body} unchanged on any error or if rewrite is not needed.
+     * Package-private static so {@link ClaudeCodeSystemArrayExchangeFilter} can reuse.
      */
-    byte[] rewriteSystemField(byte[] body) {
+    static byte[] rewriteSystemField(byte[] body, ObjectMapper mapper) {
         if (body == null || body.length == 0) return body;
         try {
-            JsonNode root = objectMapper.readTree(body);
+            JsonNode root = mapper.readTree(body);
             if (!root.isObject()) return body;
             JsonNode systemNode = root.get("system");
-            if (systemNode == null || !systemNode.isTextual()) return body; // absent or already array
-            byte[] rewritten = objectMapper.writeValueAsBytes(
-                    buildRewritten((ObjectNode) root, systemNode.asText()));
-            log.debug("[ClaudeCodeSystem] rewrote system field from string to array ({} → {} bytes)",
+            if (systemNode == null || !systemNode.isTextual()) return body;
+            byte[] rewritten = mapper.writeValueAsBytes(buildRewritten((ObjectNode) root, systemNode.asText()));
+            log.debug("[ClaudeCodeSystem] rewrote system field to array ({} → {} bytes)",
                     body.length, rewritten.length);
             return rewritten;
         } catch (Exception e) {
@@ -79,7 +77,6 @@ class ClaudeCodeSystemArrayInterceptor implements ClientHttpRequestInterceptor {
         identityBlock.put("text", identity);
         arr.add(identityBlock);
 
-        // Strip the identity prefix and leading newlines to get the rest.
         if (!systemText.equals(identity) && systemText.startsWith(identity)) {
             String rest = systemText.substring(identity.length()).replaceFirst("^\n+", "");
             if (!rest.isBlank()) {

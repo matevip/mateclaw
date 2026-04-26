@@ -2,7 +2,6 @@ package vip.mate.agent.chatmodel;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
-import org.springframework.ai.anthropic.api.AnthropicCacheOptions;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -76,23 +75,8 @@ public class ClaudeCodeIdentityChatModelDecorator implements ChatModel {
 
     private final ChatModel delegate;
 
-    /**
-     * Cache options to apply to every transformed prompt so Spring AI serialises
-     * {@code system} as an array of content blocks rather than a plain string.
-     * Anthropic's OAuth anti-abuse gate accepts the string format ONLY when the
-     * content is exactly the identity prefix with nothing else; as soon as we
-     * append the agent's actual system prompt the gate returns 429.  Sending the
-     * same two pieces as separate blocks in an array is accepted unconditionally.
-     */
-    private final AnthropicCacheOptions oauthCacheOptions;
-
     public ClaudeCodeIdentityChatModelDecorator(ChatModel delegate) {
-        this(delegate, null);
-    }
-
-    public ClaudeCodeIdentityChatModelDecorator(ChatModel delegate, AnthropicCacheOptions oauthCacheOptions) {
         this.delegate = delegate;
-        this.oauthCacheOptions = oauthCacheOptions;
     }
 
     @Override
@@ -176,13 +160,6 @@ public class ClaudeCodeIdentityChatModelDecorator implements ChatModel {
         }
 
         AnthropicChatOptions copy = AnthropicChatOptions.fromOptions(anthropicOpts);
-        // Force cacheOptions so Spring AI emits system as an array (multi-block path).
-        // AnthropicChatOptions.fromOptions copies cacheOptions from the runtime options,
-        // which default to DISABLED; that would override defaultOptions at merge time,
-        // so we must override here rather than relying on defaultOptions alone.
-        if (oauthCacheOptions != null) {
-            copy.setCacheOptions(oauthCacheOptions);
-        }
         if (hasCallbacks) {
             List<ToolCallback> wrapped = new ArrayList<>(originalCallbacks.size());
             for (ToolCallback cb : originalCallbacks) {
