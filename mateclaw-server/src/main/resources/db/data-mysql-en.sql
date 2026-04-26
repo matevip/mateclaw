@@ -285,7 +285,20 @@ VALUES
 (1000000235, 'Doubao 1.5 Thinking Lite', 'volcengine', 'doubao-1.5-thinking-lite', 'Doubao lite reasoning model', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000240, 'Kimi for Coding', 'kimi-code', 'kimi-for-coding', 'Kimi Code dedicated coding model', 0.2, 32768, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000250, 'GPT-5.4', 'openai-chatgpt', 'gpt-5.4', 'ChatGPT Plus/Pro member model (OAuth login)', NULL, 128000, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
-(1000000251, 'GPT-5.4 Mini', 'openai-chatgpt', 'gpt-5.4-mini', 'ChatGPT member lightweight model', NULL, 128000, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0)
+(1000000251, 'GPT-5.4 Mini', 'openai-chatgpt', 'gpt-5.4-mini', 'ChatGPT member lightweight model', NULL, 128000, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+-- GPT-5.5 series (OpenAI / Azure / OpenRouter)
+(1000000260, 'GPT-5.5', 'openai', 'gpt-5.5', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000261, 'GPT-5.5 Mini', 'openai', 'gpt-5.5-mini', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000262, 'GPT-5.5 Nano', 'openai', 'gpt-5.5-nano', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000263, 'GPT-5.5', 'azure-openai', 'gpt-5.5', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000264, 'GPT-5.5 Mini', 'azure-openai', 'gpt-5.5-mini', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000265, 'GPT-5.5', 'openrouter', 'openai/gpt-5.5', 'GPT-5.5 via OpenRouter', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+-- Claude 4.7 series (direct Anthropic + OpenRouter).
+-- Note: Claude 4.7 forbids temperature/top_p/top_k — handled in AgentAnthropicChatModelBuilder.
+(1000000270, 'Claude Opus 4.7', 'anthropic', 'claude-opus-4-7', 'Anthropic Claude Opus 4.7 (xhigh adaptive thinking)', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000271, 'Claude Sonnet 4.7', 'anthropic', 'claude-sonnet-4-7', 'Anthropic Claude Sonnet 4.7', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000272, 'Claude Opus 4.7', 'openrouter', 'anthropic/claude-opus-4-7', 'Claude Opus 4.7 via OpenRouter', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000273, 'Claude Sonnet 4.7', 'openrouter', 'anthropic/claude-sonnet-4-7', 'Claude Sonnet 4.7 via OpenRouter', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0)
 ON DUPLICATE KEY UPDATE name=VALUES(name), provider=VALUES(provider), model_name=VALUES(model_name), description=VALUES(description), temperature=VALUES(temperature), max_tokens=VALUES(max_tokens), top_p=VALUES(top_p), builtin=VALUES(builtin), enabled=VALUES(enabled), is_default=VALUES(is_default), update_time=VALUES(update_time), deleted=VALUES(deleted);
 
 -- Default system settings

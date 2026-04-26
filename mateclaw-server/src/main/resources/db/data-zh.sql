@@ -251,7 +251,20 @@ MERGE INTO mate_model_config (id, name, provider, model_name, description, tempe
 (1000000235, 'Doubao 1.5 Thinking Lite', 'volcengine', 'doubao-1.5-thinking-lite', '豆包轻量推理模型', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000240, 'Kimi for Coding', 'kimi-code', 'kimi-for-coding', 'Kimi Code 专用编码模型', 0.2, 32768, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000250, 'GPT-5.4', 'openai-chatgpt', 'gpt-5.4', 'ChatGPT Plus/Pro 会员模型（OAuth 登录）', NULL, 128000, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
-(1000000251, 'GPT-5.4 Mini', 'openai-chatgpt', 'gpt-5.4-mini', 'ChatGPT 会员轻量模型', NULL, 128000, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0);
+(1000000251, 'GPT-5.4 Mini', 'openai-chatgpt', 'gpt-5.4-mini', 'ChatGPT 会员轻量模型', NULL, 128000, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+-- GPT-5.5 系列（OpenAI / Azure / OpenRouter）
+(1000000260, 'GPT-5.5', 'openai', 'gpt-5.5', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000261, 'GPT-5.5 Mini', 'openai', 'gpt-5.5-mini', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000262, 'GPT-5.5 Nano', 'openai', 'gpt-5.5-nano', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000263, 'GPT-5.5', 'azure-openai', 'gpt-5.5', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000264, 'GPT-5.5 Mini', 'azure-openai', 'gpt-5.5-mini', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000265, 'GPT-5.5', 'openrouter', 'openai/gpt-5.5', 'OpenRouter 代理 GPT-5.5', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+-- Claude 4.7 系列（直连 Anthropic + OpenRouter）
+-- 注意：Claude 4.7 禁止 temperature / top_p / top_k 参数，已在 AgentAnthropicChatModelBuilder 中适配
+(1000000270, 'Claude Opus 4.7', 'anthropic', 'claude-opus-4-7', 'Anthropic Claude Opus 4.7（xhigh 自适应思考）', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000271, 'Claude Sonnet 4.7', 'anthropic', 'claude-sonnet-4-7', 'Anthropic Claude Sonnet 4.7', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000272, 'Claude Opus 4.7', 'openrouter', 'anthropic/claude-opus-4-7', 'OpenRouter 代理 Claude Opus 4.7', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000273, 'Claude Sonnet 4.7', 'openrouter', 'anthropic/claude-sonnet-4-7', 'OpenRouter 代理 Claude Sonnet 4.7', NULL, 4096, NULL, TRUE, TRUE, FALSE, NOW(), NOW(), 0);
 
 -- 默认系统设置
 MERGE INTO mate_system_setting (id, setting_key, setting_value, description, create_time, update_time)
