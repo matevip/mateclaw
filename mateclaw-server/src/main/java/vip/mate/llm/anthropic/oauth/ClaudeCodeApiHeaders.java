@@ -20,7 +20,7 @@ import java.util.List;
  *   <caption>Header set sent on OAuth requests</caption>
  *   <tr><th>Header</th><th>Value</th><th>Why</th></tr>
  *   <tr><td>{@code Authorization}</td><td>{@code Bearer <accessToken>}</td><td>OAuth path uses Bearer; non-OAuth uses {@code x-api-key}</td></tr>
- *   <tr><td>{@code User-Agent}</td><td>{@code claude-cli/<version> (external, cli)}</td><td>Anthropic routes OAuth by UA; spoof identity</td></tr>
+ *   <tr><td>{@code User-Agent}</td><td>{@code claude-cli/<version>}</td><td>bare form — suffix triggers anti-abuse fingerprint, see {@link #userAgent()}</td></tr>
  *   <tr><td>{@code x-app}</td><td>{@code cli}</td><td>Claude Code identity flag</td></tr>
  *   <tr><td>{@code anthropic-beta}</td><td>(comma-joined list — see {@link #allBetas()})</td><td>OAuth-only + common feature betas</td></tr>
  * </table>
@@ -58,12 +58,20 @@ public class ClaudeCodeApiHeaders {
 
     /**
      * User-Agent string Anthropic OAuth infrastructure expects.
-     * Format: {@code claude-cli/<version> (external, cli)}.
-     * The {@code (external, cli)} suffix is the canonical hermes / OpenCode /
-     * Cline identity — drop it and Anthropic returns 400.
+     * Format: {@code claude-cli/<version>} — bare, no suffix.
+     *
+     * <p><b>History note:</b> we previously appended {@code (external, cli)}
+     * after hermes-agent's pattern. That turned out to be wrong: Anthropic's
+     * anti-abuse gate uses the suffix to fingerprint third-party clients
+     * (hermes / OpenCode / Cline) and rate-limits them harder. Real Claude
+     * Code (Electron + Node + official Anthropic JS SDK) emits the bare
+     * {@code claude-cli/<v>} form, which is what openclaw
+     * ({@code anthropic-transport-stream.ts:30,572}) also uses. Verified by
+     * reproducing 429 with the suffix and {@code anthropic-ratelimit-*}
+     * headers absent — the diagnostic signature of the anti-abuse path.
      */
     public String userAgent() {
-        return "claude-cli/" + versionDetector.get() + " (external, cli)";
+        return "claude-cli/" + versionDetector.get();
     }
 
     /** {@code x-app} header value. Constant. */

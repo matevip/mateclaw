@@ -38,9 +38,10 @@ import vip.mate.llm.model.ModelProviderEntity;
  *       {@code oauth-2025-04-20} or Anthropic's edge intermittently 500s.
  *       We push these via {@link AnthropicApi.Builder#anthropicBetaFeatures}
  *       so Spring AI's existing header-merging logic still applies.</li>
- *   <li>{@code User-Agent: claude-cli/<ver> (external, cli)} and
- *       {@code x-app: cli} masquerade as the Claude Code CLI — Anthropic
- *       rejects unrecognised UAs on Bearer-auth requests with HTTP 400.</li>
+ *   <li>{@code User-Agent: claude-cli/<ver>} (bare — no suffix) and
+ *       {@code x-app: cli} masquerade as the Claude Code CLI. Suffix variants
+ *       like {@code (external, cli)} are anti-abuse fingerprints; see
+ *       {@link ClaudeCodeApiHeaders#userAgent()}.</li>
  * </ol>
  *
  * <h2>Token lifecycle</h2>

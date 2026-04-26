@@ -80,8 +80,11 @@ public class ClaudeCodeTokenRefresher {
                         .uri(endpoint)
                         .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_FORM_URLENCODED_VALUE)
                         .header(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
+                        // Bare UA — see ClaudeCodeApiHeaders.userAgent() javadoc
+                        // for why the (external, cli) suffix would trip Anthropic's
+                        // anti-abuse fingerprint.
                         .header(HttpHeaders.USER_AGENT,
-                                "claude-cli/" + versionDetector.get() + " (external, cli)")
+                                "claude-cli/" + versionDetector.get())
                         .body(body)
                         .retrieve()
                         .body(String.class);
