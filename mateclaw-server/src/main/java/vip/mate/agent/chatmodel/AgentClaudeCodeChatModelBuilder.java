@@ -135,14 +135,21 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
                 .defaultHeader(HttpHeaders.USER_AGENT, userAgent)
                 .defaultHeader(HttpHeaders.ACCEPT, "application/json")
                 .defaultHeader("anthropic-dangerous-direct-browser-access", "true")
-                .defaultHeader("x-app", xApp);
+                .defaultHeader("x-app", xApp)
+                // Diagnostic: log Anthropic's rate-limit headers on 429 so we
+                // can tell apart "5h Pro quota exhausted" (tokens-remaining=0,
+                // retry-after huge) from "anti-abuse gate" (tokens-remaining
+                // large, retry-after small) from "burst limit hit" without
+                // staring at SDK internals.
+                .requestInterceptor(new RateLimitDiagnosticInterceptor());
 
         WebClient.Builder webClientBuilder = webClientBuilderProvider.getIfAvailable(WebClient::builder)
                 .defaultHeader(HttpHeaders.AUTHORIZATION, authHeader)
                 .defaultHeader(HttpHeaders.USER_AGENT, userAgent)
                 .defaultHeader(HttpHeaders.ACCEPT, "application/json")
                 .defaultHeader("anthropic-dangerous-direct-browser-access", "true")
-                .defaultHeader("x-app", xApp);
+                .defaultHeader("x-app", xApp)
+                .filter(new RateLimitDiagnosticExchangeFilter());
 
         // NoopApiKey.getValue() returns "" → Spring AI's addDefaultHeadersIfMissing
         // skips x-api-key. The Builder.build() Assert.notNull on apiKey still
