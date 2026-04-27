@@ -342,8 +342,10 @@ const errorDescription = computed(() => {
   // 优先展示后端 extractUserFriendlyError 生成的具体消息（比泛化模板更有指向性，
   // 比如"当前模型不支持工具调用，请切换到 qwen3 / qwen2.5 ..."）。
   // 仅当 rawMessage 为空/过短时才回退到分类模板。
+  // 阈值用 3：可过滤 "OK"/"fail" 之类无意义短串，又能放行 "无权操作该会话"
+  // 这类 7 字中文 / "Forbidden" 这类英文短消息，避免被泛模板覆盖。
   const raw = errorInfo.value.rawMessage?.trim() || ''
-  if (raw.length > 8) {
+  if (raw.length > 3) {
     // 去掉后端冗余前缀，错误卡标题已经表达了类别
     return raw
       .replace(/^Bad request:\s*/i, '')

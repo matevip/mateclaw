@@ -454,8 +454,14 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   let errorFired = false
   stream.on('error', (data) => {
     if (isStaleEvent(data)) return
+    // Always carry data.message as rawMessage, so the inline error card can
+    // surface the actual reason ("无权操作该会话" etc.) instead of the generic
+    // unknown.description template. classifyBackendError already does this
+    // when errorType is present; the fallback path used to drop it.
     const errorInfo: ChatErrorInfo = data.errorInfo
-      || (data.errorType ? classifyBackendError(data) : { category: 'unknown', retryable: true, timestamp: Date.now() })
+      || (data.errorType
+        ? classifyBackendError(data)
+        : { category: 'unknown', rawMessage: data.message, retryable: true, timestamp: Date.now() })
     if (currentAssistantId.value) {
       const msg = getMessage(currentAssistantId.value)
       if (msg) {
@@ -469,7 +475,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       }
       currentAssistantId.value = null
     }
-    error.value = new Error(data.message || '请求失败')
+    const errorMessage = data.message || '请求失败'
+    error.value = new Error(errorMessage)
     streamPhase.value = 'idle'
     phaseInfo.value = null
     // Clear queue on error to avoid stale state
