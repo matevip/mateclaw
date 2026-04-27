@@ -1561,8 +1561,8 @@ export default {
       allowFromPlaceholder: 'Comma-separated user IDs (empty = allow all)',
       denyMessage: 'Deny Message',
       denyMessagePlaceholder: 'Sorry, you do not have permission',
-      requireMention: 'Require @mention',
-      requireMentionTooltip: 'Whether the bot requires @mention in group chats',
+      requireMention: "Require {'@'}mention",
+      requireMentionTooltip: "Whether the bot requires {'@'}mention in group chats",
     },
     messageFilter: {
       title: 'Message Filter',
@@ -1639,7 +1639,7 @@ export default {
       qq: {
         step1: 'Go to <a href="https://q.qq.com/" target="_blank" rel="noopener">QQ Open Platform</a> and create a bot application',
         step2: 'Get <b>AppID</b> and <b>AppSecret</b> from the app management page, fill in below',
-        step3: 'Enable required message types in "Feature Config → Message Subscription" (C2C, Group @, Channel messages, etc.)',
+        step3: "Enable required message types in \"Feature Config → Message Subscription\" (C2C, Group {'@'}, Channel messages, etc.)",
         step4: 'After starting the channel, auto-receives messages via <b>WebSocket long connection</b>, <b>no public IP or callback URL required</b>',
       },
     },

@@ -209,7 +209,7 @@ public class WorkspaceService {
      */
     public void requirePermission(Long workspaceId, Long userId, String minRole) {
         if (!hasPermission(workspaceId, userId, minRole)) {
-            throw new MateClawException("err.workspace.insufficient_permission", "权限不足：需要 " + minRole + " 或更高角色");
+            throw new MateClawException("err.workspace.insufficient_permission", 403, "权限不足：需要 " + minRole + " 或更高角色");
         }
     }
 

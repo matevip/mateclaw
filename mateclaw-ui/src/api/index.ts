@@ -30,7 +30,9 @@ http.interceptors.response.use(
     // 后端统一响应格式 R<T>: { code: number, msg: string, data: T }
     if (data && typeof data === 'object' && 'code' in data) {
       if (data.code === 200) return data
-      if (data.code === 401 || data.code === 403) {
+      // 401 = authentication failure → log out
+      // 403 = authorization failure (e.g. workspace permission denied) → keep session, surface error to caller
+      if (data.code === 401) {
         handleAuthFailure()
         return Promise.reject(new Error(data.msg || 'Unauthorized'))
       }
@@ -39,7 +41,7 @@ http.interceptors.response.use(
     return data
   },
   (err) => {
-    if (err.response?.status === 401 || err.response?.status === 403) {
+    if (err.response?.status === 401) {
       handleAuthFailure()
     }
     return Promise.reject(err.response?.data?.msg || err.message)

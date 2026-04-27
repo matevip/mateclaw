@@ -1571,8 +1571,8 @@ export default {
       allowFromPlaceholder: '逗号分隔用户 ID（留空 = 全部允许）',
       denyMessage: '拒绝提示',
       denyMessagePlaceholder: '抱歉，您没有使用权限',
-      requireMention: '需要 @提及',
-      requireMentionTooltip: '群聊中是否需要 @机器人才响应',
+      requireMention: "需要 {'@'}提及",
+      requireMentionTooltip: "群聊中是否需要 {'@'}机器人才响应",
     },
     messageFilter: {
       title: '消息过滤',
@@ -1649,7 +1649,7 @@ export default {
       qq: {
         step1: '前往 <a href="https://q.qq.com/" target="_blank" rel="noopener">QQ 开放平台</a> 创建机器人应用',
         step2: '在应用管理页面获取 <b>AppID</b> 和 <b>AppSecret</b>，填入下方配置',
-        step3: '在「功能配置 → 消息订阅」中开启需要的消息类型（C2C 消息、群聊 @消息、频道消息等）',
+        step3: "在「功能配置 → 消息订阅」中开启需要的消息类型（C2C 消息、群聊 {'@'}消息、频道消息等）",
         step4: '启动渠道后通过 <b>WebSocket 长连接</b>自动接收消息，<b>无需公网 IP 和回调 URL</b>',
       },
     },
