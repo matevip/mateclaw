@@ -1058,6 +1058,7 @@ public class AgentGraphBuilder {
                 chatRequest = sanitizeReasoningEffortForProvider(chatRequest, provider);
                 chatRequest = patchReasoningContent(chatRequest, provider);
                 chatRequest = stripReasoningEffortIfIncompatible(chatRequest);
+                chatRequest = stripAutoToolChoice(chatRequest);
                 chatRequest = patchVideoMediaContent(chatRequest);
                 if (kimiSearchEnabled) {
                     chatRequest = injectKimiWebSearch(chatRequest);
@@ -1078,6 +1079,7 @@ public class AgentGraphBuilder {
                 chatRequest = sanitizeReasoningEffortForProvider(chatRequest, provider);
                 chatRequest = patchReasoningContent(chatRequest, provider);
                 chatRequest = stripReasoningEffortIfIncompatible(chatRequest);
+                chatRequest = stripAutoToolChoice(chatRequest);
                 chatRequest = patchVideoMediaContent(chatRequest);
                 if (kimiSearchEnabled) {
                     chatRequest = injectKimiWebSearch(chatRequest);
@@ -1855,6 +1857,65 @@ public class AgentGraphBuilder {
     private static boolean requiresReasoningContentPatch(String modelName) {
         ModelFamily family = ModelFamily.detect(modelName);
         return family.isThinking();
+    }
+
+    /**
+     * Strip {@code tool_choice="auto"} from outbound chat-completion requests.
+     *
+     * <p>Per the OpenAI spec, omitting {@code tool_choice} when {@code tools} is non-empty
+     * is functionally equivalent to {@code "auto"} (the server defaults to auto-pick).
+     * Stripping the explicit literal {@code "auto"}:
+     * <ul>
+     *   <li>does not change behavior on compliant servers (e.g. OpenAI, DashScope) — they
+     *       still default to auto when tools are present</li>
+     *   <li>unblocks strict OpenAI-compatible self-hosted serving frameworks that reject
+     *       {@code tool_choice="auto"} at request validation time unless launched with an
+     *       auto-tool-choice opt-in flag, which is a common reason custom endpoints
+     *       respond with a generic 400 / "body=None" Pydantic error</li>
+     * </ul>
+     *
+     * <p>Explicit values other than {@code "auto"} ({@code "none"}, {@code "required"},
+     * or a specific function descriptor) are passed through unchanged.
+     */
+    private static OpenAiApi.ChatCompletionRequest stripAutoToolChoice(OpenAiApi.ChatCompletionRequest request) {
+        Object tc = request.toolChoice();
+        if (tc == null || !"auto".equals(String.valueOf(tc))) {
+            return request;
+        }
+        return new OpenAiApi.ChatCompletionRequest(
+                request.messages(),
+                request.model(),
+                request.store(),
+                request.metadata(),
+                request.frequencyPenalty(),
+                request.logitBias(),
+                request.logprobs(),
+                request.topLogprobs(),
+                request.maxTokens(),
+                request.maxCompletionTokens(),
+                request.n(),
+                request.outputModalities(),
+                request.audioParameters(),
+                request.presencePenalty(),
+                request.responseFormat(),
+                request.seed(),
+                request.serviceTier(),
+                request.stop(),
+                request.stream(),
+                request.streamOptions(),
+                request.temperature(),
+                request.topP(),
+                request.tools(),
+                null,  // toolChoice — strip "auto" so strict OpenAI-compatible servers accept the request
+                request.parallelToolCalls(),
+                request.user(),
+                request.reasoningEffort(),
+                request.webSearchOptions(),
+                request.verbosity(),
+                request.promptCacheKey(),
+                request.safetyIdentifier(),
+                request.extraBody()
+        );
     }
 
     /**
