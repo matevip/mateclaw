@@ -798,7 +798,11 @@ onBeforeUnmount(() => {
     clearInterval(activityPollTimer)
     activityPollTimer = null
   }
-  stopChatGeneration()
+  // Switching tabs / route changes / mouse-detach unmount this component, but the
+  // backend agent should keep running so the user can reconnect later. Use
+  // resetForNewConversation (front-end SSE disconnect only) instead of
+  // stopChatGeneration which would POST /stop and abort the in-flight turn.
+  resetForNewConversation()
   // 释放所有附件的 ObjectURL，防止内存泄漏
   revokeAllPreviewUrls()
 })

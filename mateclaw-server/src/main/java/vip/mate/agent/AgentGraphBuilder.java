@@ -194,7 +194,15 @@ public class AgentGraphBuilder {
             // 内置搜索作为首选，search 工具作为补充/兜底
             log.info("内置搜索已开启 (provider={})，search 工具保留作为补充通道", provider.getProviderId());
         }
-        int maxIter = entity.getMaxIterations() != null ? entity.getMaxIterations() : 25;
+        // Default 100 if DB row leaves max_iterations null; clamp per-agent overrides
+        // to the hard ceiling (BaseAgent.MAX_ITERATIONS_HARD_CEILING) so a misconfigured
+        // row can never push an unbounded loop. Aligned with QwenPaw's 1..100 range.
+        int rawMaxIter = entity.getMaxIterations() != null ? entity.getMaxIterations() : 100;
+        int maxIter = Math.max(1, Math.min(rawMaxIter, BaseAgent.MAX_ITERATIONS_HARD_CEILING));
+        if (maxIter != rawMaxIter) {
+            log.warn("Agent {} max_iterations={} clamped to {} (1..{})",
+                    entity.getId(), rawMaxIter, maxIter, BaseAgent.MAX_ITERATIONS_HARD_CEILING);
+        }
 
         String enhancedPrompt = buildEnhancedPrompt(entity, builtinSearchEnabled);
 

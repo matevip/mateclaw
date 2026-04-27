@@ -10,21 +10,21 @@ MERGE INTO mate_agent (id, name, description, agent_type, system_prompt, model_n
 KEY (id)
 VALUES (1000000001, 'MateClaw Assistant', 'Default AI assistant with ReAct mode and tool calling', 'react',
         'You are MateClaw, an intelligent AI assistant. You can help users answer questions, analyze data, and execute tasks. Please respond professionally and in a friendly manner.',
-        NULL, 25, TRUE, '🤖', 'default,assistant', NOW(), NOW(), 0);
+        NULL, 100, TRUE, '🤖', 'default,assistant', NOW(), NOW(), 0);
 
 -- Default Agent: Task Planner (Plan-Execute mode)
 MERGE INTO mate_agent (id, name, description, agent_type, system_prompt, model_name, max_iterations, enabled, icon, tags, create_time, update_time, deleted)
 KEY (id)
 VALUES (1000000002, 'Task Planner', 'Task planning assistant for complex multi-step tasks', 'plan_execute',
         'You are a professional task planning and execution assistant. You excel at breaking complex goals into executable steps and completing them systematically.',
-        NULL, 20, TRUE, '📋', 'planning,task', NOW(), NOW(), 0);
+        NULL, 100, TRUE, '📋', 'planning,task', NOW(), NOW(), 0);
 
 -- StateGraph ReAct Agent (StateGraph architecture)
 MERGE INTO mate_agent (id, name, description, agent_type, system_prompt, model_name, max_iterations, enabled, icon, tags, create_time, update_time, deleted)
 KEY (id)
 VALUES (1000000003, 'StateGraph ReAct', 'StateGraph-based ReAct Agent with explicit reasoning loops and tool calling', 'react',
         'You are an intelligent assistant based on the StateGraph architecture. You can use tools to help users solve problems. Please respond professionally and in a friendly manner.',
-        NULL, 25, TRUE, '🔄', 'react,stategraph,tools', NOW(), NOW(), 0);
+        NULL, 100, TRUE, '🔄', 'react,stategraph,tools', NOW(), NOW(), 0);
 
 -- ==================== Local Model Providers (displayed first) ====================
 

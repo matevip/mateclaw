@@ -70,7 +70,13 @@ public class DocxRenderTool {
                     displayName, bytes.length, elapsed, id);
 
             String url = "/api/v1/files/generated/" + id;
-            return "文档已生成：[" + displayName + "](" + url + ")（链接 10 分钟内有效）";
+            // Explicit instruction to suppress LLM hallucinating an absolute host.
+            // DeepSeek/Claude have been observed prepending placeholder domains
+            // (e.g. https://ai-tools-system.com) when echoing the URL back to the user,
+            // breaking the download link. Repeat the path verbatim with no host.
+            return "文档已生成：[" + displayName + "](" + url + ")（链接 10 分钟内有效）。\n"
+                    + "重要：回答用户时**必须**使用上述相对路径 `" + url + "`，"
+                    + "**不要**添加任何 https://、http:// 域名前缀，前端会自动拼接当前主机。";
         } catch (Exception e) {
             log.error("[DocxRender] render failed for {}: {}", displayName, e.getMessage(), e);
             return "渲染失败：" + e.getMessage();

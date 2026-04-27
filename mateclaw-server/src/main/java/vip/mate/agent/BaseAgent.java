@@ -43,8 +43,13 @@ public abstract class BaseAgent {
     /** 系统提示词 */
     protected String systemPrompt;
 
-    /** 最大工具调用迭代次数 */
-    protected int maxIterations = 25;
+    /**
+     * Max ReAct iterations (one reasoning + action + observation step counts as one).
+     * Default 100, hard ceiling 100 (enforced in AgentGraphBuilder so per-agent DB
+     * overrides cannot exceed it). Aligned with QwenPaw's _MAX_MAX_ITERATIONS.
+     */
+    public static final int MAX_ITERATIONS_HARD_CEILING = 100;
+    protected int maxIterations = 100;
 
     /** 工作区活动目录（限制文件工具访问范围，为空不限制） */
     protected String workspaceBasePath;
