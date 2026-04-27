@@ -291,6 +291,25 @@
             <version>5.4.1</version>
         </dependency>
 
+        <!-- ===== Apache Batik (SVG rasterization for docx image embedding) ===== -->
+        <!--
+            Used by MarkdownDocxRenderer to convert ![alt](*.svg) image references
+            into PNG bytes that POI can embed via XWPFRun.addPicture(). Without this,
+            agents that produce architecture diagrams as inline SVG cannot get them
+            into the final .docx. Rasterization runs in-JVM (no rsvg-convert / cairo
+            dependency on the host).
+        -->
+        <dependency>
+            <groupId>org.apache.xmlgraphics</groupId>
+            <artifactId>batik-transcoder</artifactId>
+            <version>1.18</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.xmlgraphics</groupId>
+            <artifactId>batik-codec</artifactId>
+            <version>1.18</version>
+        </dependency>
+
         <!-- ===== jsoup (HTML cleanup for Wiki ingest, RFC-051 PR-1c) ===== -->
         <!--
             Used by WikiContentNormalizer to strip nav/footer/script/style/aside

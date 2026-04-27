@@ -28,13 +28,23 @@ import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTcPr;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.STBorder;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.STNumberFormat;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.STShd;
+import org.apache.batik.transcoder.TranscoderInput;
+import org.apache.batik.transcoder.TranscoderOutput;
+import org.apache.batik.transcoder.image.PNGTranscoder;
+import org.apache.poi.util.Units;
+import org.apache.poi.xwpf.usermodel.Document;
 import org.springframework.stereotype.Component;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -61,6 +71,25 @@ public class MarkdownDocxRenderer {
     private static final Pattern UNORDERED_ITEM = Pattern.compile("^\\s*[-*]\\s+(.*)$");
     private static final Pattern ORDERED_ITEM = Pattern.compile("^\\s*\\d+\\.\\s+(.*)$");
     private static final Pattern TABLE_SEPARATOR = Pattern.compile("^\\s*\\|?\\s*:?-{3,}:?\\s*(\\|\\s*:?-{3,}:?\\s*)+\\|?\\s*$");
+
+    /**
+     * Image-only line, e.g. {@code ![alt text](path/to/file.png)}. Whitespace around
+     * the syntax is allowed but inline images mixed with other text in the same
+     * paragraph are intentionally NOT recognized — they would require splitting
+     * a single paragraph into multiple POI runs with image positioning that the
+     * markdown subset doesn't otherwise support.
+     */
+    private static final Pattern IMAGE_LINE = Pattern.compile(
+            "^\\s*!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)\\s*$");
+
+    /**
+     * Page width in EMU after default A4 margins (page width 11906 twips - left
+     * 1800 - right 1800 = 8306 twips ≈ 5.77 inches). POI's image API works in EMU
+     * (1 inch = 914400 EMU); precomputing the maximum width keeps oversized images
+     * from spilling outside the printable area while still allowing small images
+     * to render at native size.
+     */
+    private static final int MAX_IMAGE_WIDTH_EMU = Units.toEMU(5.77 * 72);
 
     private static final String LATIN_FONT = "Arial";
     private static final String CJK_BODY_FONT = "FangSong"; // 仿宋
@@ -90,7 +119,10 @@ public class MarkdownDocxRenderer {
                     continue;
                 }
 
-                if (stripped.startsWith("### ")) {
+                Matcher imageMatch = IMAGE_LINE.matcher(line);
+                if (imageMatch.matches()) {
+                    renderImage(doc, imageMatch.group(1), imageMatch.group(2));
+                } else if (stripped.startsWith("### ")) {
                     renderHeading(doc, stripped.substring(4), 3);
                 } else if (stripped.startsWith("## ")) {
                     renderHeading(doc, stripped.substring(3), 2);
@@ -198,6 +230,111 @@ public class MarkdownDocxRenderer {
         XWPFParagraph p = doc.createParagraph();
         p.setNumID(numId);
         renderInline(p, text, false, 0);
+    }
+
+    // ==================== images ====================
+
+    /**
+     * Render an {@code ![alt](path)} line as an embedded image. Falls back to
+     * showing the alt text in italics on any failure (file missing, unsupported
+     * format, SVG conversion error) so the rest of the document still renders.
+     * <p>
+     * Path resolution: the markdown is treated as living in the workspace root,
+     * so a path like {@code assets/x.png} resolves relative to the JVM working
+     * directory. Absolute paths are accepted as-is. {@code .svg} files are
+     * rasterized to PNG via Apache Batik before embedding because OOXML images
+     * must be a raster format.
+     */
+    private void renderImage(XWPFDocument doc, String alt, String rawPath) {
+        XWPFParagraph p = doc.createParagraph();
+        p.setAlignment(ParagraphAlignment.CENTER);
+        XWPFRun run = p.createRun();
+
+        Path path;
+        try {
+            path = Paths.get(rawPath);
+            if (!path.isAbsolute()) {
+                path = Paths.get(".").resolve(rawPath).normalize();
+            }
+        } catch (Exception e) {
+            renderImageFallback(run, alt, "invalid path: " + e.getMessage());
+            return;
+        }
+
+        if (!Files.exists(path) || !Files.isReadable(path)) {
+            renderImageFallback(run, alt, "file not found: " + path);
+            return;
+        }
+
+        String lower = path.getFileName().toString().toLowerCase(Locale.ROOT);
+        int format;
+        byte[] imageBytes;
+        try {
+            if (lower.endsWith(".svg")) {
+                imageBytes = svgToPng(Files.readAllBytes(path));
+                format = Document.PICTURE_TYPE_PNG;
+            } else if (lower.endsWith(".png")) {
+                imageBytes = Files.readAllBytes(path);
+                format = Document.PICTURE_TYPE_PNG;
+            } else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+                imageBytes = Files.readAllBytes(path);
+                format = Document.PICTURE_TYPE_JPEG;
+            } else if (lower.endsWith(".gif")) {
+                imageBytes = Files.readAllBytes(path);
+                format = Document.PICTURE_TYPE_GIF;
+            } else if (lower.endsWith(".bmp")) {
+                imageBytes = Files.readAllBytes(path);
+                format = Document.PICTURE_TYPE_BMP;
+            } else {
+                renderImageFallback(run, alt, "unsupported image format: " + lower);
+                return;
+            }
+        } catch (Exception e) {
+            log.warn("[MarkdownDocxRenderer] failed to read image {}: {}", path, e.getMessage());
+            renderImageFallback(run, alt, "read failed: " + e.getMessage());
+            return;
+        }
+
+        // Choose width: scale to MAX_IMAGE_WIDTH_EMU. POI's addPicture expects
+        // EMU; we don't know the source image's intrinsic size cheaply, so
+        // pin width and let height scale proportionally via height=0 → POI
+        // does not infer height for us, so use a reasonable height ratio
+        // (4:3 default) to avoid stretching extremely wide diagrams.
+        int width = MAX_IMAGE_WIDTH_EMU;
+        int height = (int) (MAX_IMAGE_WIDTH_EMU * 0.6);
+        try (ByteArrayInputStream in = new ByteArrayInputStream(imageBytes)) {
+            run.addPicture(in, format, path.getFileName().toString(), width, height);
+        } catch (Exception e) {
+            log.warn("[MarkdownDocxRenderer] addPicture failed for {}: {}",
+                    path, e.getMessage());
+            renderImageFallback(run, alt, "embed failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Convert an SVG byte array to PNG using Batik's PNGTranscoder. Width is
+     * pinned so the rasterized output matches the docx page-width target;
+     * height scales proportionally per the SVG's own viewBox.
+     */
+    private byte[] svgToPng(byte[] svgBytes) throws IOException {
+        PNGTranscoder t = new PNGTranscoder();
+        // Roughly 1400px wide → renders crisply at our docx target width.
+        t.addTranscodingHint(PNGTranscoder.KEY_WIDTH, 1400f);
+        TranscoderInput input = new TranscoderInput(new ByteArrayInputStream(svgBytes));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        TranscoderOutput output = new TranscoderOutput(out);
+        try {
+            t.transcode(input, output);
+        } catch (Exception e) {
+            throw new IOException("SVG transcode failed: " + e.getMessage(), e);
+        }
+        return out.toByteArray();
+    }
+
+    private void renderImageFallback(XWPFRun run, String alt, String reason) {
+        run.setItalic(true);
+        run.setText("[image: " + (alt == null || alt.isBlank() ? "(no alt)" : alt)
+                + " — " + reason + "]");
     }
 
     // ==================== inline (bold) ====================

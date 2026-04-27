@@ -12,6 +12,8 @@ import vip.mate.tool.guard.WorkspacePathGuard;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Render a brand-new .docx from Markdown without ever forking a process.
@@ -40,7 +42,12 @@ public class DocxRenderTool {
         Render a new .docx file from Markdown text and return a one-time download URL.
         Use for creating NEW documents: reports, memos, contracts, letters, resumes.
         Supports: headings (# ## ###), bold (**text**), bullet lists (- item),
-                  numbered lists (1. item), tables (| col | col |), plain paragraphs.
+                  numbered lists (1. item), tables (| col | col |), plain paragraphs,
+                  images (![alt](path/to/file.png|jpg|gif|bmp|svg)) — SVG is rasterized
+                  to PNG; image lines must contain only the image syntax.
+
+        For markdown bodies larger than ~5 KB, prefer renderDocxFromFile (read from
+        disk) — passing huge markdown as a tool argument burns LLM tokens needlessly.
 
         Do NOT use for:
         - Editing an existing .docx file (use run_skill_script with unpack/edit/pack)
@@ -112,9 +119,10 @@ public class DocxRenderTool {
         The markdown file is read with UTF-8. Path resolution honors the workspace
         boundary (same rules as read_file / write_file).
 
-        Same supported markdown subset as renderDocx (headings, bold, lists, tables).
-        Image references (![alt](path)) are NOT yet rendered into the docx — they will
-        appear as raw markdown text. SVG inline embedding requires a follow-up tool.
+        Same supported markdown subset as renderDocx (headings, bold, lists, tables,
+        images). Image references ![alt](path) are rendered when path resolves to a
+        readable file in the workspace. SVG sources are rasterized to PNG via Batik;
+        PNG/JPG/GIF/BMP are embedded directly.
         """)
     public String renderDocxFromFile(
             @ToolParam(description = "Absolute or workspace-relative path to a markdown file")
@@ -174,6 +182,107 @@ public class DocxRenderTool {
         } catch (Exception e) {
             log.error("[DocxRender] render failed for {} (source: {}): {}",
                     displayName, resolved, e.getMessage(), e);
+            return "Render failed: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Multi-file renderer — read several markdown files in order and concatenate
+     * them into one docx. Lets the agent split a long report into chapters
+     * (cover.md, intro.md, ch1.md, ...) and render the whole thing in one call,
+     * so a 30-page deliverable does not need to live in a single source file.
+     * <p>
+     * Files are joined with a blank line so heading hierarchy and paragraph
+     * structure carry over cleanly; no extra separator markup is injected.
+     * Empty / missing files abort the render with a clear error so the agent
+     * can fix its file list before retrying.
+     */
+    @Tool(description = """
+        Render a .docx by concatenating MULTIPLE markdown files in order and return a
+        download URL. Use when a report is split into chapters / sections, or when the
+        agent assembled the document piece by piece (cover, table of contents, body,
+        appendix) across several files.
+
+        Typical workflow:
+          1. write_file(path="cover.md",  content="# Title\\n...")
+          2. write_file(path="ch1.md",    content="## Chapter 1\\n...")
+          3. write_file(path="ch2.md",    content="## Chapter 2\\n...")
+          4. renderDocxFromFiles(filePaths=["cover.md","ch1.md","ch2.md"],
+                                 filename="quarterly-report")
+
+        Files are read with UTF-8, joined with one blank line between them, and
+        rendered with the same markdown subset as renderDocx (headings, bold,
+        lists, tables). All paths must pass the workspace boundary check.
+        """)
+    public String renderDocxFromFiles(
+            @ToolParam(description = "List of markdown file paths in render order")
+            List<String> filePaths,
+            @ToolParam(description = "Output filename without extension, e.g. 'quarterly-report'")
+            String filename,
+            @ToolParam(description = "Page size: A4 or LETTER (default: A4)", required = false)
+            String pageSize) {
+
+        if (filePaths == null || filePaths.isEmpty()) {
+            return "Error: filePaths is empty.";
+        }
+
+        StringBuilder combined = new StringBuilder();
+        long totalBytes = 0;
+        List<String> resolvedPaths = new ArrayList<>();
+        for (int idx = 0; idx < filePaths.size(); idx++) {
+            String raw = filePaths.get(idx);
+            if (raw == null || raw.isBlank()) {
+                return "Error: filePaths[" + idx + "] is empty.";
+            }
+            Path resolved;
+            try {
+                resolved = WorkspacePathGuard.validatePath(raw);
+            } catch (Exception e) {
+                return "Error: filePaths[" + idx + "] validation failed — " + e.getMessage();
+            }
+            if (!Files.exists(resolved)) {
+                return "Error: filePaths[" + idx + "] not found at " + resolved;
+            }
+            if (!Files.isRegularFile(resolved) || !Files.isReadable(resolved)) {
+                return "Error: filePaths[" + idx + "] is not a readable regular file " + resolved;
+            }
+            String content;
+            try {
+                totalBytes += Files.size(resolved);
+                content = Files.readString(resolved, StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                log.error("[DocxRender] read failed for {}: {}", resolved, e.getMessage(), e);
+                return "Error: read failed for " + resolved + " — " + e.getMessage();
+            }
+            if (content.isBlank()) {
+                return "Error: filePaths[" + idx + "] is blank " + resolved;
+            }
+            if (combined.length() > 0) combined.append("\n\n");
+            combined.append(content);
+            resolvedPaths.add(resolved.toString());
+        }
+
+        String safeName = sanitizeFilename(filename);
+        String displayName = safeName + ".docx";
+        String size = (pageSize == null || pageSize.isBlank()) ? "A4" : pageSize.trim();
+
+        try {
+            long t0 = System.currentTimeMillis();
+            byte[] bytes = renderer.render(combined.toString(), size);
+            String id = cache.put(bytes, displayName, DOCX_MIME);
+            long elapsed = System.currentTimeMillis() - t0;
+            log.info("[DocxRender] generated {} ({} bytes from {} files / {} bytes md, {}ms, id={})",
+                    displayName, bytes.length, resolvedPaths.size(), totalBytes, elapsed, id);
+
+            String url = "/api/v1/files/generated/" + id;
+            return "Document generated from " + resolvedPaths.size() + " files: ["
+                    + displayName + "](" + url + ") (link valid for 10 minutes).\n"
+                    + "IMPORTANT: when replying to the user you **must** use the relative path `"
+                    + url + "` verbatim. Do **not** prepend any https://, http:// or domain — "
+                    + "the frontend will resolve the current host automatically.";
+        } catch (Exception e) {
+            log.error("[DocxRender] render failed for {} (sources: {}): {}",
+                    displayName, resolvedPaths, e.getMessage(), e);
             return "Render failed: " + e.getMessage();
         }
     }
