@@ -953,30 +953,83 @@ async function selectConversation(conv: Conversation) {
       messages.value = extractMessages(res).messages.map((msg: Message) => normalizeMessage(msg))
     }
 
-    // Hydrate pending approvals：恢复刷新后丢失的审批卡片
+    // Hydrate pending approvals：恢复刷新后丢失的审批卡片（RFC-067 §4.9）
+    //
+    // Two-way reconciliation between the server's pending list and each
+    // message's metadata.pendingApproval:
+    //   1. Forward — server pending → align onto the message that already
+    //      carries the same pendingId (so multi-pending convs don't have
+    //      every banner overwrite the same row); fallback to last assistant
+    //      only when no message has that id yet.
+    //   2. Reverse — local message metadata still says pending_approval but
+    //      the server no longer lists that pendingId → flip to 'expired'
+    //      locally. This closes the GC/timeout loop without requiring an
+    //      extra server-side broadcast: the next refresh sees a clean state.
     try {
       const approvalRes: any = await chatApi.getPendingApprovals(requestedConvId)
       if (currentConversationId.value !== requestedConvId) return
-      const pendingApprovals = approvalRes.data || []
-      if (pendingApprovals.length > 0) {
-        const assistantMessages = messages.value.filter(m => m.role === 'assistant')
-        const lastAssistant = assistantMessages[assistantMessages.length - 1]
-        if (lastAssistant) {
-          for (const pa of pendingApprovals) {
-            (lastAssistant as any).metadata = {
+      const pendingApprovals: any[] = approvalRes.data || []
+
+      // Index existing messages by their embedded pendingId (assistant only).
+      const indexById = new Map<string, Message>()
+      for (const m of messages.value) {
+        if (m.role !== 'assistant') continue
+        const pid = (m as any).metadata?.pendingApproval?.pendingId
+        if (typeof pid === 'string' && pid) indexById.set(pid, m)
+      }
+
+      // Forward direction: align server-known pending onto its owning message.
+      for (const pa of pendingApprovals) {
+        const enriched = {
+          pendingId: pa.pendingId,
+          toolName: pa.toolName,
+          arguments: pa.toolArguments,
+          reason: pa.reason,
+          status: 'pending_approval' as const,
+          findings: pa.findingsJson ? JSON.parse(pa.findingsJson) : undefined,
+          maxSeverity: pa.maxSeverity || undefined,
+          summary: pa.summary || undefined,
+        }
+        const target = indexById.get(pa.pendingId)
+        if (target) {
+          (target as any).metadata = {
+            ...(target as any).metadata,
+            currentPhase: 'awaiting_approval',
+            pendingApproval: enriched,
+          }
+        } else {
+          // Fallback: no message in the loaded history claims this pendingId
+          // (typical when the assistant message hasn't been persisted yet —
+          // e.g., approval fired before doOnComplete). Append to the last
+          // assistant; same as pre-RFC behavior, but logged so a regression
+          // where multiple unmatched pendings collide is observable.
+          const assistantMessages = messages.value.filter(m => m.role === 'assistant')
+          const lastAssistant = assistantMessages[assistantMessages.length - 1]
+          if (lastAssistant) {
+            console.warn('[hydrate] pendingId %s has no owning message — falling back to last assistant', pa.pendingId)
+            ;(lastAssistant as any).metadata = {
               ...(lastAssistant as any).metadata,
               currentPhase: 'awaiting_approval',
-              pendingApproval: {
-                pendingId: pa.pendingId,
-                toolName: pa.toolName,
-                arguments: pa.toolArguments,
-                reason: pa.reason,
-                status: 'pending_approval',
-                findings: pa.findingsJson ? JSON.parse(pa.findingsJson) : undefined,
-                maxSeverity: pa.maxSeverity || undefined,
-                summary: pa.summary || undefined,
-              }
+              pendingApproval: enriched,
             }
+          }
+        }
+      }
+
+      // Reverse direction: any local pending_approval whose pendingId is not
+      // in the server's list got resolved (timeout / consume) without a UI
+      // event — flip to expired so MessageBubble hides the banner.
+      const serverIds = new Set<string>(pendingApprovals.map((p: any) => p.pendingId))
+      for (const m of messages.value) {
+        if (m.role !== 'assistant') continue
+        const meta = (m as any).metadata
+        const local = meta?.pendingApproval
+        if (local?.status === 'pending_approval'
+            && local.pendingId
+            && !serverIds.has(local.pendingId)) {
+          (m as any).metadata = {
+            ...meta,
+            pendingApproval: { ...local, status: 'expired' },
           }
         }
       }

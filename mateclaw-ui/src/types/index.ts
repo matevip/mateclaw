@@ -124,7 +124,14 @@ export interface PendingApprovalMeta {
   toolName: string
   arguments: string
   reason: string
-  status: 'pending_approval' | 'approved' | 'denied'
+  /**
+   * pending_approval / approved / denied are server-authoritative terminal states.
+   * 'expired' is a frontend-only local synthesis used by hydrate reverse-convergence
+   * (RFC-067 §4.9): when a message's metadata still says pending_approval but the
+   * server's getPendingApprovals no longer lists that pendingId, the UI flips to
+   * 'expired' so the banner clears without waiting for a fresh stream event.
+   */
+  status: 'pending_approval' | 'approved' | 'denied' | 'expired'
   // 增强字段（Phase 6: 结构化风险信息）
   findings?: GuardFinding[]
   maxSeverity?: GuardSeverity

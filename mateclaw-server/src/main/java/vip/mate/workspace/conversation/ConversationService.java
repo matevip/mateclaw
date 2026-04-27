@@ -561,7 +561,19 @@ public class ConversationService {
             if (raw == null || raw.isBlank() || !raw.contains("pendingApproval")) continue;
 
             try {
-                java.util.Map<String, Object> meta = objectMapper.readValue(raw, new TypeReference<>() {});
+                // H2's JSON column returns the metadata as a JSON-encoded string
+                // (wrapped + escaped) when read through MyBatis. MessageVO.parseMetadataToObject
+                // (the read-to-frontend path) already handles this; we mirror the same
+                // unwrap here. Without it, readValue tokenizes the leading `"` as a
+                // String token and explodes with "Cannot construct LinkedHashMap from
+                // String value", silently turning every approve / deny / Stop sweep
+                // into a no-op (messagesRewritten=0).
+                String json = raw.trim();
+                if (json.startsWith("\"") && json.endsWith("\"")) {
+                    json = objectMapper.readValue(json, String.class);
+                }
+                java.util.Map<String, Object> meta = objectMapper.readValue(json,
+                        new TypeReference<java.util.Map<String, Object>>() {});
                 Object pa = meta.get("pendingApproval");
                 if (!(pa instanceof java.util.Map)) continue;
                 @SuppressWarnings("unchecked")
@@ -579,6 +591,23 @@ public class ConversationService {
                     meta.put("currentPhase", "resolved");
                 }
 
+                // RFC-067 §4.10 (PR 9): flip the matching toolCall + segment entries
+                // inside this message's metadata. Both DENIED and APPROVED need this
+                // because the LLM streamed tool_call_started → segment.status='running'
+                // before the user's decision arrived, and replay creates a NEW assistant
+                // message rather than updating the original — so without this fix the
+                // gate message's tool card stays as an orange spinner forever.
+                //   DENIED   → success=false + result='[已拒绝]'  → red ✗
+                //   APPROVED → success=true  + result='[已批准]'  → green ✓ on the gate
+                //              row; the actual execution result still appears in the
+                //              replayed assistant message that follows.
+                Object toolName = pendingApproval.get("toolName");
+                Object toolArgs = pendingApproval.get("arguments");
+                String tnStr = toolName == null ? null : String.valueOf(toolName);
+                String taStr = toolArgs == null ? null : String.valueOf(toolArgs);
+                flipResolvedToolCalls(meta, tnStr, taStr, decision);
+                flipResolvedSegments(meta, tnStr, taStr, decision);
+
                 msg.setMetadata(objectMapper.writeValueAsString(meta));
                 if ("awaiting_approval".equals(msg.getStatus())) {
                     msg.setStatus(decision.messageStatus);
@@ -586,8 +615,10 @@ public class ConversationService {
                 messageMapper.updateById(msg);
                 rewritten++;
             } catch (Exception e) {
-                log.warn("[ConversationService] Failed to rewrite pendingApproval status for message {}: {}",
-                        msg.getId(), e.getMessage());
+                String preview = raw.length() > 200 ? raw.substring(0, 200) + "..." : raw;
+                log.warn("[ConversationService] Failed to rewrite pendingApproval status for message {} " +
+                                "(rawLen={}, preview={}): {}",
+                        msg.getId(), raw.length(), preview, e.getMessage());
             }
         }
         if (rewritten > 0) {
@@ -596,6 +627,91 @@ public class ConversationService {
                     rewritten, conversationId, decision, resolvedPendingIds.size());
         }
         return rewritten;
+    }
+
+    /**
+     * Flip the gate message's tool-call entry to a terminal state matching the
+     * approval decision (RFC-067 §4.10).
+     * <p>
+     * Driven by {@link MetadataDecision}:
+     * <ul>
+     *   <li>{@link MetadataDecision#APPROVED} → {@code status='completed'} +
+     *       {@code success=true} + {@code result='[已批准]'}. The actual tool
+     *       execution result appears in the replayed assistant message that
+     *       follows — not on this gate row.</li>
+     *   <li>{@link MetadataDecision#DENIED} → {@code status='completed'} +
+     *       {@code success=false} + {@code result='[已拒绝]'}. MessageBubble
+     *       renders this as a red ✗.</li>
+     * </ul>
+     * Both paths flip status off {@code awaiting_approval} / {@code running} so
+     * MessageBubble's icon precedence (running > awaiting_approval > success
+     * branches) can reach the right terminal icon. Without the flip the card
+     * stays as an orange spinner forever — replay creates a new message
+     * instead of overwriting the gate row, so nothing else updates it.
+     * Best-effort: if metadata.toolCalls is missing or no entry matches, this
+     * is a silent no-op.
+     */
+    @SuppressWarnings("unchecked")
+    private void flipResolvedToolCalls(java.util.Map<String, Object> meta,
+                                       String toolName, String toolArgs,
+                                       MetadataDecision decision) {
+        Object tc = meta.get("toolCalls");
+        if (!(tc instanceof java.util.List)) return;
+        boolean approved = decision == MetadataDecision.APPROVED;
+        String resultText = approved ? "[已批准]" : "[已拒绝]";
+        for (Object entry : (java.util.List<Object>) tc) {
+            if (!(entry instanceof java.util.Map)) continue;
+            java.util.Map<String, Object> call = (java.util.Map<String, Object>) entry;
+            if (!matchesNameAndArgs(call.get("name"), call.get("arguments"), toolName, toolArgs)) continue;
+            Object status = call.get("status");
+            if ("awaiting_approval".equals(String.valueOf(status))
+                    || "running".equals(String.valueOf(status))) {
+                call.put("status", "completed");
+            }
+            call.put("success", approved ? Boolean.TRUE : Boolean.FALSE);
+            call.put("result", resultText);
+        }
+    }
+
+    /**
+     * Same terminal-state flip as {@link #flipResolvedToolCalls} but on the
+     * streaming-segments timeline. Segments use {@code toolName} / {@code toolArgs}
+     * + {@code toolSuccess} / {@code toolResult} field names (not
+     * {@code name} / {@code arguments} / {@code success} / {@code result}); the
+     * shape is otherwise symmetric.
+     */
+    @SuppressWarnings("unchecked")
+    private void flipResolvedSegments(java.util.Map<String, Object> meta,
+                                      String toolName, String toolArgs,
+                                      MetadataDecision decision) {
+        Object segs = meta.get("segments");
+        if (!(segs instanceof java.util.List)) return;
+        boolean approved = decision == MetadataDecision.APPROVED;
+        String resultText = approved ? "[已批准]" : "[已拒绝]";
+        for (Object entry : (java.util.List<Object>) segs) {
+            if (!(entry instanceof java.util.Map)) continue;
+            java.util.Map<String, Object> seg = (java.util.Map<String, Object>) entry;
+            if (!"tool_call".equals(String.valueOf(seg.get("type")))) continue;
+            if (!matchesNameAndArgs(seg.get("toolName"), seg.get("toolArgs"), toolName, toolArgs)) continue;
+            Object status = seg.get("status");
+            if ("awaiting_approval".equals(String.valueOf(status))
+                    || "running".equals(String.valueOf(status))) {
+                seg.put("status", "completed");
+            }
+            seg.put("toolSuccess", approved ? Boolean.TRUE : Boolean.FALSE);
+            seg.put("toolResult", resultText);
+        }
+    }
+
+    private static boolean matchesNameAndArgs(Object actualName, Object actualArgs,
+                                              String expectedName, String expectedArgs) {
+        if (expectedName == null || actualName == null) return false;
+        if (!expectedName.equals(String.valueOf(actualName))) return false;
+        // Arguments equality: pendingApproval stores them as the JSON-stringified form
+        // produced by the tool-call creator, identical to what's recorded on the
+        // toolCall / segment entry. A null comparator on either side falls through.
+        if (expectedArgs == null) return true;
+        return expectedArgs.equals(String.valueOf(actualArgs));
     }
 
     @Transactional

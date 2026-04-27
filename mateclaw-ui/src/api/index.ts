@@ -123,8 +123,6 @@ export const chatApi = {
   },
   stop: (conversationId: string) =>
     http.post<{ stopped: boolean }>(`/chat/${conversationId}/stop`),
-  approve: (conversationId: string, data: { pendingId: string; decision: string }) =>
-    http.post(`/chat/${conversationId}/approve`, data),
   getPendingApprovals: (conversationId: string) =>
     http.get(`/chat/${conversationId}/pending-approvals`),
 }

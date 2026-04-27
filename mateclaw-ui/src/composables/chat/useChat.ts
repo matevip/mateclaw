@@ -936,10 +936,47 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       if (msg) {
         const metadata = parseMetadata((msg as any).metadata)
         if (metadata?.pendingApproval) {
-          const toolCalls = [...(metadata?.toolCalls || [])]
-          for (let i = 0; i < toolCalls.length; i++) {
-            if (toolCalls[i].status !== 'completed') {
-              toolCalls[i] = { ...toolCalls[i], status: 'completed' }
+          // RFC-067 §4.10: every still-pending tool call on this gate message
+          // must surface as a terminal state — both deny AND approve. RFC-067
+          // §3 guarantees "one turn at most one pending", so any running/
+          // awaiting entry IS the resolved one — skip strict (name, arguments)
+          // matching since JSON formatting can drift between the live SSE
+          // buffer and pendingApproval.arguments.
+          //   approve → success=true  + result='[已批准]' → green ✓ on the gate
+          //             row; the actual execution result is in the replayed
+          //             assistant message that follows.
+          //   deny    → success=false + result='[已拒绝]' → red ✗.
+          // Both branches must also flip metadata.segments[] entries because
+          // MessageBubble renders the timeline via ToolCallSegment.vue (driven
+          // by metadata.segments, not metadata.toolCalls).
+          const approved = data.decision === 'approved'
+          const successFlag = approved
+          const resultText = approved ? '[已批准]' : '[已拒绝]'
+          const toolCalls = (metadata?.toolCalls || []).map((tc: any) => {
+            const wasPending = tc.status === 'awaiting_approval' || tc.status === 'running'
+            if (wasPending) {
+              return { ...tc, status: 'completed', success: successFlag, result: resultText }
+            }
+            return tc
+          })
+          const segments = (metadata?.segments || []).map((seg: any) => {
+            if (seg.type !== 'tool_call') return seg
+            const wasPending = seg.status === 'running' || seg.status === 'awaiting_approval'
+            if (wasPending) {
+              return { ...seg, status: 'completed', toolSuccess: successFlag, toolResult: resultText }
+            }
+            return seg
+          })
+          // Sync currentSegments.value so the live streaming buffer agrees
+          // with the persisted message metadata.
+          for (let i = 0; i < currentSegments.value.length; i++) {
+            const liveSeg: any = currentSegments.value[i]
+            if (liveSeg.type !== 'tool_call') continue
+            const wasPending = liveSeg.status === 'running' || liveSeg.status === 'awaiting_approval'
+            if (wasPending) {
+              liveSeg.status = 'completed'
+              liveSeg.toolSuccess = successFlag
+              liveSeg.toolResult = resultText
             }
           }
           updateMessage(targetId, {
@@ -949,9 +986,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               ...metadata,
               currentPhase: 'completed',
               toolCalls,
+              segments,
               pendingApproval: {
                 ...metadata.pendingApproval,
-                status: data.decision === 'approved' ? 'approved' : 'denied'
+                status: approved ? 'approved' : 'denied'
               }
             }
           } as any)
