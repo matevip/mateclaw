@@ -120,6 +120,37 @@ public class ApprovalService {
         log.info("[Approval] Resolved: id={}, decision={}, by={}", pendingId, decision, userId);
     }
 
+    /**
+     * Bulk-deny every pending approval still in {@code pending} status for this
+     * conversation. Used by the Stop endpoint to clear orphaned approvals so
+     * subsequent UI refreshes don't keep popping the "approve write_file?"
+     * banner forever, and so a `findPendingByConversation` lookup right after
+     * Stop returns null.
+     * <p>
+     * Returns the list of {@link PendingApproval} records that were marked
+     * denied — callers typically use this list to update the corresponding
+     * {@code mate_message.metadata.pendingApproval.status} entries in DB
+     * (otherwise a page refresh re-hydrates ghost approvals from message
+     * metadata even after the in-memory map is cleared).
+     */
+    public List<PendingApproval> denyAllByConversation(String conversationId, String userId) {
+        Instant now = Instant.now();
+        List<PendingApproval> resolved = new ArrayList<>();
+        for (PendingApproval pending : pendingMap.values()) {
+            if (!conversationId.equals(pending.getConversationId())) continue;
+            if (!"pending".equals(pending.getStatus())) continue;
+            pending.setStatus("denied");
+            pending.setResolvedAt(now);
+            pending.setResolvedBy(userId);
+            resolved.add(pending);
+        }
+        if (!resolved.isEmpty()) {
+            log.info("[Approval] Bulk-denied {} pending approvals for conversation {}",
+                    resolved.size(), conversationId);
+        }
+        return resolved;
+    }
+
     // ==================== 查询 ====================
 
     /**

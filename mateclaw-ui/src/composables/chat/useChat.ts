@@ -498,6 +498,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         const metadata = parseMetadata((msg as any).metadata)
         const toolCalls = metadata?.toolCalls || []
         toolCalls.push({
+          toolCallId: data.toolCallId || '',
           name: data.toolName,
           arguments: data.arguments,
           status: 'running',
@@ -508,12 +509,16 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           metadata: { ...metadata, toolCalls, currentPhase: 'executing_tool', runningToolName: data.toolName }
         } as any)
       }
-      // Segments: close any running thinking/content segment, then push a new tool_call segment
+      // Segments: close any running thinking/content segment, then push a new tool_call segment.
+      // Carry toolCallId so completes can pair back precisely; falling back to toolName-based
+      // pairing strands the first card with a permanent spinner whenever the LLM fires multiple
+      // calls of the same tool (observed with execute_shell_command + python3 retries).
       const segs = currentSegments.value
       const runningSeg = segs.findLast((s: MessageSegment) => s.status === 'running' && (s.type === 'thinking' || s.type === 'content'))
       if (runningSeg) runningSeg.status = 'completed'
       segs.push({
         id: genSegId(), type: 'tool_call', status: 'running',
+        toolCallId: data.toolCallId || '',
         toolName: data.toolName, toolArgs: data.arguments,
         timestamp: data.timestamp || Date.now(),
       })
@@ -528,10 +533,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       if (msg) {
         const metadata = parseMetadata((msg as any).metadata)
         const toolCalls = [...(metadata?.toolCalls || [])]
-        const lastRunning = toolCalls.findLastIndex((tc: any) => tc.status === 'running')
-        if (lastRunning >= 0) {
-          toolCalls[lastRunning] = {
-            ...toolCalls[lastRunning],
+        // Match by toolCallId when available, fall back to "first running" for legacy events.
+        let target = -1
+        if (data.toolCallId) {
+          target = toolCalls.findIndex((tc: any) => tc.toolCallId === data.toolCallId && tc.status === 'running')
+        }
+        if (target < 0) {
+          target = toolCalls.findIndex((tc: any) => tc.status === 'running' && tc.name === data.toolName)
+        }
+        if (target >= 0) {
+          toolCalls[target] = {
+            ...toolCalls[target],
             result: data.result,
             success: data.success,
             status: 'completed'
@@ -542,10 +554,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           metadata: { ...metadata, toolCalls, runningToolName: undefined }
         } as any)
       }
-      // Segments: find the matching running tool_call segment and mark it complete
+      // Segments: prefer toolCallId match, fall back to first-running by toolName.
       const segs = currentSegments.value
-      const toolSeg = segs.findLast((s: MessageSegment) =>
-        s.type === 'tool_call' && s.status === 'running' && s.toolName === data.toolName)
+      let toolSeg: MessageSegment | undefined
+      if (data.toolCallId) {
+        toolSeg = segs.find((s: MessageSegment) =>
+          s.type === 'tool_call' && s.status === 'running' && s.toolCallId === data.toolCallId)
+      }
+      if (!toolSeg) {
+        toolSeg = segs.find((s: MessageSegment) =>
+          s.type === 'tool_call' && s.status === 'running' && s.toolName === data.toolName)
+      }
       if (toolSeg) {
         toolSeg.status = data.success !== false ? 'completed' : 'error'
         toolSeg.toolResult = data.result

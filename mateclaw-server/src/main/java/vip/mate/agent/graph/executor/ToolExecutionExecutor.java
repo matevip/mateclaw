@@ -232,7 +232,7 @@ public class ToolExecutionExecutor {
             String toolName = toolCall.name();
             String arguments = toolCall.arguments();
 
-            events.add(GraphEventPublisher.toolStart(toolName, arguments));
+            events.add(GraphEventPublisher.toolStart(toolCall.id(), toolName, arguments));
 
             // 0. 子会话工具拦截：委派上下文中的子 Agent 禁止调用特定工具
             if (vip.mate.tool.builtin.DelegationContext.currentDepth() > 0) {
@@ -240,7 +240,7 @@ public class ToolExecutionExecutor {
                 if (denied.contains(toolName)) {
                     String msg = "[安全限制] 子 Agent 不允许使用工具: " + toolName;
                     log.info("[ToolExecutor] Child agent blocked from using tool: {}", toolName);
-                    events.add(GraphEventPublisher.toolComplete(toolName, msg, false));
+                    events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, msg, false));
                     allResponses.add(new org.springframework.ai.chat.messages.ToolResponseMessage.ToolResponse(
                             toolCall.id(), toolName, msg));
                     continue;
@@ -255,7 +255,7 @@ public class ToolExecutionExecutor {
                     log.warn("[ToolExecutor] Tool {} arguments invalid/truncated JSON (len={}): {}",
                             toolName, arguments.length(), jsonEx.getMessage());
                     String truncationError = normalizeToolExecutionError(jsonEx);
-                    events.add(GraphEventPublisher.toolComplete(toolName, truncationError, false));
+                    events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, truncationError, false));
                     allResponses.add(new ToolResponseMessage.ToolResponse(
                             toolCall.id(), toolName, truncationError));
                     continue;
@@ -300,7 +300,7 @@ public class ToolExecutionExecutor {
             ToolCallback callback = toolCallbackMap.get(toolName);
             if (callback == null) {
                 log.warn("[ToolExecutor] Tool not found: {}", toolName);
-                events.add(GraphEventPublisher.toolComplete(toolName, "Tool not found: " + toolName, false));
+                events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, "Tool not found: " + toolName, false));
                 allResponses.add(new ToolResponseMessage.ToolResponse(
                         toolCall.id(), toolName, "Tool not found: " + toolName));
                 continue;
@@ -376,7 +376,7 @@ public class ToolExecutionExecutor {
         ToolCallback callback = toolCallbackMap.get(toolName);
         if (callback == null) {
             log.warn("[ToolExecutor] Pre-approved tool not found: {}", toolName);
-            events.add(GraphEventPublisher.toolComplete(toolName, "Tool not found: " + toolName, false));
+            events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, "Tool not found: " + toolName, false));
             return new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, "Tool not found: " + toolName);
         }
 
@@ -414,7 +414,7 @@ public class ToolExecutionExecutor {
             result = truncateToolResult(result, MAX_TOOL_RESULT_CHARS);
             log.info("[ToolExecutor] Pre-approved tool {} returned {} chars{}", toolName, rawLen,
                     result != null && result.length() < rawLen ? " (now " + result.length() + " after spill/truncate)" : "");
-            events.add(GraphEventPublisher.toolComplete(toolName, result, true));
+            events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, result, true));
             return new ToolResponseMessage.ToolResponse(
                     toolCall.id(), toolName, result != null ? result : "");
         } catch (Exception e) {
@@ -422,7 +422,7 @@ public class ToolExecutionExecutor {
             String safeError = isReturnDirect(callback)
                     ? "Tool execution failed (details withheld per returnDirect policy)"
                     : "Tool execution failed: " + e.getMessage();
-            events.add(GraphEventPublisher.toolComplete(toolName, safeError, false));
+            events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, safeError, false));
             return new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, safeError);
         }
     }
@@ -559,7 +559,7 @@ public class ToolExecutionExecutor {
             if (streamTracker != null) {
                 streamTracker.updateRunningTool(pc.conversationId, toolName);
                 streamTracker.broadcastObject(pc.conversationId, GraphEventPublisher.EVENT_TOOL_START,
-                        GraphEventPublisher.toolStart(toolName, pc.arguments).data());
+                        GraphEventPublisher.toolStart(pc.toolCall.id(), toolName, pc.arguments).data());
             }
             log.info("[ToolExecutor] Executing tool: {} with args: {}",
                     toolName, pc.arguments != null && pc.arguments.length() > 200
@@ -611,10 +611,10 @@ public class ToolExecutionExecutor {
             result = truncateToolResult(result, MAX_TOOL_RESULT_CHARS);
             log.info("[ToolExecutor] Tool {} returned {} chars{}", toolName, rawLen,
                     result != null && result.length() < rawLen ? " (now " + result.length() + " after spill/truncate)" : "");
-            events.add(GraphEventPublisher.toolComplete(toolName, result, true));
+            events.add(GraphEventPublisher.toolComplete(pc.toolCall.id(), toolName, result, true));
             if (streamTracker != null) {
                 streamTracker.broadcastObject(pc.conversationId, GraphEventPublisher.EVENT_TOOL_COMPLETE,
-                        GraphEventPublisher.toolComplete(toolName, result, true).data());
+                        GraphEventPublisher.toolComplete(pc.toolCall.id(), toolName, result, true).data());
                 streamTracker.updateRunningTool(pc.conversationId, null);
             }
             return new ToolResponseMessage.ToolResponse(
@@ -629,10 +629,10 @@ public class ToolExecutionExecutor {
             String reportedError = isReturnDirect(pc.callback)
                     ? "Tool execution failed (details withheld per returnDirect policy)"
                     : normalizeToolExecutionError(e);
-            events.add(GraphEventPublisher.toolComplete(toolName, reportedError, false));
+            events.add(GraphEventPublisher.toolComplete(pc.toolCall.id(), toolName, reportedError, false));
             if (streamTracker != null) {
                 streamTracker.broadcastObject(pc.conversationId, GraphEventPublisher.EVENT_TOOL_COMPLETE,
-                        GraphEventPublisher.toolComplete(toolName, reportedError, false).data());
+                        GraphEventPublisher.toolComplete(pc.toolCall.id(), toolName, reportedError, false).data());
                 streamTracker.updateRunningTool(pc.conversationId, null);
             }
             return new ToolResponseMessage.ToolResponse(
@@ -653,7 +653,7 @@ public class ToolExecutionExecutor {
 
             if (evaluation.shouldBlock()) {
                 log.warn("[ToolExecutor] Tool call BLOCKED: tool={}, summary={}", toolName, evaluation.summary());
-                events.add(GraphEventPublisher.toolComplete(toolName, evaluation.summary(), false));
+                events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, evaluation.summary(), false));
                 return GuardDecision.blocked(
                         "[安全拦截] " + evaluation.summary() + "。请使用更安全的替代方案。");
             }
@@ -672,7 +672,7 @@ public class ToolExecutionExecutor {
 
             if (guardResult.isBlocked()) {
                 log.warn("[ToolExecutor] Tool call BLOCKED by ToolGuard: tool={}, reason={}", toolName, guardResult.reason());
-                events.add(GraphEventPublisher.toolComplete(toolName, guardResult.reason(), false));
+                events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, guardResult.reason(), false));
                 return GuardDecision.blocked(
                         "[安全拦截] " + guardResult.reason() + "。请使用更安全的替代方案。");
             }

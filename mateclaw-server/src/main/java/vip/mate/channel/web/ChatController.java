@@ -194,6 +194,11 @@ public class ChatController {
             if (isDenyCommand) {
                 approvalService.resolve(pending.getPendingId(), username, "denied");
                 conversationService.removeApprovalPlaceholders(conversationId);
+                // Sync the persisted message metadata so a subsequent page refresh
+                // doesn't re-hydrate a "pending_approval" ghost from message metadata
+                // that the in-memory map already moved past.
+                conversationService.markPendingApprovalsResolved(conversationId,
+                        java.util.Set.of(pending.getPendingId()), "denied");
                 log.info("[Approval-Stream] User {} denied pending {} for conversation {}",
                         username, pending.getPendingId(), conversationId);
             }
@@ -212,6 +217,11 @@ public class ChatController {
                 }
                 // 清理 DB 中残留的审批占位消息（对齐 IM 渠道 replayApprovedToolCall）
                 conversationService.removeApprovalPlaceholders(conversationId);
+                // Same metadata sync as the deny branch — without this, refresh
+                // after approval still shows the spinner-state approval card
+                // because the persisted message says status='pending_approval'.
+                conversationService.markPendingApprovalsResolved(conversationId,
+                        java.util.Set.of(consumed.getPendingId()), "approved");
                 log.info("[Approval-Stream] User {} approved pending {} for conversation {}",
                         username, consumed.getPendingId(), conversationId);
             }
@@ -762,18 +772,50 @@ public class ChatController {
     /**
      * 停止指定会话的流式生成。
      * 取消 Flux 订阅（底层 HTTP 连接也会随之关闭），已生成的部分内容以 stopped 状态入库。
+     * <p>
+     * Stop 同时清理所有未 resolve 的 pending approval：当 LLM 在一个 turn 里连发了
+     * 多个需要审批的工具调用、用户在中间 Stop 时，这些 pending 会一直留在 in-memory
+     * pendingMap 里。下次刷新页面时 frontend 的 hydrate 链路（`getPendingApprovals` API
+     * + 消息 metadata 里的 `pendingApproval` 字段）会反复弹出"允许 xxx 执行？"banner。
+     * Stop 端点现在 deny 所有 pending、同步 update 受影响 message 的 metadata，并广播
+     * tool_approval_resolved 让前端实时清理 UI。
      */
     @Operation(summary = "停止流式生成")
     @PostMapping("/{conversationId}/stop")
-    public R<Map<String, Boolean>> stopStream(@PathVariable String conversationId, Authentication auth) {
+    public R<Map<String, Object>> stopStream(@PathVariable String conversationId, Authentication auth) {
         String username = auth != null ? auth.getName() : "anonymous";
         // 权限校验：已认证用户需验证会话归属，匿名用户（permitAll）直接放行
         if (auth != null && !conversationService.isConversationOwner(conversationId, username)) {
             return R.fail("无权操作该会话");
         }
         boolean stopped = streamTracker.requestStop(conversationId);
-        log.info("Stop requested: conversationId={}, user={}, stopped={}", conversationId, username, stopped);
-        return R.ok(Map.of("stopped", stopped));
+
+        // Sweep ghost approvals — see method-level Javadoc for rationale.
+        java.util.List<vip.mate.approval.PendingApproval> denied =
+                approvalService.denyAllByConversation(conversationId, username);
+        int messagesRewritten = 0;
+        if (!denied.isEmpty()) {
+            java.util.Set<String> ids = denied.stream()
+                    .map(vip.mate.approval.PendingApproval::getPendingId)
+                    .collect(java.util.stream.Collectors.toSet());
+            messagesRewritten = conversationService.markPendingApprovalsResolved(conversationId, ids, "denied");
+            for (vip.mate.approval.PendingApproval p : denied) {
+                broadcastEvent(conversationId, "tool_approval_resolved", Map.of(
+                        "pendingId", p.getPendingId(),
+                        "decision", "denied",
+                        "toolName", p.getToolName() != null ? p.getToolName() : "",
+                        "timestamp", System.currentTimeMillis()
+                ));
+            }
+        }
+
+        log.info("Stop requested: conversationId={}, user={}, stopped={}, ghostPendingsCleared={}, messagesRewritten={}",
+                conversationId, username, stopped, denied.size(), messagesRewritten);
+        return R.ok(Map.of(
+                "stopped", stopped,
+                "ghostPendingsCleared", denied.size(),
+                "messagesRewritten", messagesRewritten
+        ));
     }
 
     /**

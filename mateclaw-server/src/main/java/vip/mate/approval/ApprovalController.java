@@ -72,6 +72,14 @@ public class ApprovalController {
             log.info("[Approval] User {} {} pending {} for conversation {}",
                     username, decision, request.getPendingId(), conversationId);
 
+            // Persist the resolved status onto the assistant message metadata so a
+            // subsequent page refresh doesn't hydrate a ghost approval banner from
+            // the stale "pending_approval" status frozen at message-save time.
+            conversationService.markPendingApprovalsResolved(
+                    conversationId,
+                    java.util.Set.of(request.getPendingId()),
+                    "approved".equalsIgnoreCase(decision) ? "approved" : "denied");
+
             // Web 端的 replay 由前端发送 /approve 消息到 POST /stream 触发（ChatController 拦截）
             // 此端点只更新审批状态，保留给 IM 渠道（DingTalk/Feishu 等通过 ChannelMessageRouter 调用）
 

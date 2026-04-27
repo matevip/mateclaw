@@ -321,8 +321,15 @@ const handleSubmit = () => {
     }
   }
 
-  // 运行中且输入为空时，停止生成
+  // 运行中且输入为空时，停止生成 —— 但当用户刚刚追加了一条 queued 消息时，
+  // 第二次点击发送/按 Enter 通常是误操作（双击 / 输入法回车 / 连击）。这种情况下
+  // 触发 stop 会把用户预期会跑的当前 turn + queued 一起杀掉，前端给出"任务直接结束"
+  // 的错觉。检测到 sending 状态的 queued 消息时静默吞掉这次空提交，让用户必须明确
+  // 点 cancel-queued 或专用 stop 按钮才能终止。
   if (props.loading && !canSend.value) {
+    if (props.queuedMessage && (props.queuedMessage.status === 'queued' || props.queuedMessage.status === 'sending')) {
+      return
+    }
     emit('stop')
     return
   }

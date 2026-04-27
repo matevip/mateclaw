@@ -1955,7 +1955,7 @@ VALUES (
     1000000001,
     TRUE,
     'all',
-    '["write_file","edit_file","execute_shell_command"]',
+    '["execute_shell_command"]',
     '[]',
     TRUE,
     '["/etc","/usr","/bin","/sbin","/boot","/sys","/proc","/dev"]',

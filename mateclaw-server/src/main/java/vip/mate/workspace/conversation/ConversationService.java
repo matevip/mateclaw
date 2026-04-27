@@ -513,6 +513,67 @@ public class ConversationService {
      * <p>
      * 在 replay 前调用，确保 LLM 上下文中不包含任何审批相关文本。
      */
+    /**
+     * Update the {@code metadata.pendingApproval.status} field on every assistant
+     * message in this conversation whose embedded pendingId matches one in
+     * {@code resolvedPendingIds}. Run after {@code ApprovalService.resolve()} or
+     * {@code denyAllByConversation()} to keep the persisted message metadata in
+     * sync with the in-memory pendingMap — otherwise a page refresh hydrates the
+     * stale {@code pending_approval} status from message metadata and the UI
+     * pops a ghost approval banner for an approval the user already settled.
+     * <p>
+     * Idempotent: messages without a matching pendingApproval, or whose status
+     * was already moved off {@code pending_approval}, are left untouched.
+     *
+     * @param conversationId target conversation
+     * @param resolvedPendingIds pendingIds whose owning message metadata should
+     *                           flip {@code pendingApproval.status} to {@code denied}
+     * @return how many messages were rewritten
+     */
+    @Transactional
+    public int markPendingApprovalsResolved(String conversationId,
+                                            java.util.Set<String> resolvedPendingIds,
+                                            String newStatus) {
+        if (conversationId == null || resolvedPendingIds == null || resolvedPendingIds.isEmpty()) {
+            return 0;
+        }
+        String targetStatus = (newStatus == null || newStatus.isBlank()) ? "denied" : newStatus;
+        List<MessageEntity> messages = listMessages(conversationId);
+        int rewritten = 0;
+        for (MessageEntity msg : messages) {
+            if (!"assistant".equals(msg.getRole())) continue;
+            String raw = msg.getMetadata();
+            if (raw == null || raw.isBlank() || !raw.contains("pendingApproval")) continue;
+
+            try {
+                java.util.Map<String, Object> meta = objectMapper.readValue(raw, new TypeReference<>() {});
+                Object pa = meta.get("pendingApproval");
+                if (!(pa instanceof java.util.Map)) continue;
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> pendingApproval = (java.util.Map<String, Object>) pa;
+                Object pid = pendingApproval.get("pendingId");
+                if (pid == null || !resolvedPendingIds.contains(String.valueOf(pid))) continue;
+                Object status = pendingApproval.get("status");
+                if (!"pending_approval".equals(String.valueOf(status))) continue;
+
+                pendingApproval.put("status", targetStatus);
+                meta.put("pendingApproval", pendingApproval);
+                msg.setMetadata(objectMapper.writeValueAsString(meta));
+                messageMapper.updateById(msg);
+                rewritten++;
+            } catch (Exception e) {
+                log.warn("[ConversationService] Failed to rewrite pendingApproval status for message {}: {}",
+                        msg.getId(), e.getMessage());
+            }
+        }
+        if (rewritten > 0) {
+            log.info("[ConversationService] Rewrote pendingApproval.status={} on {} message(s) " +
+                    "in conversation {} (cleared {} ghost pendings)",
+                    targetStatus, rewritten, conversationId, resolvedPendingIds.size());
+        }
+        return rewritten;
+    }
+
     @Transactional
     public void removeApprovalPlaceholders(String conversationId) {
         List<MessageEntity> messages = listMessages(conversationId);

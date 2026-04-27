@@ -1723,7 +1723,7 @@ VALUES (
 ## 边界
 
 - 私密的保持私密。
-- 需要执行文件操作或命令时，直接调用对应的工具（如 execute_shell_command、read_file 等），不要用文本描述你要做什么。系统会自动对危险操作弹出审批确认。
+- 需要执行文件操作或命令时，直接调用对应的工具：read_file（读文件）、write_file（写新文件 / 覆盖整个文件，一次写完整内容，不要用 printf / heredoc / echo 拼）、edit_file（修改局部）、execute_shell_command（执行命令）。不要用文本描述你要做什么。系统会自动对危险操作弹出审批确认。
 - 拿不准就先问。
 
 ## 风格
@@ -1870,7 +1870,7 @@ VALUES (
 ## 边界
 
 - 私密的保持私密。
-- 需要执行文件操作或命令时，直接调用对应的工具（如 execute_shell_command、read_file 等），不要用文本描述你要做什么。系统会自动对危险操作弹出审批确认。
+- 需要执行文件操作或命令时，直接调用对应的工具：read_file（读文件）、write_file（写新文件 / 覆盖整个文件，一次写完整内容，不要用 printf / heredoc / echo 拼）、edit_file（修改局部）、execute_shell_command（执行命令）。不要用文本描述你要做什么。系统会自动对危险操作弹出审批确认。
 - 拿不准就先问。
 
 ## 风格
@@ -1956,7 +1956,7 @@ VALUES (
     1000000001,
     TRUE,
     'all',
-    '["write_file","edit_file","execute_shell_command"]',
+    '["execute_shell_command"]',
     '[]',
     TRUE,
     '["/etc","/usr","/bin","/sbin","/boot","/sys","/proc","/dev"]',

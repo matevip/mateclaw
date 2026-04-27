@@ -68,9 +68,9 @@ public class DatabaseBootstrapRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
-        // Schema creation is now handled by Flyway (db/migration/)
-        runToolSyncScript();
-
+        // Schema creation and built-in tool registration are handled by
+        // Flyway (db/migration/). New built-in tools must ship as their own
+        // Vxx__register_<tool>_tool.sql migration (see V3, V31 for examples).
         if (isDataAlreadySeeded()) {
             initialized = true;
             log.info("Database already initialized, skipping seed data");
@@ -166,12 +166,6 @@ public class DatabaseBootstrapRunner implements ApplicationRunner {
             }
         }
         return isMySQL;
-    }
-
-    private void runToolSyncScript() {
-        String script = isMySQL() ? "db/tools-sync-mysql.sql" : "db/tools-sync.sql";
-        runScript(script);
-        log.info("Tool sync completed ({})", script);
     }
 
     private void runScript(String path) {

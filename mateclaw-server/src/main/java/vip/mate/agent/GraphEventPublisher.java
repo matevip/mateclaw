@@ -52,8 +52,23 @@ public final class GraphEventPublisher {
     }
 
     public static GraphEvent toolStart(String toolName, String arguments) {
+        return toolStart(null, toolName, arguments);
+    }
+
+    /**
+     * Emit a tool_call_started event with the LLM-provided tool_call.id so the
+     * frontend can match start/complete pairs precisely. Without the id, the
+     * UI uses toolName + status="running" + findLast() to pair completes back
+     * to the original card; when the LLM fires multiple calls of the same tool
+     * (e.g. several execute_shell_command in a row) the matching collapses to
+     * "the most recent running" and earlier cards get stranded with a
+     * permanent spinner. Pass the id whenever it's available; null is OK for
+     * legacy callers.
+     */
+    public static GraphEvent toolStart(String toolCallId, String toolName, String arguments) {
         long ts = System.currentTimeMillis();
         return new GraphEvent(EVENT_TOOL_START, Map.of(
+                "toolCallId", toolCallId != null ? toolCallId : "",
                 "toolName", toolName,
                 "arguments", arguments != null ? arguments : "",
                 "timestamp", ts
@@ -61,8 +76,13 @@ public final class GraphEventPublisher {
     }
 
     public static GraphEvent toolComplete(String toolName, String result, boolean success) {
+        return toolComplete(null, toolName, result, success);
+    }
+
+    public static GraphEvent toolComplete(String toolCallId, String toolName, String result, boolean success) {
         long ts = System.currentTimeMillis();
         return new GraphEvent(EVENT_TOOL_COMPLETE, Map.of(
+                "toolCallId", toolCallId != null ? toolCallId : "",
                 "toolName", toolName,
                 "result", result != null ? truncateResult(result) : "",
                 "success", success,
