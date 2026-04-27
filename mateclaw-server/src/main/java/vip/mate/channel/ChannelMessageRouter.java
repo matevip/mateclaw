@@ -4,7 +4,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import vip.mate.agent.AgentService;
-import vip.mate.approval.ApprovalService;
+import vip.mate.approval.ApprovalWorkflowService;
+import vip.mate.approval.ResolveOutcome;
 import vip.mate.approval.PendingApproval;
 import vip.mate.channel.model.ChannelEntity;
 import vip.mate.channel.notification.ApprovalNotificationService;
@@ -47,7 +48,7 @@ public class ChannelMessageRouter {
     private final ConversationService conversationService;
     private final ChannelService channelService;
     private final ChannelSessionStore channelSessionStore;
-    private final ApprovalService approvalService;
+    private final ApprovalWorkflowService approvalService;
     private final ApprovalNotificationService approvalNotificationService;
     private final ConversationCompletionPublisher completionPublisher;
     private final TtsService ttsService;
@@ -92,7 +93,7 @@ public class ChannelMessageRouter {
                                 ConversationService conversationService,
                                 ChannelService channelService,
                                 ChannelSessionStore channelSessionStore,
-                                ApprovalService approvalService,
+                                ApprovalWorkflowService approvalService,
                                 ApprovalNotificationService approvalNotificationService,
                                 ConversationCompletionPublisher completionPublisher,
                                 TtsService ttsService,
@@ -362,36 +363,40 @@ public class ChannelMessageRouter {
                                 adapter.getChannelType(), message.getSenderId(), originalRequester);
                         return;
                     }
-                    // 批准：原子解决+消费审批记录（消除 resolve/consume race condition）
-                    PendingApproval consumed = approvalService.resolveAndConsume(
+                    // Approve via IM: workflow.resolveAndConsume runs DB + metadata + memory atomically.
+                    ResolveOutcome consumeOutcome = approvalService.resolveAndConsume(
                             pending.getPendingId(), message.getSenderId());
-                    if (consumed == null) {
+                    if (consumeOutcome.isAlreadyResolved()) {
                         adapter.sendMessage(replyTarget, "⚠️ 审批记录已过期或已被处理。");
                         return;
                     }
-                    log.info("[{}] Approval APPROVED via IM command: pendingId={}, tool={}",
-                            adapter.getChannelType(), consumed.getPendingId(), consumed.getToolName());
+                    PendingApproval consumed = consumeOutcome.consumedSnapshot();
+                    log.info("[{}] Approval APPROVED via IM command: pendingId={}, tool={}, msgRewritten={}",
+                            adapter.getChannelType(), consumed.getPendingId(), consumed.getToolName(),
+                            consumeOutcome.messagesRewritten());
 
                     replayApprovedToolCall(consumed, conversationId, adapter, message, channelEntity);
                     return;
 
                 } else if (isDenyCommand(userText)) {
-                    // 拒绝 + 清理 DB 残留审批占位消息
-                    approvalService.resolve(pending.getPendingId(), message.getSenderId(), "denied");
+                    // Deny via IM: workflow.resolve owns the full state-machine transition.
+                    ResolveOutcome denyOutcome = approvalService.resolve(
+                            pending.getPendingId(), message.getSenderId(), "denied");
                     conversationService.removeApprovalPlaceholders(conversationId);
                     adapter.sendMessage(replyTarget, "⛔ 已拒绝执行工具: " + pending.getToolName());
-                    log.info("[{}] Approval DENIED via IM command: pendingId={}, tool={}",
-                            adapter.getChannelType(), pending.getPendingId(), pending.getToolName());
+                    log.info("[{}] Approval DENIED via IM command: pendingId={}, tool={}, msgRewritten={}",
+                            adapter.getChannelType(), pending.getPendingId(), pending.getToolName(),
+                            denyOutcome.messagesRewritten());
                     return;
 
                 } else {
-                    // 非审批命令但有 pending → 视为隐式拒绝 + 清理残留
+                    // Non-approval message while a pending exists → treat as implicit deny.
                     approvalService.resolve(pending.getPendingId(), message.getSenderId(), "denied");
                     conversationService.removeApprovalPlaceholders(conversationId);
                     adapter.sendMessage(replyTarget, "⛔ 审批已取消。将继续处理您的新消息。");
                     log.info("[{}] Approval auto-cancelled (non-approval message): pendingId={}",
                             adapter.getChannelType(), pending.getPendingId());
-                    // 继续正常流程处理当前消息
+                    // Fall through to process the new message normally.
                 }
             }
             // ======= 审批拦截层结束 =======

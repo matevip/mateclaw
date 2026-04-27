@@ -71,6 +71,24 @@ public class PendingApproval {
         this.status = "pending";
     }
 
+    /**
+     * INTERNAL — recovery constructor for {@code ApprovalWorkflowService.recoverFromDb}.
+     * Preserves the persisted {@code createdAt} and {@code status} so TTL/GC keep working
+     * across JVM restarts. Do not use from business paths.
+     */
+    PendingApproval(String pendingId, String conversationId, String userId,
+                    String toolName, String toolArguments, String reason,
+                    Instant createdAt, String status) {
+        this.pendingId = pendingId;
+        this.conversationId = conversationId;
+        this.userId = userId;
+        this.toolName = toolName;
+        this.toolArguments = toolArguments;
+        this.reason = reason;
+        this.createdAt = createdAt;
+        this.status = status;
+    }
+
     // === Getters ===
 
     public String getPendingId() { return pendingId; }

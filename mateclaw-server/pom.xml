@@ -383,6 +383,33 @@
                     </excludes>
                 </configuration>
             </plugin>
+            <!-- Populate ${net.bytebuddy:byte-buddy-agent:jar} from the test
+                 classpath so maven-surefire-plugin can attach it statically
+                 (Mockito inline mock maker on JDK 21+ can no longer self-attach). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>resolve-test-classpath-properties</id>
+                        <goals>
+                            <goal>properties</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- Static agent attach for Mockito on JDK 21+. Without this, dynamic
+                         agent loading raises ByteBuddyAgent.AttachmentTypeEvaluator errors
+                         depending on the JVM's startup hardening, making tests pass on one
+                         machine and fail on another. byte-buddy-agent rides in transitively
+                         via mockito-core. -->
+                    <argLine>-javaagent:${net.bytebuddy:byte-buddy-agent:jar}</argLine>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 

@@ -17,8 +17,10 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import vip.mate.common.result.R;
 import vip.mate.agent.AgentService;
 import vip.mate.agent.model.AgentEntity;
-import vip.mate.approval.ApprovalService;
+import vip.mate.approval.ApprovalWorkflowService;
+import vip.mate.approval.MetadataDecision;
 import vip.mate.approval.PendingApproval;
+import vip.mate.approval.ResolveOutcome;
 import vip.mate.memory.event.ConversationCompletionPublisher;
 import vip.mate.workspace.conversation.ConversationService;
 import vip.mate.workspace.conversation.model.MessageContentPart;
@@ -55,7 +57,7 @@ public class ChatController {
 
     private final AgentService agentService;
     private final ConversationService conversationService;
-    private final ApprovalService approvalService;
+    private final ApprovalWorkflowService approvalService;
     private final ChatStreamTracker streamTracker;
     private final ObjectMapper objectMapper;
     private final ConversationCompletionPublisher completionPublisher;
@@ -190,24 +192,20 @@ public class ChatController {
                 return emitter;
             }
 
-            // deny: 解决并清理 DB 残留
+            // deny: workflow.resolve handles DB + metadata + memory atomically.
             if (isDenyCommand) {
-                approvalService.resolve(pending.getPendingId(), username, "denied");
+                ResolveOutcome denyOutcome = approvalService.resolve(pending.getPendingId(), username, "denied");
                 conversationService.removeApprovalPlaceholders(conversationId);
-                // Sync the persisted message metadata so a subsequent page refresh
-                // doesn't re-hydrate a "pending_approval" ghost from message metadata
-                // that the in-memory map already moved past.
-                conversationService.markPendingApprovalsResolved(conversationId,
-                        java.util.Set.of(pending.getPendingId()), "denied");
-                log.info("[Approval-Stream] User {} denied pending {} for conversation {}",
-                        username, pending.getPendingId(), conversationId);
+                log.info("[Approval-Stream] User {} denied pending {} for conversation {} (dbSynced={}, msgRewritten={})",
+                        username, pending.getPendingId(), conversationId,
+                        denyOutcome.dbSynced(), denyOutcome.messagesRewritten());
             }
 
-            // approve: 原子 resolveAndConsume（消除 resolve/consume race condition）
+            // approve: atomic resolveAndConsume; workflow handles DB + metadata + memory.
             PendingApproval consumed = null;
             if (isApprovalCommand) {
-                consumed = approvalService.resolveAndConsume(pending.getPendingId(), username);
-                if (consumed == null) {
+                ResolveOutcome consumeOutcome = approvalService.resolveAndConsume(pending.getPendingId(), username);
+                if (consumeOutcome.isAlreadyResolved()) {
                     try {
                         sendEvent(emitter, "error", Map.of("message", "审批记录已过期或已被处理"));
                         sendEvent(emitter, "done", Map.of("status", "completed"));
@@ -215,15 +213,12 @@ public class ChatController {
                     emitter.complete();
                     return emitter;
                 }
-                // 清理 DB 中残留的审批占位消息（对齐 IM 渠道 replayApprovedToolCall）
+                consumed = consumeOutcome.consumedSnapshot();
+                // Clear residual approval placeholder messages so the LLM context for
+                // replay doesn't include "[Awaiting approval]" text artifacts.
                 conversationService.removeApprovalPlaceholders(conversationId);
-                // Same metadata sync as the deny branch — without this, refresh
-                // after approval still shows the spinner-state approval card
-                // because the persisted message says status='pending_approval'.
-                conversationService.markPendingApprovalsResolved(conversationId,
-                        java.util.Set.of(consumed.getPendingId()), "approved");
-                log.info("[Approval-Stream] User {} approved pending {} for conversation {}",
-                        username, consumed.getPendingId(), conversationId);
+                log.info("[Approval-Stream] User {} approved pending {} for conversation {} (msgRewritten={})",
+                        username, consumed.getPendingId(), conversationId, consumeOutcome.messagesRewritten());
             }
 
             final PendingApproval finalConsumed = consumed;
@@ -790,23 +785,17 @@ public class ChatController {
         }
         boolean stopped = streamTracker.requestStop(conversationId);
 
-        // Sweep ghost approvals — see method-level Javadoc for rationale.
-        java.util.List<vip.mate.approval.PendingApproval> denied =
-                approvalService.denyAllByConversation(conversationId, username);
-        int messagesRewritten = 0;
-        if (!denied.isEmpty()) {
-            java.util.Set<String> ids = denied.stream()
-                    .map(vip.mate.approval.PendingApproval::getPendingId)
-                    .collect(java.util.stream.Collectors.toSet());
-            messagesRewritten = conversationService.markPendingApprovalsResolved(conversationId, ids, "denied");
-            for (vip.mate.approval.PendingApproval p : denied) {
-                broadcastEvent(conversationId, "tool_approval_resolved", Map.of(
-                        "pendingId", p.getPendingId(),
-                        "decision", "denied",
-                        "toolName", p.getToolName() != null ? p.getToolName() : "",
-                        "timestamp", System.currentTimeMillis()
-                ));
-            }
+        // Sweep ghost approvals — workflow.denyAllByConversation owns DB + metadata + memory
+        // atomically; we only need to broadcast SSE events on the resulting outcomes.
+        List<ResolveOutcome> denied = approvalService.denyAllByConversation(conversationId, username);
+        int messagesRewritten = denied.stream().mapToInt(ResolveOutcome::messagesRewritten).sum();
+        for (ResolveOutcome o : denied) {
+            broadcastEvent(conversationId, "tool_approval_resolved", Map.of(
+                    "pendingId", o.pendingId(),
+                    "decision", "denied",
+                    "toolName", o.toolName() != null ? o.toolName() : "",
+                    "timestamp", System.currentTimeMillis()
+            ));
         }
 
         log.info("Stop requested: conversationId={}, user={}, stopped={}, ghostPendingsCleared={}, messagesRewritten={}",

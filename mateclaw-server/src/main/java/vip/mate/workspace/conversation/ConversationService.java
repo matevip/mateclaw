@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.approval.ApprovalPlaceholderUtil;
+import vip.mate.approval.MetadataDecision;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.workspace.conversation.model.ConversationEntity;
 import vip.mate.workspace.conversation.model.MessageContentPart;
@@ -514,30 +515,44 @@ public class ConversationService {
      * 在 replay 前调用，确保 LLM 上下文中不包含任何审批相关文本。
      */
     /**
-     * Update the {@code metadata.pendingApproval.status} field on every assistant
-     * message in this conversation whose embedded pendingId matches one in
-     * {@code resolvedPendingIds}. Run after {@code ApprovalService.resolve()} or
-     * {@code denyAllByConversation()} to keep the persisted message metadata in
-     * sync with the in-memory pendingMap — otherwise a page refresh hydrates the
-     * stale {@code pending_approval} status from message metadata and the UI
-     * pops a ghost approval banner for an approval the user already settled.
+     * Reconcile persisted assistant-message state when one or more pending approvals
+     * leave the {@code pending} status (approve / deny / timeout / superseded / consumed).
      * <p>
-     * Idempotent: messages without a matching pendingApproval, or whose status
-     * was already moved off {@code pending_approval}, are left untouched.
+     * For each assistant message in the conversation whose
+     * {@code metadata.pendingApproval.pendingId} appears in {@code resolvedPendingIds}
+     * and whose {@code metadata.pendingApproval.status == "pending_approval"}, this
+     * method updates three fields atomically (within a single transaction):
+     * <ol>
+     *   <li>{@code metadata.pendingApproval.status} → {@code decision.pendingApprovalStatus}</li>
+     *   <li>{@code metadata.currentPhase} flips {@code awaiting_approval} → {@code resolved}</li>
+     *   <li>{@code MessageEntity.status} flips {@code awaiting_approval}
+     *       → {@code decision.messageStatus} (one of the existing terminal states the
+     *       frontend Message.status union supports)</li>
+     * </ol>
+     * Without this synchronization, a page refresh re-hydrates the stale
+     * {@code pending_approval} status from message metadata and the UI pops a ghost
+     * approval banner for an approval the user already settled. See RFC-067 §4.1.5.
+     * <p>
+     * Idempotent: messages whose metadata does not match, or whose status already moved
+     * off {@code pending_approval}, are left untouched. Timeout / superseded callers
+     * pass {@link MetadataDecision#DENIED}; the more specific terminal status lives
+     * on {@code mate_tool_approval.status} for audit (see RFC-067 §4.4.1).
      *
      * @param conversationId target conversation
-     * @param resolvedPendingIds pendingIds whose owning message metadata should
-     *                           flip {@code pendingApproval.status} to {@code denied}
-     * @return how many messages were rewritten
+     * @param resolvedPendingIds pendingIds whose owning message metadata should be reconciled
+     * @param decision the metadata-layer decision to apply
+     * @return number of messages whose state was rewritten
      */
     @Transactional
     public int markPendingApprovalsResolved(String conversationId,
                                             java.util.Set<String> resolvedPendingIds,
-                                            String newStatus) {
+                                            MetadataDecision decision) {
         if (conversationId == null || resolvedPendingIds == null || resolvedPendingIds.isEmpty()) {
             return 0;
         }
-        String targetStatus = (newStatus == null || newStatus.isBlank()) ? "denied" : newStatus;
+        if (decision == null) {
+            throw new IllegalArgumentException("decision must not be null");
+        }
         List<MessageEntity> messages = listMessages(conversationId);
         int rewritten = 0;
         for (MessageEntity msg : messages) {
@@ -553,12 +568,21 @@ public class ConversationService {
                 java.util.Map<String, Object> pendingApproval = (java.util.Map<String, Object>) pa;
                 Object pid = pendingApproval.get("pendingId");
                 if (pid == null || !resolvedPendingIds.contains(String.valueOf(pid))) continue;
-                Object status = pendingApproval.get("status");
-                if (!"pending_approval".equals(String.valueOf(status))) continue;
+                Object pendingStatus = pendingApproval.get("status");
+                if (!"pending_approval".equals(String.valueOf(pendingStatus))) continue;
 
-                pendingApproval.put("status", targetStatus);
+                pendingApproval.put("status", decision.pendingApprovalStatus);
                 meta.put("pendingApproval", pendingApproval);
+
+                Object phase = meta.get("currentPhase");
+                if ("awaiting_approval".equals(String.valueOf(phase))) {
+                    meta.put("currentPhase", "resolved");
+                }
+
                 msg.setMetadata(objectMapper.writeValueAsString(meta));
+                if ("awaiting_approval".equals(msg.getStatus())) {
+                    msg.setStatus(decision.messageStatus);
+                }
                 messageMapper.updateById(msg);
                 rewritten++;
             } catch (Exception e) {
@@ -567,9 +591,9 @@ public class ConversationService {
             }
         }
         if (rewritten > 0) {
-            log.info("[ConversationService] Rewrote pendingApproval.status={} on {} message(s) " +
-                    "in conversation {} (cleared {} ghost pendings)",
-                    targetStatus, rewritten, conversationId, resolvedPendingIds.size());
+            log.info("[ConversationService] Reconciled {} message(s) in conversation {} " +
+                            "to decision={} (cleared {} ghost pendings)",
+                    rewritten, conversationId, decision, resolvedPendingIds.size());
         }
         return rewritten;
     }

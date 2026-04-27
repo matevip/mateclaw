@@ -29,7 +29,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class ApprovalController {
 
-    private final ApprovalService approvalService;
+    private final ApprovalWorkflowService approvalService;
     private final ConversationService conversationService;
     private final ChatStreamTracker streamTracker;
 
@@ -68,22 +68,15 @@ public class ApprovalController {
         }
 
         try {
-            approvalService.resolve(request.getPendingId(), username, decision);
-            log.info("[Approval] User {} {} pending {} for conversation {}",
-                    username, decision, request.getPendingId(), conversationId);
+            // workflow.resolve owns DB + metadata + memory atomically (RFC-067 §4.2).
+            ResolveOutcome outcome = approvalService.resolve(request.getPendingId(), username, decision);
+            log.info("[Approval] User {} {} pending {} for conversation {} (dbSynced={}, msgRewritten={})",
+                    username, decision, request.getPendingId(), conversationId,
+                    outcome.dbSynced(), outcome.messagesRewritten());
 
-            // Persist the resolved status onto the assistant message metadata so a
-            // subsequent page refresh doesn't hydrate a ghost approval banner from
-            // the stale "pending_approval" status frozen at message-save time.
-            conversationService.markPendingApprovalsResolved(
-                    conversationId,
-                    java.util.Set.of(request.getPendingId()),
-                    "approved".equalsIgnoreCase(decision) ? "approved" : "denied");
-
-            // Web 端的 replay 由前端发送 /approve 消息到 POST /stream 触发（ChatController 拦截）
-            // 此端点只更新审批状态，保留给 IM 渠道（DingTalk/Feishu 等通过 ChannelMessageRouter 调用）
-
-            // 拒绝时通过 SSE 通知前端（如果流还活着）
+            // Web replay flows through POST /stream's /approve text-command path
+            // (ChatController intercepts). This endpoint only flips state; the SSE
+            // notify below covers the deny case where the stream is still alive.
             if ("denied".equalsIgnoreCase(decision) && streamTracker.isRunning(conversationId)) {
                 streamTracker.broadcastObject(conversationId, "tool_approval_resolved", Map.of(
                         "pendingId", request.getPendingId(),
