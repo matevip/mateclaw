@@ -1444,6 +1444,9 @@ export default {
       actions: '操作',
       // RFC-063r §2.14: 列表页"最近投递"列
       lastDelivery: '最近投递',
+      // RFC-063r post-deploy: 关联渠道列
+      channel: '关联渠道',
+      targetId: '投递目标',
     },
     // RFC-063r §2.14: delivery_status 状态机展示
     lastDelivery: {

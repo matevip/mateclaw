@@ -31,6 +31,13 @@ public class CronJobDTO {
     /** RFC-063r §2.9: originating channel binding (null = web-origin cron). */
     private Long channelId;
 
+    /**
+     * Read-only display name for the bound channel — populated by
+     * {@code CronJobService.list()} via a batch lookup so the UI can show
+     * "钉钉 / 飞书 / 微信" alongside the cron row without an extra request.
+     */
+    private String channelName;
+
     /** RFC-063r §2.9: delivery target detail (targetId / threadId / accountId). */
     private DeliveryConfig deliveryConfig;
 

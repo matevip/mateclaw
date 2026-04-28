@@ -353,6 +353,25 @@ public class AgentGraphBuilder {
                     // 审批重放键
                     .addStrategy(MateClawStateKeys.FORCED_TOOL_CALL, KeyStrategy.REPLACE)
                     .addStrategy(MateClawStateKeys.PRE_APPROVED_TOOL_CALL, KeyStrategy.REPLACE)
+                    // RFC-063r §2.5: ChatOrigin must survive every node merge so
+                    // sub-graph nodes (StepExecutionNode + DelegateAgentTool's
+                    // child agents) can read the originating channel binding.
+                    // Without explicit REPLACE the framework's merge drops it
+                    // on multi-iteration paths — root cause of the channel-binding
+                    // flakiness reported on first deployment.
+                    .addStrategy(MateClawStateKeys.CHAT_ORIGIN, KeyStrategy.REPLACE)
+                    // Caught by StateKeyRegistrationCoverageTest — these state keys
+                    // were silently unregistered before the post-deploy audit.
+                    // WORKSPACE_BASE_PATH: written by buildInitialState; sub-graph
+                    //   tools read it via WorkspacePathGuard.
+                    // STOP_REQUESTED: external cancel flag checked by every node.
+                    // RETURN_DIRECT_TRIGGERED / DIRECT_TOOL_OUTPUTS (RFC-052):
+                    //   Plan-Execute itself doesn't trigger returnDirect, but
+                    //   DelegateAgentTool sub-agents could; register defensively.
+                    .addStrategy(MateClawStateKeys.WORKSPACE_BASE_PATH, KeyStrategy.REPLACE)
+                    .addStrategy(MateClawStateKeys.STOP_REQUESTED, KeyStrategy.REPLACE)
+                    .addStrategy(MateClawStateKeys.RETURN_DIRECT_TRIGGERED, KeyStrategy.REPLACE)
+                    .addStrategy(MateClawStateKeys.DIRECT_TOOL_OUTPUTS, KeyStrategy.REPLACE)
                     // Token Usage
                     .addStrategy(MateClawStateKeys.PROMPT_TOKENS, KeyStrategy.REPLACE)
                     .addStrategy(MateClawStateKeys.COMPLETION_TOKENS, KeyStrategy.REPLACE)
@@ -483,6 +502,22 @@ public class AgentGraphBuilder {
                     .addStrategy(MateClawStateKeys.REQUESTER_ID, KeyStrategy.REPLACE)
                     // 审批重放
                     .addStrategy(MateClawStateKeys.FORCED_TOOL_CALL, KeyStrategy.REPLACE)
+                    // RFC-063r §2.5: ChatOrigin must survive every node merge so
+                    // ActionNode (and DelegateAgentTool's child agents) can read
+                    // the originating channel binding across multi-iteration ReAct
+                    // loops. Without explicit REPLACE the framework's merge drops
+                    // it after the first node transition — root cause of the
+                    // channel-binding flakiness reported on first deployment.
+                    .addStrategy(MateClawStateKeys.CHAT_ORIGIN, KeyStrategy.REPLACE)
+                    // Caught by StateKeyRegistrationCoverageTest — silently
+                    // unregistered before the audit. WORKSPACE_BASE_PATH from
+                    // initial state; STOP_REQUESTED is the external cancel flag;
+                    // RETURN_DIRECT_TRIGGERED / DIRECT_TOOL_OUTPUTS are RFC-052
+                    // returnDirect short-circuit signals consumed by ObservationDispatcher.
+                    .addStrategy(MateClawStateKeys.WORKSPACE_BASE_PATH, KeyStrategy.REPLACE)
+                    .addStrategy(MateClawStateKeys.STOP_REQUESTED, KeyStrategy.REPLACE)
+                    .addStrategy(MateClawStateKeys.RETURN_DIRECT_TRIGGERED, KeyStrategy.REPLACE)
+                    .addStrategy(MateClawStateKeys.DIRECT_TOOL_OUTPUTS, KeyStrategy.REPLACE)
                     // Token Usage
                     .addStrategy(MateClawStateKeys.PROMPT_TOKENS, KeyStrategy.REPLACE)
                     .addStrategy(MateClawStateKeys.COMPLETION_TOKENS, KeyStrategy.REPLACE)

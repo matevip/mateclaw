@@ -1434,6 +1434,9 @@ export default {
       actions: 'Actions',
       // RFC-063r §2.14: list-page "Last Delivery" column
       lastDelivery: 'Last Delivery',
+      // RFC-063r post-deploy: channel binding columns
+      channel: 'Channel',
+      targetId: 'Delivery Target',
     },
     // RFC-063r §2.14: delivery_status state machine labels
     lastDelivery: {

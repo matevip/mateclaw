@@ -100,12 +100,18 @@ public abstract class AbstractCronResultDelivery implements CronResultDelivery {
      * {@code PENDING} → {@code PENDING}. Returns true iff this instance won
      * the race. NONE-eligibility lets fresh runs claim without a separate
      * "first-time" branch; PENDING-eligibility covers the rare same-instance
-     * retry inside the listener (cluster paths can't normally hit this).
+     * retry inside the listener.
+     *
+     * <p>SQL semantics gotcha: {@code IN (...)} never matches NULL. Legacy
+     * rows from before V57 (pre-RFC) may have null delivery_status, so the
+     * predicate explicitly tests {@code IS NULL OR IN (NONE, PENDING)} via
+     * a nested OR group rather than putting null inside the IN list.
      */
     private boolean claimRun(CronJobRunEntity run) {
         return runMapper.update(null, new LambdaUpdateWrapper<CronJobRunEntity>()
                 .eq(CronJobRunEntity::getId, run.getId())
-                .in(CronJobRunEntity::getDeliveryStatus, "NONE", "PENDING", null)
+                .and(w -> w.isNull(CronJobRunEntity::getDeliveryStatus)
+                        .or().in(CronJobRunEntity::getDeliveryStatus, "NONE", "PENDING"))
                 .set(CronJobRunEntity::getDeliveryStatus, "PENDING")) == 1;
     }
 

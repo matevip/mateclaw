@@ -200,13 +200,6 @@ public class ToolExecutionExecutor {
         return execute(toolCalls, conversationId, agentId, isReplay, "");
     }
 
-    /** 当前执行的 requesterId，传递给 ToolExecutionContext */
-    private volatile String currentRequesterId;
-    /** 当前工作区活动目录（为空不限制），传递给 ToolExecutionContext */
-    private volatile String currentWorkspaceBasePath;
-    /** RFC-063r §2.5: 当前执行的 ChatOrigin，构建 ToolContext 时透传给工具 */
-    private volatile ChatOrigin currentChatOrigin = ChatOrigin.EMPTY;
-
     public ToolExecutionResult execute(List<AssistantMessage.ToolCall> toolCalls,
                                         String conversationId, String agentId,
                                         boolean isReplay, String requesterId) {
@@ -232,15 +225,23 @@ public class ToolExecutionExecutor {
      * ThreadLocal is also populated, so existing tools that read from it keep
      * working unchanged. After all 8 callsites migrate, the ThreadLocal can be
      * removed.
+     *
+     * <p><b>Thread safety</b>: this executor instance is shared across all
+     * concurrent invocations of a single agent (one executor per agent, per
+     * {@code AgentGraphBuilder.build}). Origin / requester / workspace are
+     * therefore <em>method-local</em> — they live as parameters all the way
+     * down into {@link PreparedToolCall} and never touch instance state. An
+     * earlier draft used {@code volatile} fields here; concurrent users hitting
+     * the same agent (Web + IM at once) raced on those fields and the channel
+     * binding was occasionally cross-contaminated. Do not reintroduce the
+     * fields — pass via parameters.
      */
     public ToolExecutionResult execute(List<AssistantMessage.ToolCall> toolCalls,
                                         String conversationId, String agentId,
                                         boolean isReplay, String requesterId,
                                         String workspaceBasePath,
                                         ChatOrigin origin) {
-        this.currentRequesterId = requesterId;
-        this.currentWorkspaceBasePath = workspaceBasePath;
-        this.currentChatOrigin = origin != null ? origin : ChatOrigin.EMPTY;
+        ChatOrigin safeOrigin = origin != null ? origin : ChatOrigin.EMPTY;
         List<ToolResponseMessage.ToolResponse> allResponses = new ArrayList<>();
         List<GraphEventPublisher.GraphEvent> events = Collections.synchronizedList(new ArrayList<>());
         // RFC-052: accumulate full-text outputs from returnDirect tools so the
@@ -335,7 +336,7 @@ public class ToolExecutionExecutor {
             // 4. 分类: concurrencySafe
             boolean safe = isConcurrencySafe(toolName);
             preparedCalls.add(new PreparedToolCall(toolCall, callback, arguments, safe, allResponses.size(),
-                    conversationId, currentRequesterId, currentWorkspaceBasePath, currentChatOrigin));
+                    conversationId, requesterId, workspaceBasePath, safeOrigin));
             // 占位，Phase 2 填充
             allResponses.add(null);
         }
@@ -353,7 +354,7 @@ public class ToolExecutionExecutor {
         // response in turn until the cumulative size fits the budget.
         if (resultStorage != null && !allResponses.isEmpty()) {
             allResponses = new ArrayList<>(resultStorage.enforceTurnBudget(
-                    allResponses, conversationId, currentWorkspaceBasePath));
+                    allResponses, conversationId, workspaceBasePath));
         }
 
         boolean hasApprovalPending = barrier != null;
@@ -410,10 +411,12 @@ public class ToolExecutionExecutor {
             log.info("[ToolExecutor] Executing pre-approved tool: {}", toolName);
             // RFC-063r §2.5: forward ToolContext so the pre-approved tool can
             // still observe the originating ChatOrigin (channel/workspace).
-            ChatOrigin replayOrigin = currentChatOrigin != null ? currentChatOrigin : ChatOrigin.EMPTY;
-            replayOrigin = replayOrigin
+            // Origin is method-local (see thread-safety note on execute());
+            // the legacy ThreadLocal that used to carry it across executePreApproved
+            // calls was a cross-conversation footgun and has been removed.
+            ChatOrigin replayOrigin = ChatOrigin.EMPTY
                     .withConversationId(conversationId)
-                    .withWorkspace(replayOrigin.workspaceId(), workspaceBasePath);
+                    .withWorkspace(null, workspaceBasePath);
             String result = callback.call(callArguments, replayOrigin.toToolContext());
             int rawLen = result != null ? result.length() : 0;
 
@@ -471,7 +474,10 @@ public class ToolExecutionExecutor {
     public ToolResponseMessage.ToolResponse executePreApproved(
             AssistantMessage.ToolCall toolCall, String storedArguments,
             List<GraphEventPublisher.GraphEvent> events) {
-        return executePreApproved(toolCall, storedArguments, events, null, currentWorkspaceBasePath);
+        // Workspace base path is no longer carried as instance state — legacy
+        // callers that don't supply one get unrestricted file access (matches
+        // pre-RFC behavior when WorkspacePathGuard.basePath was null).
+        return executePreApproved(toolCall, storedArguments, events, null, null);
     }
 
     // ==================== Phase 2: 并发执行 ====================

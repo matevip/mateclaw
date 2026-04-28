@@ -41,14 +41,30 @@ public class ChannelChatOriginFactory {
     }
 
     /**
-     * Resolve the IM target id used for proactive sends — prefer chatId
-     * (group/room) over senderId so that cron deliveries land in the same
-     * conversation the user originally messaged from.
+     * Resolve the IM target id used for proactive sends.
+     *
+     * <p><b>Critical</b>: must NOT use {@link ChannelMessage#getReplyToken()} —
+     * for DingTalk the reply token encodes a {@code sessionWebhook} URL that
+     * expires ~90 minutes after the inbound message. A cron persisted with an
+     * expired sessionWebhook fails proactive delivery with 401/403 forever
+     * after the window lapses.
+     *
+     * <p>Resolution order — both fields are stable identifiers across all
+     * supported channels:
+     * <ol>
+     *   <li>{@code chatId} — group / channel / room identifier; preferred so
+     *       cron messages land in the same conversation the user triggered
+     *       the cron from</li>
+     *   <li>{@code senderId} — user identifier; fallback for private chats
+     *       where {@code chatId} is null. DingTalk's {@code proactiveSend}
+     *       routes a userId through the Robot API ({@code oToMessages/batchSend}),
+     *       which works indefinitely.</li>
+     * </ol>
      */
     private String resolveTargetId(ChannelMessage message) {
-        if (message.getReplyToken() != null && !message.getReplyToken().isBlank()) {
-            return message.getReplyToken();
+        if (message.getChatId() != null && !message.getChatId().isBlank()) {
+            return message.getChatId();
         }
-        return message.getChatId() != null ? message.getChatId() : message.getSenderId();
+        return message.getSenderId();
     }
 }

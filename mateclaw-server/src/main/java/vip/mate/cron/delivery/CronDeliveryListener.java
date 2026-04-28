@@ -2,7 +2,6 @@ package vip.mate.cron.delivery;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
@@ -65,20 +64,6 @@ public class CronDeliveryListener {
                 log.warn("[CronDelivery] Audit recording failed: {}", auditError.getMessage());
             }
         }
-    }
-
-    /**
-     * Listener hook for unit tests bypassing the {@code @TransactionalEventListener}
-     * proxy — direct {@code ApplicationEventPublisher.publishEvent} delivery.
-     * Production paths always go through the AFTER_COMMIT bridge.
-     */
-    @EventListener
-    public void onCompletedRaw(CronJobCompletedEvent ev) {
-        // No-op: the @TransactionalEventListener above is the production path
-        // (it only fires when a transaction is active and after it commits).
-        // This raw @EventListener exists so unit tests using fallbackExecution
-        // do not double-fire and so the listener bean stays scannable in
-        // contexts without a tx manager. Intentionally empty.
     }
 
     /**

@@ -14,6 +14,8 @@ import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Service;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
+import vip.mate.channel.model.ChannelEntity;
+import vip.mate.channel.repository.ChannelMapper;
 import vip.mate.cron.model.CronJobDTO;
 import vip.mate.cron.model.CronJobEntity;
 import vip.mate.cron.repository.CronJobMapper;
@@ -24,7 +26,10 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
@@ -42,6 +47,7 @@ public class CronJobService implements ApplicationRunner {
 
     private final CronJobMapper cronJobMapper;
     private final AgentMapper agentMapper;
+    private final ChannelMapper channelMapper;
     /**
      * RFC-063r §2.7.1: cron-tick execution moved to {@link CronJobRunner}
      * (separate bean) so the three-segment transactional model in
@@ -59,6 +65,20 @@ public class CronJobService implements ApplicationRunner {
     private final ConcurrentHashMap<Long, ScheduledFuture<?>> scheduledTasks = new ConcurrentHashMap<>();
     private final ReentrantLock schedulerLock = new ReentrantLock();
 
+    /**
+     * RFC-063r post-deploy fix: dedicated executor for the actual cron
+     * execution work (LLM call + DB writes). The {@link #scheduler} thread
+     * pool is intentionally tiny — its only job is to fire the trigger and
+     * hand the runnable off here. If the LLM call ran on the scheduler
+     * thread, 4 concurrent crons would saturate the pool and queued ones
+     * would silently miss their tick.
+     *
+     * <p>Virtual threads (JDK 21) are perfect for this workload — LLM HTTP
+     * is I/O-bound, virtual threads scale to thousands at trivial cost.
+     */
+    private final ExecutorService cronExecutor = Executors.newThreadPerTaskExecutor(
+            Thread.ofVirtual().name("cron-execute-", 0).factory());
+
     // ==================== 初始化与销毁 ====================
 
     /**
@@ -66,6 +86,9 @@ public class CronJobService implements ApplicationRunner {
      */
     @Override
     public void run(ApplicationArguments args) {
+        // Pool size = trigger firing parallelism only. Actual execution lives
+        // on cronExecutor (virtual threads), so 2 is plenty for the trigger
+        // pump and even 4 was excessive; we keep 4 for headroom.
         scheduler.setPoolSize(4);
         scheduler.setThreadNamePrefix("cron-job-");
         scheduler.initialize();
@@ -86,6 +109,7 @@ public class CronJobService implements ApplicationRunner {
     @PreDestroy
     public void destroy() {
         scheduler.shutdown();
+        cronExecutor.shutdown();
     }
 
     // ==================== CRUD ====================
@@ -105,8 +129,26 @@ public class CronJobService implements ApplicationRunner {
                 agentMapper.selectBatchIds(agentIds).stream()
                         .collect(Collectors.toMap(AgentEntity::getId, AgentEntity::getName));
 
+        // RFC-063r post-deploy fix: surface channel name on the list so the
+        // UI can show which crons are bound to which IM channel — addresses
+        // user's "看不到与 channel 有什么关联" complaint.
+        List<Long> channelIds = entities.stream()
+                .map(CronJobEntity::getChannelId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        Map<Long, String> channelNameMap = channelIds.isEmpty() ? Map.of() :
+                channelMapper.selectBatchIds(channelIds).stream()
+                        .collect(Collectors.toMap(ChannelEntity::getId, ChannelEntity::getName));
+
         return entities.stream()
-                .map(e -> CronJobDTO.from(e, agentNameMap.getOrDefault(e.getAgentId(), "Unknown")))
+                .map(e -> {
+                    CronJobDTO dto = CronJobDTO.from(e, agentNameMap.getOrDefault(e.getAgentId(), "Unknown"));
+                    if (e.getChannelId() != null) {
+                        dto.setChannelName(channelNameMap.get(e.getChannelId()));
+                    }
+                    return dto;
+                })
                 .collect(Collectors.toList());
     }
 
@@ -118,7 +160,12 @@ public class CronJobService implements ApplicationRunner {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
         AgentEntity agent = agentMapper.selectById(entity.getAgentId());
-        return CronJobDTO.from(entity, agent != null ? agent.getName() : "Unknown");
+        CronJobDTO dto = CronJobDTO.from(entity, agent != null ? agent.getName() : "Unknown");
+        if (entity.getChannelId() != null) {
+            ChannelEntity channel = channelMapper.selectById(entity.getChannelId());
+            if (channel != null) dto.setChannelName(channel.getName());
+        }
+        return dto;
     }
 
     public CronJobDTO create(CronJobDTO dto) {
@@ -229,12 +276,11 @@ public class CronJobService implements ApplicationRunner {
         // the three-segment REQUIRES_NEW transactions on
         // CronJobLifecycleService work as advertised. "manual" trigger type
         // distinguishes this from scheduler-driven runs in mate_cron_job_run.
-        scheduler.submit(() -> {
+        // Run on the virtual-thread cronExecutor — never block the scheduler.
+        cronExecutor.submit(() -> {
             try {
                 cronJobRunner.executeJob(entity, "manual");
             } finally {
-                // RFC-063r §2.7.1: bookkeep regardless of run outcome so a
-                // single bad run does not wedge all future ticks.
                 updateRunTimes(entity.getId(), entity.getCronExpression(), entity.getTimezone());
             }
         });
@@ -249,16 +295,19 @@ public class CronJobService implements ApplicationRunner {
             String springCron = toSpringCron(job.getCronExpression());
             ZoneId zoneId = ZoneId.of(job.getTimezone());
             CronTrigger trigger = new CronTrigger(springCron, zoneId);
-            // RFC-063r §2.7.1: delegate to CronJobRunner — see runNow above.
-            // Bookkeeping (lastRunTime / nextRunTime) is wrapped in a finally
-            // so a failed run still advances the schedule.
-            ScheduledFuture<?> future = scheduler.schedule(() -> {
-                try {
-                    cronJobRunner.executeJob(job, "scheduled");
-                } finally {
-                    updateRunTimes(job.getId(), job.getCronExpression(), job.getTimezone());
-                }
-            }, trigger);
+            // RFC-063r §2.7.1 + post-deploy fix: scheduler thread fires the
+            // trigger and immediately offloads to the virtual-thread
+            // cronExecutor — the LLM call must NOT run on a scheduler
+            // worker (4 concurrent long crons would otherwise saturate the
+            // pool and the 5th would miss its tick).
+            ScheduledFuture<?> future = scheduler.schedule(() ->
+                    cronExecutor.submit(() -> {
+                        try {
+                            cronJobRunner.executeJob(job, "scheduled");
+                        } finally {
+                            updateRunTimes(job.getId(), job.getCronExpression(), job.getTimezone());
+                        }
+                    }), trigger);
             scheduledTasks.put(job.getId(), future);
             log.info("[CronJob] Registered job {} ({}), cron={}, tz={}", job.getId(), job.getName(),
                     job.getCronExpression(), job.getTimezone());

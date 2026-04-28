@@ -791,6 +791,7 @@ export interface CronJob {
   // lastDeliveryStatus / lastDeliveryError: read-only, populated by
   // selectListWithDeliveryStatus / selectByIdWithDeliveryStatus on the backend.
   channelId?: number | null
+  channelName?: string | null
   deliveryConfig?: { targetId?: string | null; threadId?: string | null; accountId?: string | null } | null
   lastDeliveryStatus?: 'NONE' | 'PENDING' | 'DELIVERED' | 'NOT_DELIVERED'
   lastDeliveryError?: string | null

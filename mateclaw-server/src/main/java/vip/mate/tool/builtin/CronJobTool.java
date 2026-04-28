@@ -47,15 +47,24 @@ public class CronJobTool {
             @Nullable ToolContext ctx) {
 
         try {
-            // RFC-063r §2.5: prefer the explicit ChatOrigin (channelId / channelTarget
-            // / agentId all live there). Fall back to the legacy ToolExecutionContext
-            // ThreadLocal during the PR-1 transition window so callers that have not
-            // yet migrated keep working.
+            // RFC-063r §2.5: the ChatOrigin must carry agentId — buildInitialState
+            // injects it from the agent that owns the StateGraph. If it's missing
+            // here, something upstream broke (no holder set, KeyStrategyFactory
+            // dropped CHAT_ORIGIN, etc.) — fail loudly rather than silently
+            // binding to agent #1, which could be disabled / non-existent /
+            // user-renamed and would surface as "scheduled but never runs".
             ChatOrigin origin = ChatOrigin.from(ctx);
             String conversationId = origin.conversationId() != null && !origin.conversationId().isEmpty()
                     ? origin.conversationId()
                     : ToolExecutionContext.conversationId();
-            Long agentId = origin.agentId() != null ? origin.agentId() : resolveAgentId(conversationId);
+            Long agentId = origin.agentId();
+            if (agentId == null) {
+                log.warn("[CronJobTool] create_cron_job invoked without an agentId in ChatOrigin " +
+                        "(conv={}); refusing to silently bind to a default agent.", conversationId);
+                return errorResult("Cannot create cron job: agent context unavailable. " +
+                        "This is an internal wiring bug — the originating agent id was not threaded " +
+                        "through ToolContext. Re-issue the request; if it persists, see RFC-063r §2.5.");
+            }
 
             CronJobDTO dto = new CronJobDTO();
             dto.setName(name);
@@ -156,25 +165,6 @@ public class CronJobTool {
         } catch (Exception e) {
             log.error("[CronJobTool] delete failed: {}", e.getMessage());
             return errorResult("Failed to delete cron job: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Resolve agent ID from conversation ID.
-     * Convention: cron conversations use "cron:{jobId}", normal chats use "{agentId}:{uuid}".
-     */
-    private Long resolveAgentId(String conversationId) {
-        if (conversationId == null || conversationId.isBlank()) {
-            return 1L; // default agent
-        }
-        // Try to extract agent ID from conversation metadata
-        // For now, use default agent ID 1 (the conversation's agent binding is handled by the caller)
-        try {
-            // Convention: conversationId might contain agent context info
-            // Fallback to first enabled agent
-            return 1L;
-        } catch (Exception e) {
-            return 1L;
         }
     }
 
