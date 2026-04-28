@@ -10,6 +10,7 @@ import vip.mate.channel.ChannelAdapter;
 import vip.mate.channel.ChannelManager;
 import vip.mate.channel.dingtalk.DingTalkChannelAdapter;
 import vip.mate.channel.discord.DiscordChannelAdapter;
+import vip.mate.channel.feishu.FeishuAppRegistrationService;
 import vip.mate.channel.feishu.FeishuChannelAdapter;
 import vip.mate.channel.telegram.TelegramChannelAdapter;
 import vip.mate.channel.weixin.ILinkClient;
@@ -47,6 +48,7 @@ import java.util.Optional;
 public class ChannelWebhookController {
 
     private final ChannelManager channelManager;
+    private final FeishuAppRegistrationService feishuAppRegistrationService;
 
     @Operation(summary = "钉钉消息回调")
     @PostMapping("/dingtalk")
@@ -78,6 +80,62 @@ public class ChannelWebhookController {
         }
         log.warn("[webhook] Feishu channel not active, ignoring callback");
         return ResponseEntity.ok(Map.of("code", 0));
+    }
+
+    // ==================== 飞书一键应用注册（oapi-sdk 2.6+） ====================
+
+    @Operation(summary = "启动飞书扫码注册应用流程")
+    @PostMapping("/feishu/register/begin")
+    public ResponseEntity<Map<String, Object>> feishuRegisterBegin(
+            @RequestParam(value = "domain", defaultValue = "feishu") String domain) {
+        try {
+            String sessionId = feishuAppRegistrationService.begin(domain);
+            return ResponseEntity.ok(Map.of("session_id", sessionId));
+        } catch (Exception e) {
+            log.error("[feishu-register] begin failed: {}", e.getMessage(), e);
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "Failed to start registration: " + e.getMessage()));
+        }
+    }
+
+    @Operation(summary = "查询飞书扫码注册状态")
+    @GetMapping("/feishu/register/status")
+    public ResponseEntity<Map<String, Object>> feishuRegisterStatus(@RequestParam("session") String sessionId) {
+        FeishuAppRegistrationService.RegistrationSession session = feishuAppRegistrationService.getSession(sessionId);
+        if (session == null) {
+            return ResponseEntity.ok(Map.of("status", "expired", "error", "session not found or expired"));
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", session.status.name().toLowerCase());
+        if (session.qrcodeUrl != null) {
+            body.put("qrcode_url", session.qrcodeUrl);
+            body.put("qrcode_expire_seconds", session.qrcodeExpireSeconds);
+            // SDK gives us a verification URL string (verification_uri_complete);
+            // browsers can't render that as an image, so encode it into a PNG QR
+            // here just like the WeChat flow does. Cache the encoded image on the
+            // session so we only run ZXing once per registration attempt.
+            if (session.qrcodeImgDataUri == null) {
+                try {
+                    String base64 = generateQrCodeBase64(session.qrcodeUrl);
+                    session.qrcodeImgDataUri = "data:image/png;base64," + base64;
+                } catch (Exception e) {
+                    log.warn("[feishu-register] QR encode failed: {}", e.getMessage());
+                }
+            }
+            if (session.qrcodeImgDataUri != null) {
+                body.put("qrcode_img", session.qrcodeImgDataUri);
+            }
+        }
+        if (session.status == FeishuAppRegistrationService.Status.CONFIRMED) {
+            body.put("client_id", session.clientId);
+            body.put("client_secret", session.clientSecret);
+            if (session.userOpenId != null) body.put("user_open_id", session.userOpenId);
+            if (session.userTenantBrand != null) body.put("user_tenant_brand", session.userTenantBrand);
+        }
+        if (session.errorMessage != null) {
+            body.put("error", session.errorMessage);
+        }
+        return ResponseEntity.ok(body);
     }
 
     @Operation(summary = "Telegram 消息回调")

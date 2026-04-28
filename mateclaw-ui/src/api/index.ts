@@ -232,6 +232,11 @@ export const channelApi = {
   weixinQrcode: () => http.get('/channels/webhook/weixin/qrcode'),
   weixinQrcodeStatus: (qrcode: string) =>
     http.get(`/channels/webhook/weixin/qrcode/status?qrcode=${encodeURIComponent(qrcode)}`),
+  // Feishu one-click app registration (oapi-sdk 2.6+ scene/registration)
+  feishuRegisterBegin: (domain: string) =>
+    http.post(`/channels/webhook/feishu/register/begin?domain=${encodeURIComponent(domain)}`),
+  feishuRegisterStatus: (sessionId: string) =>
+    http.get(`/channels/webhook/feishu/register/status?session=${encodeURIComponent(sessionId)}`),
 }
 
 // ==================== MCP Server ====================

@@ -116,6 +116,40 @@
               </div>
             </div>
 
+            <!-- 飞书一键应用注册（oapi-sdk 2.6+） -->
+            <div v-if="form.channelType === 'feishu'" class="feishu-register-card">
+              <div class="feishu-register-header">
+                <strong>{{ t('channels.feishuRegister.title') }}</strong>
+              </div>
+              <p class="feishu-register-hint">{{ t('channels.feishuRegister.hint') }}</p>
+              <button
+                type="button"
+                class="feishu-register-btn"
+                @click="feishuRegister.start(channelConfig.domain || 'feishu')"
+                :disabled="feishuRegister.loading.value || feishuRegister.status.value === 'waiting'"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+                  <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="3" height="3"/>
+                  <line x1="21" y1="14" x2="21" y2="17"/><line x1="14" y1="21" x2="17" y2="21"/>
+                  <line x1="21" y1="21" x2="21" y2="21"/>
+                </svg>
+                {{ feishuRegister.loading.value
+                  ? t('channels.feishuRegister.buttonLoading')
+                  : t('channels.feishuRegister.button') }}
+              </button>
+              <div v-if="feishuRegister.qrcodeUrl.value" class="feishu-register-qrcode">
+                <img :src="feishuRegister.qrcodeUrl.value" :alt="t('channels.feishuRegister.button')" class="feishu-register-qrcode-img" />
+                <p class="feishu-register-status" :class="feishuRegister.status.value">
+                  <template v-if="feishuRegister.status.value === 'confirmed'">{{ t('channels.feishuRegister.confirmed') }}</template>
+                  <template v-else-if="feishuRegister.status.value === 'expired'">{{ t('channels.feishuRegister.expired') }}</template>
+                  <template v-else-if="feishuRegister.status.value === 'denied'">{{ t('channels.feishuRegister.denied') }}</template>
+                  <template v-else-if="feishuRegister.status.value === 'error'">{{ t('channels.feishuRegister.error') }}</template>
+                  <template v-else>{{ t('channels.feishuRegister.scanHint') }}</template>
+                </p>
+              </div>
+            </div>
+
             <!-- 企业微信扫码授权 -->
             <div v-if="form.channelType === 'wecom'" class="wecom-auth-card">
               <p class="wecom-auth-hint">{{ t('channels.wecom.authHint') }}</p>
@@ -361,6 +395,7 @@ import {
 } from '@/utils/channelConfigJson'
 import { useWeixinQrcodePoll } from '@/composables/channels/useWeixinQrcodePoll'
 import { useWecomBotAuth } from '@/composables/channels/useWecomBotAuth'
+import { useFeishuAppRegister } from '@/composables/channels/useFeishuAppRegister'
 
 interface Props {
   modelValue: boolean
@@ -429,6 +464,13 @@ const weixin = useWeixinQrcodePoll(({ botToken, baseUrl }) => {
 const wecom = useWecomBotAuth((bot) => {
   channelConfig.value.bot_id = bot.botid
   channelConfig.value.secret = bot.secret
+})
+
+// Feishu one-click app registration: scan-to-create flow that returns
+// app_id/app_secret without the user ever touching the developer console.
+const feishuRegister = useFeishuAppRegister(({ appId, appSecret }) => {
+  channelConfig.value.app_id = appId
+  channelConfig.value.app_secret = appSecret
 })
 
 // ========== Field defs (derived) ==========
@@ -692,6 +734,22 @@ function save() {
 .guide-steps :deep(a:hover) { text-decoration: underline; }
 .guide-steps :deep(code) { font-size: 12px; background: var(--mc-bg-sunken); padding: 1px 5px; border-radius: 3px; }
 .guide-steps :deep(b) { color: var(--mc-text-primary); font-weight: 600; }
+
+/* Feishu one-click register */
+.feishu-register-card { background: linear-gradient(135deg, rgba(0,128,255,0.05), rgba(99,102,241,0.05)); border: 1px solid rgba(99,102,241,0.2); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+.feishu-register-header { font-size: 13px; color: var(--mc-text-primary); margin-bottom: 6px; }
+.feishu-register-hint { font-size: 12px; color: var(--mc-text-secondary); margin: 0 0 10px 0; line-height: 1.6; }
+.feishu-register-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 10px 16px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+.feishu-register-btn:hover:not(:disabled) { background: #1d4ed8; transform: translateY(-1px); box-shadow: 0 2px 8px rgba(37,99,235,0.3); }
+.feishu-register-btn:active:not(:disabled) { transform: translateY(0); }
+.feishu-register-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.feishu-register-qrcode { display: flex; flex-direction: column; align-items: center; margin-top: 16px; padding: 16px; background: #fff; border-radius: 8px; border: 1px solid var(--mc-border); }
+.feishu-register-qrcode-img { width: 200px; height: 200px; border-radius: 4px; }
+.feishu-register-status { font-size: 13px; color: var(--mc-text-secondary); margin-top: 10px; transition: color 0.2s; text-align: center; }
+.feishu-register-status.confirmed { color: #10b981; font-weight: 500; }
+.feishu-register-status.expired { color: #f56c6c; }
+.feishu-register-status.denied { color: #f56c6c; }
+.feishu-register-status.error { color: #f56c6c; }
 
 /* WeCom auth */
 .wecom-auth-card { background: var(--mc-primary-bg, rgba(217,119,87,0.06)); border: 1px solid var(--mc-primary-light, rgba(217,119,87,0.2)); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }

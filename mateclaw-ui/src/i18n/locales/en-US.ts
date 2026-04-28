@@ -1643,6 +1643,18 @@ export default {
         step4: 'After starting the channel, auto-receives messages via <b>WebSocket long connection</b>, <b>no public IP or callback URL required</b>',
       },
     },
+    feishuRegister: {
+      title: 'One-click Feishu App Creation',
+      hint: 'Click the button to get a QR code. Scan it with Feishu and confirm authorization — an in-house app will be created in your tenant and the App ID / App Secret will be auto-filled below.',
+      button: 'Scan to Create App',
+      buttonLoading: 'Preparing QR code…',
+      scanHint: 'Scan the QR code above with the Feishu app and confirm authorization',
+      confirmed: 'App created. App ID and Secret have been auto-filled.',
+      expired: 'QR code expired, please try again',
+      denied: 'Authorization was denied',
+      error: 'Registration failed, please retry',
+      startFailed: 'Failed to fetch QR code, please check your network',
+    },
     feishu: {
       perm: {
         message: 'Send and receive messages',
