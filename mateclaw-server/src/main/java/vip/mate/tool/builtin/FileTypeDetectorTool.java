@@ -50,7 +50,14 @@ public class FileTypeDetectorTool {
             Path path = Paths.get(filePath).toAbsolutePath().normalize();
 
             if (!Files.exists(path)) {
-                return errorResult(filePath, "文件不存在: " + path);
+                // Fall back to chat-upload basename matching for filenames that were
+                // sanitized at upload time (e.g. Chinese characters → underscores).
+                Path attachment = ChatUploadResolver.resolve(filePath);
+                if (attachment == null) {
+                    return errorResult(filePath, "文件不存在: " + path);
+                }
+                log.info("[FileTypeDetector] Resolved chat-upload attachment fallback: {} -> {}", filePath, attachment);
+                path = attachment;
             }
 
             if (Files.isDirectory(path)) {

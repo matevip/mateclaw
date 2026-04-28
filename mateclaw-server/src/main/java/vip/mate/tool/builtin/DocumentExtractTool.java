@@ -74,7 +74,17 @@ public class DocumentExtractTool {
             Path path = Paths.get(filePath).toAbsolutePath().normalize();
 
             if (!Files.exists(path)) {
-                return errorResult(filePath, "文件不存在: " + path, attempts);
+                // The user-uploaded chat attachment is rendered to the LLM as
+                // "[附件] foo.docx" without its stored path, and Chinese / non-ASCII
+                // filenames are sanitized at upload time (see ChatController#upload),
+                // so the LLM-supplied path won't match anything on disk. Fall back to
+                // basename matching inside the conversation's chat-upload directory.
+                Path attachment = ChatUploadResolver.resolve(filePath);
+                if (attachment == null) {
+                    return errorResult(filePath, "文件不存在: " + path, attempts);
+                }
+                log.info("[DocumentExtract] Resolved chat-upload attachment fallback: {} -> {}", filePath, attachment);
+                path = attachment;
             }
 
             // 解析文件类型
