@@ -140,11 +140,17 @@
         </button>
         <span class="mobile-topbar-title">Mate<span class="logo-name-highlight">Claw</span></span>
       </div>
+      <!-- RFC-074 PR-1 fix: include route.path in the key so two different
+           keepAlive routes (e.g. /channels and /settings/models) don't collide
+           on the same vnode slot. Without this, switching between two keep-alive
+           routes leaves both component trees mounted because Vue sees identical
+           keys and patches in place. The comment must live OUTSIDE <keep-alive>
+           — KeepAlive treats comments as children and rejects "more than one". -->
       <router-view v-slot="{ Component, route }">
         <keep-alive>
-          <component :is="Component" :key="workspaceRouteKey" v-if="route.meta?.keepAlive" />
+          <component :is="Component" :key="`${workspaceRouteKey}:${route.path}`" v-if="route.meta?.keepAlive" />
         </keep-alive>
-        <component :is="Component" :key="workspaceRouteKey" v-if="!route.meta?.keepAlive" />
+        <component :is="Component" :key="`${workspaceRouteKey}:${route.path}`" v-if="!route.meta?.keepAlive" />
       </router-view>
     </main>
 

@@ -10,8 +10,14 @@
       </button>
     </div>
 
+    <!-- RFC-074 PR-1: skeleton placeholder so the page paints something
+         immediately on first load instead of blank-then-pop. -->
+    <div v-if="loading" class="provider-group">
+      <el-skeleton :rows="4" animated />
+    </div>
+
     <!-- 本地模型 -->
-    <div v-if="localProviders.length" class="provider-group">
+    <div v-if="!loading && localProviders.length" class="provider-group">
       <h3 class="group-title">
         <svg class="group-title__icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
@@ -40,7 +46,7 @@
     </div>
 
     <!-- 云端模型 -->
-    <div v-if="cloudProviders.length" class="provider-group">
+    <div v-if="!loading && cloudProviders.length" class="provider-group">
       <h3 class="group-title">
         <svg class="group-title__icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
@@ -120,18 +126,26 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import type { ProviderInfo, ProviderModelInfo } from '@/types'
 import { useProviders } from './useProviders'
 import ProviderCard from './ProviderCard.vue'
 import EmbeddingModelsSection from './EmbeddingModelsSection.vue'
-import ProviderConfigModal from './modals/ProviderConfigModal.vue'
-import ManageModelsModal from './modals/ManageModelsModal.vue'
+// RFC-074 PR-1: defer modal JS until the user actually opens one — same
+// pattern as ChannelEditModal in commit 9300559b. Drops ~30KB from the
+// initial Settings/Models route chunk.
+const ProviderConfigModal = defineAsyncComponent(() => import('./modals/ProviderConfigModal.vue'))
+const ManageModelsModal = defineAsyncComponent(() => import('./modals/ManageModelsModal.vue'))
 
 const { t } = useI18n()
 const savedTip = ref('')
+// Skeleton gate. Driven by onMounted only — fine because /settings/models is
+// NOT a keepAlive route. If anyone re-adds keepAlive in router/index.ts,
+// switch to onActivated (or reset loading there) so cached re-entries don't
+// skip the load + leave loading=false stale.
+const loading = ref(true)
 
 const {
   providers,
@@ -188,7 +202,11 @@ const localProviders = computed(() => providers.value.filter(p => p.isLocal))
 const cloudProviders = computed(() => providers.value.filter(p => !p.isLocal))
 
 onMounted(async () => {
-  await Promise.all([loadProviders(), loadActiveModel()])
+  try {
+    await Promise.all([loadProviders(), loadActiveModel()])
+  } finally {
+    loading.value = false
+  }
 })
 
 async function onSaveProvider() {
