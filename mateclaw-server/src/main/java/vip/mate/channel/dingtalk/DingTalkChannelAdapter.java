@@ -166,11 +166,19 @@ public class DingTalkChannelAdapter extends AbstractChannelAdapter implements St
             payload.put("sessionWebhook", msg.getSessionWebhook());
 
             // 消息内容
-            if (msg.getText() != null) {
+            // 钉钉服务端已经把语音转写好放在 MessageContent.recognition 里（跟
+            // 企业微信 voice.content 一个模式），不需要 STT。优先读 recognition；
+            // 否则读 text.content。其他复杂类型（picture / richText）暂由
+            // handleWebhook 内部处理 —— 但 stream 模式下我们目前没把那些类型
+            // 的字段塞进 payload，是个遗留待修项（picture / richText 同样会掉消息）。
+            String recognition = msg.getContent() != null ? msg.getContent().getRecognition() : null;
+            if (recognition != null && !recognition.isBlank()) {
+                payload.put("msgtype", "audio");
+                payload.put("audio", Map.of("recognition", recognition));
+            } else if (msg.getText() != null) {
                 payload.put("msgtype", "text");
                 payload.put("text", Map.of("content", msg.getText().getContent() != null ? msg.getText().getContent() : ""));
             }
-            // richText 等复杂类型暂由 handleWebhook 内部处理
 
             handleWebhook(payload);
         } catch (Exception e) {
@@ -385,6 +393,15 @@ public class DingTalkChannelAdapter extends AbstractChannelAdapter implements St
                         textContent = textBuilder.toString().trim();
                     }
                 }
+            } else if ("audio".equals(msgtype)) {
+                // 钉钉服务端已经把语音转写好放在 audio.recognition 里。这跟企业微信
+                // 的 voice.content 是一个模式 —— webhook 自带 ASR 文本，0 STT 调用。
+                Map<String, Object> audioBody = (Map<String, Object>) payload.get("audio");
+                String recognition = audioBody != null ? (String) audioBody.get("recognition") : null;
+                if (recognition != null && !recognition.isBlank()) {
+                    textContent = recognition.trim();
+                    contentParts.add(MessageContentPart.text(textContent));
+                }
             } else {
                 // 默认 text 消息
                 Map<String, Object> msgBody = (Map<String, Object>) payload.get("text");
@@ -424,6 +441,7 @@ public class DingTalkChannelAdapter extends AbstractChannelAdapter implements St
                     .content(content)
                     .contentType(contentParts.stream().anyMatch(p -> "image".equals(p.getType())) ? "image" : "text")
                     .contentParts(contentParts)
+                    .inputMode("audio".equals(msgtype) ? "voice" : "text")
                     .timestamp(LocalDateTime.now())
                     .rawPayload(payload)
                     .build();
