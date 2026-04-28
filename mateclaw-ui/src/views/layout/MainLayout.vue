@@ -140,7 +140,12 @@
         </button>
         <span class="mobile-topbar-title">Mate<span class="logo-name-highlight">Claw</span></span>
       </div>
-      <router-view :key="workspaceRouteKey" />
+      <router-view v-slot="{ Component, route }">
+        <keep-alive>
+          <component :is="Component" :key="workspaceRouteKey" v-if="route.meta?.keepAlive" />
+        </keep-alive>
+        <component :is="Component" :key="workspaceRouteKey" v-if="!route.meta?.keepAlive" />
+      </router-view>
     </main>
 
     <OnboardingWizard v-if="showOnboarding" @close="showOnboarding = false" />
@@ -386,7 +391,7 @@ function logout() {
 }
 
 async function changeLocale(locale: AppLocale) {
-  applyLocale(locale)
+  await applyLocale(locale)
   footerPanelOpen.value = false
   try {
     await settingsApi.update({ language: locale })
