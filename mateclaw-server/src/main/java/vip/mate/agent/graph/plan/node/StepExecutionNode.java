@@ -86,6 +86,12 @@ public class StepExecutionNode implements NodeAction {
         String conversationId = state.value(MateClawStateKeys.CONVERSATION_ID, "");
         String agentId = state.value(MateClawStateKeys.AGENT_ID, "");
         String workspaceBasePath = state.value(MateClawStateKeys.WORKSPACE_BASE_PATH, "");
+        // RFC-063r §2.5: read parent ChatOrigin from graph state so tools in
+        // this step (and any DelegateAgentTool sub-graphs) inherit channel /
+        // workspace / requester context.
+        vip.mate.agent.context.ChatOrigin chatOrigin =
+                state.<vip.mate.agent.context.ChatOrigin>value(MateClawStateKeys.CHAT_ORIGIN)
+                        .orElse(vip.mate.agent.context.ChatOrigin.EMPTY);
 
         if (stepIndex >= steps.size()) {
             log.warn("[StepExecution] stepIndex {} >= steps.size() {}, skipping", stepIndex, steps.size());
@@ -196,7 +202,7 @@ public class StepExecutionNode implements NodeAction {
                         } else {
                             // 非预批准工具走正常执行器
                             ToolExecutionExecutor.ToolExecutionResult execResult = executor.execute(
-                                    List.of(toolCall), conversationId, agentId, false, "", workspaceBasePath);
+                                    List.of(toolCall), conversationId, agentId, false, "", workspaceBasePath, chatOrigin);
                             toolResponses.addAll(execResult.responses());
                             events.addAll(execResult.events());
                             if (execResult.hasDirectOutputs()) {
@@ -212,7 +218,7 @@ public class StepExecutionNode implements NodeAction {
                 } else {
                     // 正常路径：委托 ToolExecutionExecutor（支持并发执行 + 审批 barrier）
                     ToolExecutionExecutor.ToolExecutionResult execResult = executor.execute(
-                            allToolCalls, conversationId, agentId, false, "", workspaceBasePath);
+                            allToolCalls, conversationId, agentId, false, "", workspaceBasePath, chatOrigin);
                     toolResponses.addAll(execResult.responses());
                     events.addAll(execResult.events());
                     if (execResult.hasDirectOutputs()) {

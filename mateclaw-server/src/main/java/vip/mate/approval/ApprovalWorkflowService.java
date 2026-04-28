@@ -15,6 +15,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import vip.mate.agent.context.ChatOrigin;
+import vip.mate.agent.context.ChatOriginHolder;
 import vip.mate.approval.model.ToolApprovalEntity;
 import vip.mate.approval.repository.ToolApprovalMapper;
 import vip.mate.tool.guard.model.GuardEvaluation;
@@ -137,6 +139,7 @@ public class ApprovalWorkflowService implements ApplicationRunner {
                 snapshot.setFindingsJson(entity.getFindingsJson());
                 snapshot.setMaxSeverity(entity.getMaxSeverity());
                 snapshot.setSummary(entity.getSummary());
+                snapshot.setChatOrigin(entity.getChatOrigin());
 
                 approvalService.registerRecovered(snapshot);
                 recovered++;
@@ -200,6 +203,14 @@ public class ApprovalWorkflowService implements ApplicationRunner {
                 conversationId, userId, toolName, toolArguments, reason,
                 toolCallPayload, siblingToolCalls, agentId);
 
+        // RFC-063r §2.12: capture the originating ChatOrigin from the holder.
+        // The holder was set by AgentService.{chat,chatStream,...} for the
+        // duration of the agent invocation that produced this approval — so
+        // it is non-null for IM / web triggered tool calls. Snapshot is
+        // serialized once here and persisted on the DB row so cross-restart
+        // replays keep the channel binding.
+        String chatOriginJson = serializeChatOrigin(ChatOriginHolder.get());
+
         // 2. 增强内存记录
         approvalService.getPending(pendingId).ifPresent(pending -> {
             if (evaluation != null) {
@@ -207,11 +218,12 @@ public class ApprovalWorkflowService implements ApplicationRunner {
                 pending.setMaxSeverity(evaluation.maxSeverity() != null ? evaluation.maxSeverity().name() : null);
                 pending.setSummary(evaluation.summary());
             }
+            pending.setChatOrigin(chatOriginJson);
         });
 
         // 3. DB 层
         persistToDb(pendingId, conversationId, userId, toolName, toolArguments,
-                toolCallPayload, siblingToolCalls, agentId, evaluation);
+                toolCallPayload, siblingToolCalls, agentId, evaluation, chatOriginJson);
 
         return pendingId;
     }
@@ -517,7 +529,7 @@ public class ApprovalWorkflowService implements ApplicationRunner {
     private void persistToDb(String pendingId, String conversationId, String userId,
                              String toolName, String toolArguments,
                              String toolCallPayload, String siblingToolCalls, String agentId,
-                             GuardEvaluation evaluation) {
+                             GuardEvaluation evaluation, String chatOriginJson) {
         try {
             ToolApprovalEntity entity = new ToolApprovalEntity();
             entity.setPendingId(pendingId);
@@ -531,6 +543,9 @@ public class ApprovalWorkflowService implements ApplicationRunner {
             entity.setStatus("PENDING");
             entity.setCreatedAt(LocalDateTime.now());
             entity.setExpireAt(LocalDateTime.now().plusMinutes(30));
+            // RFC-063r §2.12: persist Memento snapshot. Null when the entry
+            // path didn't supply an origin — replay falls back to ChatOrigin.EMPTY.
+            entity.setChatOrigin(chatOriginJson);
 
             if (evaluation != null) {
                 entity.setFindingsJson(serializeFindings(evaluation.findings()));
@@ -545,6 +560,44 @@ public class ApprovalWorkflowService implements ApplicationRunner {
             approvalMapper.insert(entity);
         } catch (Exception e) {
             log.warn("[ApprovalWorkflow] Failed to persist approval to DB: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * RFC-063r §2.12: serialize a {@link ChatOrigin} for persistence on
+     * {@code mate_tool_approval.chat_origin}. Returns null for
+     * {@code ChatOrigin.EMPTY} so legacy approvals that never captured an
+     * origin do not store a meaningless empty record.
+     */
+    private String serializeChatOrigin(ChatOrigin origin) {
+        if (origin == null || origin == ChatOrigin.EMPTY) return null;
+        if (origin.agentId() == null && origin.channelId() == null
+                && origin.conversationId() == null && origin.workspaceId() == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(origin);
+        } catch (JsonProcessingException e) {
+            log.warn("[ApprovalWorkflow] Failed to serialize ChatOrigin: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * RFC-063r §2.12: deserialize a persisted Memento back into a
+     * {@link ChatOrigin}. Returns {@link ChatOrigin#EMPTY} when the column
+     * is null or the payload is corrupt — the caller treats that as
+     * "no channel binding" and replay proceeds with a web-style flow.
+     */
+    public ChatOrigin restoreChatOrigin(String json) {
+        if (json == null || json.isBlank()) return ChatOrigin.EMPTY;
+        try {
+            ChatOrigin restored = objectMapper.readValue(json, ChatOrigin.class);
+            return restored != null ? restored : ChatOrigin.EMPTY;
+        } catch (Exception e) {
+            log.warn("[ApprovalWorkflow] Failed to restore ChatOrigin: {} (payload-len={})",
+                    e.getMessage(), json.length());
+            return ChatOrigin.EMPTY;
         }
     }
 

@@ -12,8 +12,10 @@ import com.microsoft.playwright.PlaywrightException;
 import com.microsoft.playwright.options.LoadState;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import vip.mate.tool.browser.BrowserDiagnosticsService;
 import vip.mate.tool.browser.BrowserLauncher;
@@ -61,6 +63,15 @@ public class BrowserUseTool {
     private final Object playwrightLock = new Object();
 
     private final ConcurrentHashMap<String, BrowserSession> sessions = new ConcurrentHashMap<>();
+
+    /**
+     * RFC-063r §2.5 transition: ToolContext for the current invocation, set
+     * at the @Tool entry point and read by {@link #broadcastBrowserEvent}.
+     * Tool calls are serialized per ToolExecutionExecutor instance so this
+     * volatile field is safe; the field is read-only inside the action
+     * handlers.
+     */
+    private volatile ToolContext currentToolContext;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "browser-idle-watchdog");
         t.setDaemon(true);
@@ -97,8 +108,15 @@ public class BrowserUseTool {
             @ToolParam(description = "JavaScript code to execute (for action=eval)", required = false) String code,
             @ToolParam(description = "File path to save screenshot (for action=screenshot)", required = false) String path,
             @ToolParam(description = "Launch visible browser window (for action=start, default false)", required = false) Boolean headed,
-            @ToolParam(description = "Single CDP port to scan (for action=list_cdp_targets)", required = false) Integer cdpPort
+            @ToolParam(description = "Single CDP port to scan (for action=list_cdp_targets)", required = false) Integer cdpPort,
+            // RFC-063r §2.5: hidden from LLM by JsonSchemaGenerator.
+            @Nullable ToolContext ctx
     ) {
+        // The conversationId resolution lives in broadcastBrowserEvent below;
+        // capture the ctx into a field so the helper can read it without
+        // passing it down every action handler. Race-free because tool calls
+        // are serialized per executor.
+        this.currentToolContext = ctx;
         if (action == null || action.isBlank()) {
             return error("action is required");
         }
@@ -163,7 +181,7 @@ public class BrowserUseTool {
      */
     private void broadcastBrowserEvent(String action, boolean success, String url, String title,
                                         String screenshot, long durationMs) {
-        String conversationId = ToolExecutionContext.conversationId();
+        String conversationId = ToolExecutionContext.conversationId(currentToolContext);
         if (conversationId == null || streamTracker == null) {
             return;
         }

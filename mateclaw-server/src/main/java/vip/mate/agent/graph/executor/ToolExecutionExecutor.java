@@ -4,10 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import vip.mate.tool.builtin.ToolExecutionContext;
 import vip.mate.agent.AgentToolSet;
 import vip.mate.agent.GraphEventPublisher;
+import vip.mate.agent.context.ChatOrigin;
 import vip.mate.agent.graph.state.DirectToolOutput;
 import vip.mate.approval.ApprovalWorkflowService;
 import vip.mate.channel.web.ChatStreamTracker;
@@ -202,6 +204,8 @@ public class ToolExecutionExecutor {
     private volatile String currentRequesterId;
     /** 当前工作区活动目录（为空不限制），传递给 ToolExecutionContext */
     private volatile String currentWorkspaceBasePath;
+    /** RFC-063r §2.5: 当前执行的 ChatOrigin，构建 ToolContext 时透传给工具 */
+    private volatile ChatOrigin currentChatOrigin = ChatOrigin.EMPTY;
 
     public ToolExecutionResult execute(List<AssistantMessage.ToolCall> toolCalls,
                                         String conversationId, String agentId,
@@ -213,8 +217,30 @@ public class ToolExecutionExecutor {
                                         String conversationId, String agentId,
                                         boolean isReplay, String requesterId,
                                         String workspaceBasePath) {
+        return execute(toolCalls, conversationId, agentId, isReplay, requesterId,
+                workspaceBasePath, ChatOrigin.EMPTY);
+    }
+
+    /**
+     * RFC-063r §2.5: preferred overload — accepts a {@link ChatOrigin} that the
+     * top-level agent has enriched with agentId/workspace/channel context.
+     * Builds a Spring AI {@link ToolContext} per tool invocation so
+     * {@code @Tool} methods can read the origin via
+     * {@code ChatOrigin.from(toolContext)}.
+     *
+     * <p>During the PR-1 transition the legacy {@link ToolExecutionContext}
+     * ThreadLocal is also populated, so existing tools that read from it keep
+     * working unchanged. After all 8 callsites migrate, the ThreadLocal can be
+     * removed.
+     */
+    public ToolExecutionResult execute(List<AssistantMessage.ToolCall> toolCalls,
+                                        String conversationId, String agentId,
+                                        boolean isReplay, String requesterId,
+                                        String workspaceBasePath,
+                                        ChatOrigin origin) {
         this.currentRequesterId = requesterId;
         this.currentWorkspaceBasePath = workspaceBasePath;
+        this.currentChatOrigin = origin != null ? origin : ChatOrigin.EMPTY;
         List<ToolResponseMessage.ToolResponse> allResponses = new ArrayList<>();
         List<GraphEventPublisher.GraphEvent> events = Collections.synchronizedList(new ArrayList<>());
         // RFC-052: accumulate full-text outputs from returnDirect tools so the
@@ -309,7 +335,7 @@ public class ToolExecutionExecutor {
             // 4. 分类: concurrencySafe
             boolean safe = isConcurrencySafe(toolName);
             preparedCalls.add(new PreparedToolCall(toolCall, callback, arguments, safe, allResponses.size(),
-                    conversationId, currentRequesterId, currentWorkspaceBasePath));
+                    conversationId, currentRequesterId, currentWorkspaceBasePath, currentChatOrigin));
             // 占位，Phase 2 填充
             allResponses.add(null);
         }
@@ -382,7 +408,13 @@ public class ToolExecutionExecutor {
 
         try {
             log.info("[ToolExecutor] Executing pre-approved tool: {}", toolName);
-            String result = callback.call(callArguments);
+            // RFC-063r §2.5: forward ToolContext so the pre-approved tool can
+            // still observe the originating ChatOrigin (channel/workspace).
+            ChatOrigin replayOrigin = currentChatOrigin != null ? currentChatOrigin : ChatOrigin.EMPTY;
+            replayOrigin = replayOrigin
+                    .withConversationId(conversationId)
+                    .withWorkspace(replayOrigin.workspaceId(), workspaceBasePath);
+            String result = callback.call(callArguments, replayOrigin.toToolContext());
             int rawLen = result != null ? result.length() : 0;
 
             // RFC-052: pre-approved tool may itself be returnDirect — in that
@@ -565,11 +597,19 @@ public class ToolExecutionExecutor {
                     toolName, pc.arguments != null && pc.arguments.length() > 200
                             ? pc.arguments.substring(0, 200) + "..." : pc.arguments);
 
-            // 注入工具执行上下文（供 VideoGenerateTool 等获取 conversationId / username / workspaceBasePath）
+            // RFC-063r §2.5 / PR-1 transition window: populate BOTH the explicit
+            // Spring AI ToolContext (preferred — read via ChatOrigin.from(ctx))
+            // AND the legacy ToolExecutionContext ThreadLocal so tools that have
+            // not yet migrated to ToolContext keep working unchanged.
             ToolExecutionContext.set(pc.conversationId, pc.requesterId, pc.workspaceBasePath);
             String result;
             try {
-                result = pc.callback.call(pc.arguments);
+                ChatOrigin runtimeOrigin = pc.origin != null ? pc.origin : ChatOrigin.EMPTY;
+                runtimeOrigin = runtimeOrigin
+                        .withConversationId(pc.conversationId)
+                        .withWorkspace(runtimeOrigin.workspaceId(), pc.workspaceBasePath);
+                ToolContext toolContext = runtimeOrigin.toToolContext();
+                result = pc.callback.call(pc.arguments, toolContext);
             } finally {
                 ToolExecutionContext.clear();
             }
@@ -781,7 +821,8 @@ public class ToolExecutionExecutor {
             int resultIndex,
             String conversationId,
             String requesterId,
-            String workspaceBasePath
+            String workspaceBasePath,
+            ChatOrigin origin
     ) {}
 
     private record ApprovalBarrier(String pendingId, String toolName) {}

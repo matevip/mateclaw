@@ -239,6 +239,38 @@ public class SlackChannelAdapter extends AbstractChannelAdapter {
     }
 
     /**
+     * RFC-063r §2.10: thread-aware proactive send. Reads
+     * {@link vip.mate.channel.DeliveryOptions#threadId()} (the Slack
+     * {@code thread_ts}) and posts into that thread when supplied; falls
+     * back to the legacy in-channel post when null.
+     */
+    @Override
+    public void proactiveSend(String targetId, String content,
+                              vip.mate.channel.DeliveryOptions options) {
+        if (options == null || options.threadId() == null || options.threadId().isBlank()) {
+            sendMessage(targetId, content);
+            return;
+        }
+        String botToken = getConfigString("bot_token");
+        if (botToken == null || content == null || content.isBlank()) {
+            return;
+        }
+        try {
+            String slackContent = convertToSlackMarkdown(content);
+            final String threadTs = options.threadId();
+            ChatPostMessageResponse response = slack.methods(botToken).chatPostMessage(req ->
+                    req.channel(targetId).text(slackContent).threadTs(threadTs));
+            if (!response.isOk()) {
+                log.warn("[slack] Failed to send threaded proactive message (thread_ts={}): {}",
+                        threadTs, response.getError());
+            }
+        } catch (IOException | SlackApiException e) {
+            log.error("[slack] Error sending threaded proactive message to {}: {}",
+                    targetId, e.getMessage());
+        }
+    }
+
+    /**
      * Webhook 回调处理（备用模式，Socket Mode 优先）
      */
     public Map<String, Object> handleWebhook(Map<String, Object> payload) {

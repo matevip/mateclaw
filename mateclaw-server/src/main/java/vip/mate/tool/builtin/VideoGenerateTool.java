@@ -2,8 +2,10 @@ package vip.mate.tool.builtin;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import vip.mate.system.model.SystemSettingsDTO;
 import vip.mate.system.service.SystemSettingService;
@@ -45,15 +47,18 @@ public class VideoGenerateTool {
             @ToolParam(description = "视频时长（秒），如 5 或 10，默认 5", required = false) Integer duration,
             @ToolParam(description = "参考图片 URL（图生视频模式）", required = false) String imageUrl,
             @ToolParam(description = "指定模型名称（可选）", required = false) String model,
-            @ToolParam(description = "查询指定任务 ID 的状态（status 模式时使用）", required = false) String taskId
+            @ToolParam(description = "查询指定任务 ID 的状态（status 模式时使用）", required = false) String taskId,
+            // RFC-063r §2.5: ToolContext is auto-injected by Spring AI MethodToolCallback
+            // and explicitly skipped by JsonSchemaGenerator — never visible to the LLM.
+            @Nullable ToolContext ctx
     ) {
         // 路由 action
         String normalizedAction = (action == null || action.isBlank()) ? "generate" : action.trim().toLowerCase();
 
         return switch (normalizedAction) {
             case "list" -> handleListAction();
-            case "status" -> handleStatusAction(taskId);
-            default -> handleGenerateAction(prompt, aspectRatio, duration, imageUrl, model);
+            case "status" -> handleStatusAction(taskId, ctx);
+            default -> handleGenerateAction(prompt, aspectRatio, duration, imageUrl, model, ctx);
         };
     }
 
@@ -92,8 +97,8 @@ public class VideoGenerateTool {
 
     // ==================== action=status ====================
 
-    private String handleStatusAction(String taskId) {
-        String conversationId = ToolExecutionContext.conversationId();
+    private String handleStatusAction(String taskId, @Nullable ToolContext ctx) {
+        String conversationId = ToolExecutionContext.conversationId(ctx);
 
         // 指定 taskId 查询
         if (taskId != null && !taskId.isBlank()) {
@@ -124,9 +129,9 @@ public class VideoGenerateTool {
     // ==================== action=generate ====================
 
     private String handleGenerateAction(String prompt, String aspectRatio, Integer duration,
-                                         String imageUrl, String model) {
-        String conversationId = ToolExecutionContext.conversationId();
-        String username = ToolExecutionContext.username();
+                                         String imageUrl, String model, @Nullable ToolContext ctx) {
+        String conversationId = ToolExecutionContext.conversationId(ctx);
+        String username = ToolExecutionContext.username(ctx);
 
         if (conversationId == null || conversationId.isBlank()) {
             return "错误：无法获取当前会话信息，请重试";

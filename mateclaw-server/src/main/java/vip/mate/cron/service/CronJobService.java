@@ -12,15 +12,12 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Service;
-import vip.mate.agent.AgentService;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.cron.model.CronJobDTO;
 import vip.mate.cron.model.CronJobEntity;
 import vip.mate.cron.repository.CronJobMapper;
 import vip.mate.exception.MateClawException;
-import vip.mate.memory.event.ConversationCompletionPublisher;
-import vip.mate.workspace.conversation.ConversationService;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -45,16 +42,22 @@ public class CronJobService implements ApplicationRunner {
 
     private final CronJobMapper cronJobMapper;
     private final AgentMapper agentMapper;
-    private final AgentService agentService;
-    private final ConversationService conversationService;
-    private final ConversationCompletionPublisher completionPublisher;
+    /**
+     * RFC-063r §2.7.1: cron-tick execution moved to {@link CronJobRunner}
+     * (separate bean) so the three-segment transactional model in
+     * {@link CronJobLifecycleService} works via Spring AOP — no more
+     * self-invocation footgun.
+     *
+     * <p>{@code agentService}, {@code conversationService}, and
+     * {@code completionPublisher} now live on {@link CronJobLifecycleService}
+     * and {@link CronJobRunner} so this service shrinks to CRUD + scheduler
+     * registration only.
+     */
+    private final CronJobRunner cronJobRunner;
 
     private final ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
     private final ConcurrentHashMap<Long, ScheduledFuture<?>> scheduledTasks = new ConcurrentHashMap<>();
     private final ReentrantLock schedulerLock = new ReentrantLock();
-
-    /** 定时任务触发时使用的系统用户标识 */
-    private static final String SYSTEM_USER = "system";
 
     // ==================== 初始化与销毁 ====================
 
@@ -88,9 +91,10 @@ public class CronJobService implements ApplicationRunner {
     // ==================== CRUD ====================
 
     public List<CronJobDTO> list() {
-        List<CronJobEntity> entities = cronJobMapper.selectList(
-                new LambdaQueryWrapper<CronJobEntity>()
-                        .orderByDesc(CronJobEntity::getCreateTime));
+        // RFC-063r §2.14: use the variant that aggregates the most-recent
+        // delivery_status from mate_cron_job_run so the list page can
+        // render the "最近投递" badge without a per-row N+1 query.
+        List<CronJobEntity> entities = cronJobMapper.selectListWithDeliveryStatus();
 
         // 批量加载 Agent 名称
         List<Long> agentIds = entities.stream()
@@ -107,7 +111,9 @@ public class CronJobService implements ApplicationRunner {
     }
 
     public CronJobDTO getById(Long id) {
-        CronJobEntity entity = cronJobMapper.selectById(id);
+        // RFC-063r §2.14: detail page shows lastDeliveryStatus too — same
+        // subquery shape, restricted to one id.
+        CronJobEntity entity = cronJobMapper.selectByIdWithDeliveryStatus(id);
         if (entity == null) {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
@@ -219,8 +225,19 @@ public class CronJobService implements ApplicationRunner {
         if (entity == null) {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
-        // 异步执行，不阻塞请求线程
-        scheduler.submit(() -> executeJob(entity));
+        // RFC-063r §2.7.1: delegate to CronJobRunner via Spring proxy so
+        // the three-segment REQUIRES_NEW transactions on
+        // CronJobLifecycleService work as advertised. "manual" trigger type
+        // distinguishes this from scheduler-driven runs in mate_cron_job_run.
+        scheduler.submit(() -> {
+            try {
+                cronJobRunner.executeJob(entity, "manual");
+            } finally {
+                // RFC-063r §2.7.1: bookkeep regardless of run outcome so a
+                // single bad run does not wedge all future ticks.
+                updateRunTimes(entity.getId(), entity.getCronExpression(), entity.getTimezone());
+            }
+        });
     }
 
     // ==================== 调度器管理 ====================
@@ -232,7 +249,16 @@ public class CronJobService implements ApplicationRunner {
             String springCron = toSpringCron(job.getCronExpression());
             ZoneId zoneId = ZoneId.of(job.getTimezone());
             CronTrigger trigger = new CronTrigger(springCron, zoneId);
-            ScheduledFuture<?> future = scheduler.schedule(() -> executeJob(job), trigger);
+            // RFC-063r §2.7.1: delegate to CronJobRunner — see runNow above.
+            // Bookkeeping (lastRunTime / nextRunTime) is wrapped in a finally
+            // so a failed run still advances the schedule.
+            ScheduledFuture<?> future = scheduler.schedule(() -> {
+                try {
+                    cronJobRunner.executeJob(job, "scheduled");
+                } finally {
+                    updateRunTimes(job.getId(), job.getCronExpression(), job.getTimezone());
+                }
+            }, trigger);
             scheduledTasks.put(job.getId(), future);
             log.info("[CronJob] Registered job {} ({}), cron={}, tz={}", job.getId(), job.getName(),
                     job.getCronExpression(), job.getTimezone());
@@ -249,46 +275,18 @@ public class CronJobService implements ApplicationRunner {
     }
 
     // ==================== 任务执行 ====================
-
-    private void executeJob(CronJobEntity job) {
-        String conversationId = "cron:" + job.getId();
-        try {
-            log.info("[CronJob] Executing job {} ({}), type={}", job.getId(), job.getName(), job.getTaskType());
-
-            // 确保会话存在（使用 SYSTEM_USER 作为定时触发的所有者标识，workspace 从 agent 获取）
-            AgentEntity cronAgent = agentMapper.selectById(job.getAgentId());
-            Long cronWorkspaceId = cronAgent != null ? cronAgent.getWorkspaceId() : 1L;
-            conversationService.getOrCreateConversation(conversationId, job.getAgentId(), SYSTEM_USER, cronWorkspaceId);
-
-            String userMessage;
-            String result;
-            if ("agent".equals(job.getTaskType())) {
-                userMessage = job.getRequestBody();
-                // 保存 user 消息
-                conversationService.saveMessage(conversationId, "user", userMessage);
-                result = agentService.execute(job.getAgentId(), userMessage, conversationId);
-            } else {
-                userMessage = job.getTriggerMessage();
-                // 保存 user 消息
-                conversationService.saveMessage(conversationId, "user", userMessage);
-                result = agentService.chat(job.getAgentId(), userMessage, conversationId);
-            }
-
-            // 保存 assistant 消息
-            conversationService.saveMessage(conversationId, "assistant", result);
-
-            // 发布对话完成事件
-            completionPublisher.publish(job.getAgentId(), conversationId, userMessage, result, "cron");
-
-            // 合并更新 lastRunTime + nextRunTime，单次 DB 写入
-            updateRunTimes(job.getId(), job.getCronExpression(), job.getTimezone());
-
-            log.info("[CronJob] Job {} executed successfully, result length={}", job.getId(),
-                    result != null ? result.length() : 0);
-        } catch (Exception e) {
-            log.error("[CronJob] Job {} execution failed: {}", job.getId(), e.getMessage(), e);
-        }
-    }
+    //
+    // RFC-063r §2.7.1: the executeJob body moved to CronJobRunner so the
+    // three-segment transactional model in CronJobLifecycleService runs
+    // through a Spring AOP proxy. CronJobService now only owns CRUD +
+    // scheduler registration, and the lastRunTime / nextRunTime bookkeeping
+    // hook below — which deliberately runs *after* the runner returns so a
+    // failed run still advances the next-run pointer (otherwise a single
+    // bad run wedges all future ticks).
+    //
+    // Both register() and runNow() now delegate to cronJobRunner.executeJob;
+    // see those methods above. The wrap below ensures next-run rolls forward
+    // regardless of run outcome.
 
     /**
      * 合并更新 lastRunTime 和 nextRunTime，单次 DB 写入替代原来的 4 次 selectById + updateById

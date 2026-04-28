@@ -3,8 +3,10 @@ package vip.mate.tool.builtin;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
@@ -57,7 +59,9 @@ public class ReadFileTool {
     public String read_file(
             @ToolParam(description = "Absolute or relative file path") String filePath,
             @ToolParam(description = "Start line number (1-based, inclusive). Omit to start from line 1", required = false) Integer startLine,
-            @ToolParam(description = "End line number (1-based, inclusive). Omit to read to EOF or truncation limit", required = false) Integer endLine) {
+            @ToolParam(description = "End line number (1-based, inclusive). Omit to read to EOF or truncation limit", required = false) Integer endLine,
+            // RFC-063r §2.5: hidden from LLM by JsonSchemaGenerator.
+            @Nullable ToolContext ctx) {
 
         JSONObject result = new JSONObject();
         result.set("filePath", filePath);
@@ -65,7 +69,9 @@ public class ReadFileTool {
         try {
             Path path;
             try {
-                path = vip.mate.tool.guard.WorkspacePathGuard.validatePath(filePath);
+                // RFC-063r §2.5: forward ToolContext so workspace boundary
+                // honors ChatOrigin.workspaceBasePath when available.
+                path = vip.mate.tool.guard.WorkspacePathGuard.validatePath(filePath, ctx);
             } catch (IllegalArgumentException e) {
                 // Sandbox rejected the literal path. The LLM may have hallucinated
                 // a Linux-style path (e.g. /app/Dockerfile) for a chat-upload that

@@ -1,6 +1,9 @@
 package vip.mate.tool.guard;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.lang.Nullable;
+import vip.mate.agent.context.ChatOrigin;
 import vip.mate.tool.builtin.ToolExecutionContext;
 
 import java.io.IOException;
@@ -33,9 +36,19 @@ public final class WorkspacePathGuard {
      * @throws IllegalArgumentException 路径不在允许范围内
      */
     public static Path validatePath(String rawPath) {
+        return validatePath(rawPath, null);
+    }
+
+    /**
+     * RFC-063r §2.5: ToolContext-aware overload. Reads the workspace base path
+     * from the explicit {@link ChatOrigin} when present; falls back to the
+     * legacy {@link ToolExecutionContext} ThreadLocal during the PR-1
+     * transition window.
+     */
+    public static Path validatePath(String rawPath, @Nullable ToolContext ctx) {
         Path normalized = Paths.get(rawPath).toAbsolutePath().normalize();
 
-        String basePath = ToolExecutionContext.workspaceBasePath();
+        String basePath = resolveBasePath(ctx);
         if (basePath == null || basePath.isBlank()) {
             return normalized; // 未配置活动目录，不限制
         }
@@ -72,10 +85,35 @@ public final class WorkspacePathGuard {
      * @return 活动目录 Path，未配置时返回 null
      */
     public static Path getWorkingDirectory() {
-        String basePath = ToolExecutionContext.workspaceBasePath();
+        return getWorkingDirectory(null);
+    }
+
+    /**
+     * RFC-063r §2.5: ToolContext-aware variant — prefer the explicit
+     * {@link ChatOrigin} workspaceBasePath when available.
+     */
+    public static Path getWorkingDirectory(@Nullable ToolContext ctx) {
+        String basePath = resolveBasePath(ctx);
         if (basePath == null || basePath.isBlank()) {
             return null;
         }
         return Paths.get(basePath).toAbsolutePath().normalize();
+    }
+
+    /**
+     * Resolve the active workspace base path. Order of preference:
+     * <ol>
+     *   <li>ChatOrigin from ToolContext (RFC-063r §2.5)</li>
+     *   <li>Legacy {@link ToolExecutionContext} ThreadLocal (PR-1 transition)</li>
+     * </ol>
+     */
+    private static String resolveBasePath(@Nullable ToolContext ctx) {
+        if (ctx != null) {
+            ChatOrigin origin = ChatOrigin.from(ctx);
+            if (origin.workspaceBasePath() != null && !origin.workspaceBasePath().isBlank()) {
+                return origin.workspaceBasePath();
+            }
+        }
+        return ToolExecutionContext.workspaceBasePath();
     }
 }

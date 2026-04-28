@@ -7,6 +7,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
+import vip.mate.agent.context.ChatOrigin;
+import vip.mate.agent.context.ChatOriginHolder;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.exception.MateClawException;
@@ -98,31 +100,67 @@ public class AgentService {
     // ==================== 运行时入口 ====================
 
     public String chat(Long agentId, String message, String conversationId) {
+        return chat(agentId, message, conversationId, ChatOrigin.EMPTY);
+    }
+
+    /**
+     * RFC-063r §2.5: preferred entry — accepts the originating
+     * {@link ChatOrigin} so channel binding and workspace context propagate
+     * down to {@code @Tool} methods via Spring AI {@link org.springframework.ai.chat.model.ToolContext}.
+     */
+    public String chat(Long agentId, String message, String conversationId, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, message);
         BaseAgent agent = getOrBuildAgent(agentId);
-        return withLifecycleSync(agentId, message, conversationId,
-                (msg, convId) -> agent.chat(msg, convId));
+        ChatOriginHolder.set(origin != null ? origin : ChatOrigin.EMPTY);
+        try {
+            return withLifecycleSync(agentId, message, conversationId,
+                    (msg, convId) -> agent.chat(msg, convId));
+        } finally {
+            ChatOriginHolder.clear();
+        }
     }
 
     public Flux<String> chatStream(Long agentId, String message, String conversationId) {
+        return chatStream(agentId, message, conversationId, ChatOrigin.EMPTY);
+    }
+
+    public Flux<String> chatStream(Long agentId, String message, String conversationId, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, message);
         BaseAgent agent = getOrBuildAgent(agentId);
-        return withLifecycleFlux(agentId, message, conversationId,
-                (msg, convId) -> agent.chatStream(msg, convId),
-                chunk -> chunk);
+        // Capture the origin into a request-scoped holder; cleared on Flux
+        // termination so the next reactive subscriber doesn't inherit stale state.
+        ChatOrigin captured = origin != null ? origin : ChatOrigin.EMPTY;
+        return Flux.defer(() -> {
+            ChatOriginHolder.set(captured);
+            return withLifecycleFlux(agentId, message, conversationId,
+                    (msg, convId) -> agent.chatStream(msg, convId),
+                    chunk -> chunk);
+        }).doFinally(signal -> ChatOriginHolder.clear());
     }
 
     public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId) {
-        return chatStructuredStream(agentId, message, conversationId, "", null);
+        return chatStructuredStream(agentId, message, conversationId, "", null, ChatOrigin.EMPTY);
     }
 
     public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId,
                                                    String requesterId) {
-        return chatStructuredStream(agentId, message, conversationId, requesterId, null);
+        return chatStructuredStream(agentId, message, conversationId, requesterId, null, ChatOrigin.EMPTY);
+    }
+
+    public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId,
+                                                   String requesterId, ChatOrigin origin) {
+        return chatStructuredStream(agentId, message, conversationId, requesterId, null, origin);
     }
 
     public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId,
                                                    String requesterId, String thinkingLevel) {
+        return chatStructuredStream(agentId, message, conversationId, requesterId, thinkingLevel,
+                ChatOrigin.EMPTY);
+    }
+
+    public Flux<StreamDelta> chatStructuredStream(Long agentId, String message, String conversationId,
+                                                   String requesterId, String thinkingLevel,
+                                                   ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, message);
         BaseAgent agent = getOrBuildAgent(agentId);
 
@@ -139,27 +177,45 @@ public class AgentService {
             }
         }
 
+        ChatOrigin captured = origin != null ? origin : ChatOrigin.EMPTY;
         if (agent instanceof StructuredStreamCapable capable) {
-            return withLifecycleFlux(agentId, message, conversationId,
-                    (msg, convId) -> capable.chatStructuredStream(msg, convId,
-                            requesterId != null ? requesterId : "")
-                            .doFinally(signal -> ThinkingLevelHolder.clear()),
-                    StreamDelta::content);
+            return Flux.defer(() -> {
+                        ChatOriginHolder.set(captured);
+                        return withLifecycleFlux(agentId, message, conversationId,
+                                (msg, convId) -> capable.chatStructuredStream(msg, convId,
+                                                requesterId != null ? requesterId : "")
+                                        .doFinally(signal -> ThinkingLevelHolder.clear()),
+                                StreamDelta::content);
+                    })
+                    .doFinally(signal -> ChatOriginHolder.clear());
         }
 
         // 降级：不支持结构化流的 Agent，包装为纯内容流
         ThinkingLevelHolder.clear();
-        return withLifecycleFlux(agentId, message, conversationId,
-                (msg, convId) -> agent.chatStream(msg, convId)
-                        .map(chunk -> new StreamDelta(chunk, null)),
-                StreamDelta::content);
+        return Flux.defer(() -> {
+                    ChatOriginHolder.set(captured);
+                    return withLifecycleFlux(agentId, message, conversationId,
+                            (msg, convId) -> agent.chatStream(msg, convId)
+                                    .map(chunk -> new StreamDelta(chunk, null)),
+                            StreamDelta::content);
+                })
+                .doFinally(signal -> ChatOriginHolder.clear());
     }
 
     public String execute(Long agentId, String goal, String conversationId) {
+        return execute(agentId, goal, conversationId, ChatOrigin.EMPTY);
+    }
+
+    public String execute(Long agentId, String goal, String conversationId, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, goal);
         BaseAgent agent = getOrBuildAgent(agentId);
-        return withLifecycleSync(agentId, goal, conversationId,
-                (msg, convId) -> agent.execute(msg, convId));
+        ChatOriginHolder.set(origin != null ? origin : ChatOrigin.EMPTY);
+        try {
+            return withLifecycleSync(agentId, goal, conversationId,
+                    (msg, convId) -> agent.execute(msg, convId));
+        } finally {
+            ChatOriginHolder.clear();
+        }
     }
 
     /**
@@ -173,10 +229,20 @@ public class AgentService {
      */
     public String chatWithReplay(Long agentId, String userMessage, String conversationId,
                                   String toolCallPayload) {
+        return chatWithReplay(agentId, userMessage, conversationId, toolCallPayload, ChatOrigin.EMPTY);
+    }
+
+    public String chatWithReplay(Long agentId, String userMessage, String conversationId,
+                                  String toolCallPayload, ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, userMessage);
         BaseAgent agent = getOrBuildAgent(agentId);
-        return withLifecycleSync(agentId, userMessage, conversationId,
-                (msg, convId) -> agent.chatWithReplay(msg, convId, toolCallPayload));
+        ChatOriginHolder.set(origin != null ? origin : ChatOrigin.EMPTY);
+        try {
+            return withLifecycleSync(agentId, userMessage, conversationId,
+                    (msg, convId) -> agent.chatWithReplay(msg, convId, toolCallPayload));
+        } finally {
+            ChatOriginHolder.clear();
+        }
     }
 
     /**
@@ -184,17 +250,29 @@ public class AgentService {
      */
     public Flux<StreamDelta> chatWithReplayStream(Long agentId, String userMessage, String conversationId,
                                                    String toolCallPayload) {
-        return chatWithReplayStream(agentId, userMessage, conversationId, toolCallPayload, "");
+        return chatWithReplayStream(agentId, userMessage, conversationId, toolCallPayload, "", ChatOrigin.EMPTY);
     }
 
     public Flux<StreamDelta> chatWithReplayStream(Long agentId, String userMessage, String conversationId,
                                                    String toolCallPayload, String requesterId) {
+        return chatWithReplayStream(agentId, userMessage, conversationId, toolCallPayload, requesterId,
+                ChatOrigin.EMPTY);
+    }
+
+    public Flux<StreamDelta> chatWithReplayStream(Long agentId, String userMessage, String conversationId,
+                                                   String toolCallPayload, String requesterId,
+                                                   ChatOrigin origin) {
         memoryRecallTracker.trackRecalls(agentId, userMessage);
         BaseAgent agent = getOrBuildAgent(agentId);
-        return withLifecycleFlux(agentId, userMessage, conversationId,
-                (msg, convId) -> agent.chatWithReplayStream(msg, convId, toolCallPayload,
-                        requesterId != null ? requesterId : ""),
-                StreamDelta::content);
+        ChatOrigin captured = origin != null ? origin : ChatOrigin.EMPTY;
+        return Flux.defer(() -> {
+                    ChatOriginHolder.set(captured);
+                    return withLifecycleFlux(agentId, userMessage, conversationId,
+                            (msg, convId) -> agent.chatWithReplayStream(msg, convId, toolCallPayload,
+                                    requesterId != null ? requesterId : ""),
+                            StreamDelta::content);
+                })
+                .doFinally(signal -> ChatOriginHolder.clear());
     }
 
     public AgentState getAgentState(Long agentId) {

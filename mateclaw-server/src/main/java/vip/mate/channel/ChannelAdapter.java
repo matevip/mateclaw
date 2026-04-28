@@ -114,6 +114,19 @@ public interface ChannelAdapter {
     }
 
     /**
+     * RFC-063r §2.10: extended overload that accepts a
+     * {@link DeliveryOptions} Parameter Object carrying optional hints
+     * (thread id, multi-bot account id, future ext fields).
+     *
+     * <p>Default implementation delegates to {@link #proactiveSend(String, String)},
+     * dropping hints — concrete adapters (Slack, Telegram) override this
+     * variant to read {@code threadId} and route into the threading API.
+     */
+    default void proactiveSend(String targetId, String content, DeliveryOptions options) {
+        proactiveSend(targetId, content);
+    }
+
+    /**
      * 当前渠道是否支持主动推送
      *
      * @return true 表示支持 proactiveSend

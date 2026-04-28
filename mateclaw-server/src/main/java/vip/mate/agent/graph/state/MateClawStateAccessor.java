@@ -3,6 +3,7 @@ package vip.mate.agent.graph.state;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import org.springframework.ai.chat.messages.Message;
 import vip.mate.agent.GraphEventPublisher;
+import vip.mate.agent.context.ChatOrigin;
 import vip.mate.agent.graph.NodeStreamingChatHelper;
 
 import java.util.*;
@@ -212,6 +213,17 @@ public final class MateClawStateAccessor {
         return state.value(FORCED_TOOL_CALL, "");
     }
 
+    // ===== RFC-063r: ChatOrigin =====
+
+    /**
+     * RFC-063r §2.5: the {@link ChatOrigin} written into graph state by the
+     * top-level agent. Returns {@link ChatOrigin#EMPTY} when the entry path
+     * did not supply one (e.g., legacy callers using the bridge overloads).
+     */
+    public ChatOrigin chatOrigin() {
+        return state.<ChatOrigin>value(CHAT_ORIGIN).orElse(ChatOrigin.EMPTY);
+    }
+
     // ===== Token Usage =====
 
     public int promptTokens() {
@@ -396,6 +408,11 @@ public final class MateClawStateAccessor {
         // ---- 审批重放 ----
         public OutputBuilder forcedToolCall(String json) {
             return put(FORCED_TOOL_CALL, json);
+        }
+
+        // ---- RFC-063r: ChatOrigin ----
+        public OutputBuilder chatOrigin(ChatOrigin origin) {
+            return put(CHAT_ORIGIN, origin);
         }
 
         // ---- Token Usage ----

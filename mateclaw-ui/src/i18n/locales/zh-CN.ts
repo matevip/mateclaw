@@ -1442,6 +1442,15 @@ export default {
       lastRun: '上次执行',
       enabled: '启用',
       actions: '操作',
+      // RFC-063r §2.14: 列表页"最近投递"列
+      lastDelivery: '最近投递',
+    },
+    // RFC-063r §2.14: delivery_status 状态机展示
+    lastDelivery: {
+      none: '无投递',
+      pending: '投递中',
+      delivered: '已送达',
+      not_delivered: '投递失败',
     },
     taskTypes: { text: '文字消息', agent: 'Agent 目标' },
     cronTypes: { hourly: '每小时', daily: '每天', weekly: '每周', custom: '自定义' },

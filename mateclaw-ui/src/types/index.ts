@@ -786,4 +786,12 @@ export interface CronJob {
   lastRunTime?: string
   createTime?: string
   updateTime?: string
+  // RFC-063r §2.9 / §2.14: channel binding + most-recent delivery snapshot.
+  // channelId / deliveryConfig: round-trippable on create/update.
+  // lastDeliveryStatus / lastDeliveryError: read-only, populated by
+  // selectListWithDeliveryStatus / selectByIdWithDeliveryStatus on the backend.
+  channelId?: number | null
+  deliveryConfig?: { targetId?: string | null; threadId?: string | null; accountId?: string | null } | null
+  lastDeliveryStatus?: 'NONE' | 'PENDING' | 'DELIVERED' | 'NOT_DELIVERED'
+  lastDeliveryError?: string | null
 }

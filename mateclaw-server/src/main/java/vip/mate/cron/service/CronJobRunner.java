@@ -1,0 +1,152 @@
+package vip.mate.cron.service;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.stereotype.Component;
+import vip.mate.agent.AgentService;
+import vip.mate.agent.context.ChatOrigin;
+import vip.mate.cron.CronChatOriginFactory;
+import vip.mate.cron.model.CronJobEntity;
+import vip.mate.dashboard.model.CronJobRunEntity;
+
+/**
+ * RFC-063r §2.7.1: scheduler-facing orchestrator that decomposes one cron
+ * tick into the three transactional segments owned by
+ * {@link CronJobLifecycleService}, with the long-running LLM call sitting
+ * <em>outside</em> any transaction.
+ *
+ * <p><b>This class must NOT be annotated {@code @Transactional}</b> — see
+ * RFC-063r §5.2:
+ * <ul>
+ *   <li>The class is the entry point invoked by the
+ *       {@code ThreadPoolTaskScheduler}'s lambda; the LLM HTTP call inside
+ *       {@link #runAgent} is seconds-to-minutes long and must not hold a DB
+ *       connection.</li>
+ *   <li>Self-invocation in the legacy {@code CronJobService} silently
+ *       skipped {@code @Transactional}; that pattern is forbidden here.</li>
+ *   <li>An {@code ArchUnit} test (see PR-3) pins this rule so a future
+ *       regression fails CI.</li>
+ * </ul>
+ *
+ * <p>The three transactional segments live on
+ * {@link CronJobLifecycleService} (a separate bean), so cross-bean calls
+ * route through Spring AOP and {@code REQUIRES_NEW} works as advertised.
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class CronJobRunner {
+
+    private final CronJobLifecycleService lifecycle;
+    private final AgentService agentService;
+    private final CronChatOriginFactory originFactory;
+
+    /**
+     * Scheduler-facing entry. Runs three logical segments:
+     * <ol>
+     *   <li>T1 — {@link CronJobLifecycleService#startRun} commits run row +
+     *       user message.</li>
+     *   <li>Untransacted — {@link #runAgent} performs the LLM call.</li>
+     *   <li>T2 — {@link CronJobLifecycleService#finishRunAndPublish} commits
+     *       assistant message and publishes the completion / delivery
+     *       events. {@code AFTER_COMMIT} listeners fire from a fresh DB
+     *       connection, so {@link CronJobRunEntity}'s persisted state is
+     *       always visible by the time delivery resolves a strategy.</li>
+     * </ol>
+     */
+    public void executeJob(CronJobEntity job) {
+        executeJob(job, /* triggerType */ "scheduled");
+    }
+
+    /** Variant with explicit trigger type — used by {@code runNow} (manual). */
+    public void executeJob(CronJobEntity job, String triggerType) {
+        if (job == null) {
+            log.warn("[CronRunner] executeJob called with null job — ignoring");
+            return;
+        }
+        String userMessage = "agent".equals(job.getTaskType())
+                ? job.getRequestBody()
+                : job.getTriggerMessage();
+
+        // T1 — short tx
+        CronJobRunEntity run;
+        try {
+            run = lifecycle.startRun(job, userMessage, triggerType);
+        } catch (Exception e) {
+            log.error("[CronRunner] T1 startRun failed for job {}: {}", job.getId(), e.getMessage(), e);
+            return;
+        }
+
+        // No-tx segment — long LLM call. RFC §5.2 hard rule: must not hold
+        // any DB connection during this call.
+        AssistantMessage result;
+        try {
+            ChatOrigin origin = originFactory.from(job, "cron:" + job.getId());
+            result = runAgent(job, userMessage, origin);
+        } catch (Exception e) {
+            log.error("[CronRunner] runAgent failed for job {}: {}", job.getId(), e.getMessage(), e);
+            try {
+                lifecycle.markRunFailed(run, e);
+            } catch (Exception markErr) {
+                // CronRunStaleCleanup will sweep status='running' rows older than 30 min.
+                log.warn("[CronRunner] markRunFailed itself failed for run {}: {} (stale-cleanup will recover)",
+                        run.getId(), markErr.getMessage());
+            }
+            return;
+        }
+
+        // T2 — short tx
+        try {
+            lifecycle.finishRunAndPublish(job, run, userMessage, result);
+        } catch (Exception e) {
+            log.error("[CronRunner] T2 finishRunAndPublish failed for job {}: {}", job.getId(), e.getMessage(), e);
+            try {
+                lifecycle.markRunFailed(run, e);
+            } catch (Exception markErr) {
+                log.warn("[CronRunner] markRunFailed after T2 failure also failed for run {}: {}",
+                        run.getId(), markErr.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Runs the agent with the cron-derived {@link ChatOrigin} and the
+     * RFC-063r §2.13 system-prompt guard prepended when the cron is bound to
+     * a channel — fixes the Issue #25 LLM hallucination ("install
+     * mateclaw cli to send to wechat") by telling the model that delivery is
+     * framework-handled.
+     */
+    private AssistantMessage runAgent(CronJobEntity job, String userMessage, ChatOrigin origin) {
+        String guarded = wrapWithDeliveryGuard(userMessage, origin);
+        String text = "agent".equals(job.getTaskType())
+                ? agentService.execute(job.getAgentId(), guarded, "cron:" + job.getId(), origin)
+                : agentService.chat(job.getAgentId(), guarded, "cron:" + job.getId(), origin);
+        return new AssistantMessage(text != null ? text : "");
+    }
+
+    /**
+     * RFC-063r §2.13: when the cron is bound to a channel, prepend an
+     * explicit system note telling the LLM that delivery is handled by the
+     * framework. Without this, the model invents tools ("call CLI to send
+     * to wechat") and surfaces "command not found" style errors to users
+     * (Issue #25 second symptom).
+     *
+     * <p>Web-origin crons (no channelId) bypass the wrapper so the
+     * pre-RFC behavior is preserved.
+     */
+    static String wrapWithDeliveryGuard(String userMessage, ChatOrigin origin) {
+        String body = userMessage != null ? userMessage : "";
+        if (origin == null || origin.channelId() == null) {
+            return body;
+        }
+        return """
+                [系统说明]
+                本次执行由定时任务触发，结果将由系统自动投递回原渠道，
+                你只需直接给出最终回复内容，不要尝试调用 CLI / shell /
+                "发送到微信"等工具——这些操作由框架完成。
+
+                [用户原始消息]
+                """ + body;
+    }
+}

@@ -410,6 +410,19 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
         inputs.put(RUNTIME_MODEL_NAME, modelName != null ? modelName : "");
         inputs.put(RUNTIME_PROVIDER_ID, runtimeProviderId != null ? runtimeProviderId : "");
         inputs.put(TRACE_ID, UUID.randomUUID().toString().substring(0, 8));
+
+        // RFC-063r §2.5: enrich the originating ChatOrigin with this agent's id
+        // and workspace, then write it into graph state so ActionNode +
+        // StepExecutionNode can forward it to ToolExecutionExecutor → ToolContext.
+        vip.mate.agent.context.ChatOrigin origin = vip.mate.agent.context.ChatOriginHolder.get();
+        Long parsedAgentIdForOrigin = null;
+        try { parsedAgentIdForOrigin = agentId != null ? Long.valueOf(agentId) : null; } catch (Exception ignored) {}
+        if (parsedAgentIdForOrigin != null) {
+            origin = origin.withAgent(parsedAgentIdForOrigin);
+        }
+        origin = origin.withConversationId(conversationId)
+                .withWorkspace(origin.workspaceId(), workspaceBasePath);
+        inputs.put(CHAT_ORIGIN, origin);
         return inputs;
     }
 

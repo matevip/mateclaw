@@ -5,9 +5,12 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
+import vip.mate.agent.context.ChatOrigin;
 import vip.mate.cron.model.CronJobDTO;
 import vip.mate.cron.service.CronJobService;
 
@@ -38,12 +41,21 @@ public class CronJobTool {
             @ToolParam(description = "Task name, e.g. 'Daily AI News Summary'") String name,
             @ToolParam(description = "5-field cron expression: minute hour day month weekday") String cronExpression,
             @ToolParam(description = "Message to send when the task triggers, e.g. 'Search for the latest AI news and summarize'") String triggerMessage,
-            @ToolParam(description = "Timezone, default Asia/Shanghai. Examples: UTC, America/New_York", required = false) String timezone) {
+            @ToolParam(description = "Timezone, default Asia/Shanghai. Examples: UTC, America/New_York", required = false) String timezone,
+            // RFC-063r §2.4: ToolContext is *not* exposed to the LLM —
+            // JsonSchemaGenerator skips it (Spring AI 1.1 framework convention)
+            @Nullable ToolContext ctx) {
 
         try {
-            // Resolve current agent ID from conversation context
-            String conversationId = ToolExecutionContext.conversationId();
-            Long agentId = resolveAgentId(conversationId);
+            // RFC-063r §2.5: prefer the explicit ChatOrigin (channelId / channelTarget
+            // / agentId all live there). Fall back to the legacy ToolExecutionContext
+            // ThreadLocal during the PR-1 transition window so callers that have not
+            // yet migrated keep working.
+            ChatOrigin origin = ChatOrigin.from(ctx);
+            String conversationId = origin.conversationId() != null && !origin.conversationId().isEmpty()
+                    ? origin.conversationId()
+                    : ToolExecutionContext.conversationId();
+            Long agentId = origin.agentId() != null ? origin.agentId() : resolveAgentId(conversationId);
 
             CronJobDTO dto = new CronJobDTO();
             dto.setName(name);
@@ -53,6 +65,12 @@ public class CronJobTool {
             dto.setAgentId(agentId);
             dto.setTaskType("text");
             dto.setEnabled(true);
+
+            // RFC-063r §2.4 / PR-2: when the originating context carries a
+            // channelId, the cron job inherits the binding so its results can
+            // be delivered back to the same channel. Fields are wired via
+            // reflection until PR-2 adds them to CronJobDTO + CronJobEntity.
+            propagateChannelBinding(dto, origin);
 
             CronJobDTO created = cronJobService.create(dto);
 
@@ -165,5 +183,18 @@ public class CronJobTool {
         result.set("success", false);
         result.set("error", message);
         return JSONUtil.toJsonPrettyStr(result);
+    }
+
+    /**
+     * RFC-063r §2.4: propagate the originating channel binding into the cron
+     * job DTO so PR-3's delivery dispatcher can route results back to the
+     * originating channel.
+     */
+    private void propagateChannelBinding(CronJobDTO dto, ChatOrigin origin) {
+        if (origin == null || origin.channelId() == null) return;
+        dto.setChannelId(origin.channelId());
+        if (origin.channelTarget() != null) {
+            dto.setDeliveryConfig(vip.mate.cron.model.DeliveryConfig.from(origin.channelTarget()));
+        }
     }
 }

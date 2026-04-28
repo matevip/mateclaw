@@ -5,10 +5,13 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import vip.mate.agent.AgentService;
+import vip.mate.agent.context.ChatOrigin;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.channel.web.ChatStreamTracker;
@@ -76,7 +79,12 @@ public class DelegateAgentTool {
             For multiple parallel tasks, use delegateParallel instead.""")
     public String delegateToAgent(
             @ToolParam(description = "Target Agent name (exact match)") String agentName,
-            @ToolParam(description = "Task description with complete context information") String task) {
+            @ToolParam(description = "Task description with complete context information") String task,
+            // RFC-063r §2.5 改动点 5: parent ChatOrigin (channel binding /
+            // workspace) propagates into the delegated child so a sub-agent
+            // creating a cron job still binds back to the originating channel.
+            // Hidden from the LLM by JsonSchemaGenerator.
+            @Nullable ToolContext ctx) {
 
         if (agentName == null || agentName.isBlank()) {
             return "[错误] 请指定目标 Agent 名称。" + availableAgentsHint();
@@ -111,8 +119,11 @@ public class DelegateAgentTool {
         }
         Runnable stopRelay = hasParent ? registerRelay(childConversationId, parentConversationId, target.getName()) : null;
 
-        // Execute child agent
-        ChildResult result = runSingleChild(0, target, task, parentConversationId, childConversationId);
+        // Execute child agent — RFC-063r §2.5 改动点 5: inherit the parent
+        // ChatOrigin and only swap the agentId, so channel binding /
+        // workspace / requester all flow into the child.
+        ChatOrigin parentOrigin = ChatOrigin.from(ctx);
+        ChildResult result = runSingleChild(0, target, task, parentConversationId, childConversationId, parentOrigin);
 
         // Cleanup relay, then broadcast final result
         if (stopRelay != null) stopRelay.run();
@@ -133,7 +144,9 @@ public class DelegateAgentTool {
             Input is a JSON array: [{"agentName":"Agent名称","task":"任务描述"}, ...]""")
     public String delegateParallel(
             @ToolParam(description = "JSON array of tasks: [{\"agentName\":\"X\",\"task\":\"Y\"}, ...]")
-            String tasksJson) {
+            String tasksJson,
+            // RFC-063r §2.5 改动点 5: hidden from LLM, used to inherit ChatOrigin into children.
+            @Nullable ToolContext ctx) {
 
         // 1. Parse task list
         List<Map<String, String>> tasks;
@@ -206,9 +219,14 @@ public class DelegateAgentTool {
         long startTime = System.currentTimeMillis();
         Map<Integer, CompletableFuture<ChildResult>> futures = new LinkedHashMap<>();
 
+        // RFC-063r §2.5 改动点 5: capture parent origin once on this thread,
+        // then hand it to each child future — the worker virtual threads
+        // can't re-read the ToolContext (no parameter scope), so we close
+        // over the captured origin.
+        ChatOrigin parentOriginParallel = ChatOrigin.from(ctx);
         for (PreparedChild p : prepared) {
             CompletableFuture<ChildResult> future = CompletableFuture.supplyAsync(
-                    () -> runSingleChild(p.index, p.agent, p.task, parentConversationId, p.childConvId),
+                    () -> runSingleChild(p.index, p.agent, p.task, parentConversationId, p.childConvId, parentOriginParallel),
                     DELEGATION_EXECUTOR);
 
             // Broadcast per-child completion as soon as each child finishes
@@ -385,11 +403,18 @@ public class DelegateAgentTool {
      * truncated length, making "blank_success" detection unreliable.
      */
     private ChildResult runSingleChild(int taskIndex, AgentEntity target, String task,
-                                        String parentConversationId, String childConversationId) {
+                                        String parentConversationId, String childConversationId,
+                                        ChatOrigin parentOrigin) {
         DelegationContext.enter(parentConversationId, CHILD_DENIED_TOOLS);
         try {
             long startTime = System.currentTimeMillis();
-            String rawResult = agentService.chat(target.getId(), task, childConversationId);
+            // RFC-063r §2.5 改动点 5: inherit parent origin, swap agentId
+            // so child reads correct identity from ToolContext while keeping
+            // channelId / channelTarget / workspace context intact.
+            ChatOrigin childOrigin = (parentOrigin != null ? parentOrigin : ChatOrigin.EMPTY)
+                    .withAgent(target.getId())
+                    .withConversationId(childConversationId);
+            String rawResult = agentService.chat(target.getId(), task, childConversationId, childOrigin);
             long durationMs = System.currentTimeMillis() - startTime;
             // Measure lengths before truncation so ChildResult carries accurate metadata.
             return ChildResult.ofSuccess(taskIndex, target.getName(), rawResult, durationMs,

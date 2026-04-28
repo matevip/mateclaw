@@ -65,9 +65,13 @@ public class ActionNode implements NodeAction {
         // 获取工作区活动目录
         String workspaceBasePath = state.value(MateClawStateKeys.WORKSPACE_BASE_PATH, "");
 
+        // RFC-063r §2.5: read the originating ChatOrigin from graph state and
+        // forward it into the executor — tools see it via Spring AI ToolContext.
+        vip.mate.agent.context.ChatOrigin origin = accessor.chatOrigin();
+
         // 委托 ToolExecutionExecutor 执行（两阶段：顺序 Guard + 分段并发执行）
         ToolExecutionExecutor.ToolExecutionResult result = executor.execute(
-                toolCalls, conversationId, agentId, isReplay, requesterId, workspaceBasePath);
+                toolCalls, conversationId, agentId, isReplay, requesterId, workspaceBasePath, origin);
 
         ToolResponseMessage toolResponseMessage = ToolResponseMessage.builder()
                 .responses(result.responses())

@@ -23,6 +23,7 @@
                 <th>{{ t('cronJobs.columns.name') }}</th>
                 <th>{{ t('cronJobs.columns.cron') }}</th>
                 <th>{{ t('tokenUsage.date') }}</th>
+                <th>{{ t('cronJobs.columns.lastDelivery') }}</th>
                 <th>{{ t('cronJobs.columns.enabled') }}</th>
                 <th>{{ t('cronJobs.columns.actions') }}</th>
               </tr>
@@ -52,6 +53,14 @@
                     <span v-else class="time-empty">-</span>
                     <span v-if="job.lastRunTime" class="time-subtext" :title="`${t('cronJobs.columns.lastRun')}: ${formatTime(job.lastRunTime)}`">{{ t('cronJobs.columns.lastRun') }}: {{ formatTime(job.lastRunTime) }}</span>
                   </div>
+                </td>
+                <td>
+                  <!-- RFC-063r §2.14: most-recent delivery status badge.
+                       hover surfaces the error detail when not delivered. -->
+                  <span class="delivery-badge" :class="'delivery-' + (job.lastDeliveryStatus || 'NONE').toLowerCase()"
+                        :title="job.lastDeliveryError || t('cronJobs.lastDelivery.' + (job.lastDeliveryStatus || 'NONE').toLowerCase())">
+                    {{ t('cronJobs.lastDelivery.' + (job.lastDeliveryStatus || 'NONE').toLowerCase()) }}
+                  </span>
                 </td>
                 <td>
                   <label class="toggle-switch">
@@ -87,7 +96,7 @@
                 </td>
               </tr>
               <tr v-if="store.jobs.length === 0">
-                <td colspan="5" class="empty-row">
+                <td colspan="6" class="empty-row">
                   <div class="empty-state">
                     <span class="empty-icon">&#9201;</span>
                     <p>{{ t('cronJobs.noJobs') }}</p>
@@ -652,6 +661,21 @@ function formatTime(datetime: string | undefined): string {
   color: var(--mc-text-tertiary);
 }
 .time-empty { color: var(--mc-text-tertiary); }
+
+/* RFC-063r §2.14: delivery-status badge — neutral / blue / green / red. */
+.delivery-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.delivery-none { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
+.delivery-pending { background: rgba(59, 130, 246, 0.12); color: rgb(59, 130, 246); }
+.delivery-delivered { background: rgba(34, 197, 94, 0.12); color: rgb(34, 197, 94); }
+.delivery-not_delivered { background: rgba(239, 68, 68, 0.12); color: rgb(239, 68, 68); }
 
 .toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; cursor: pointer; }
 .toggle-switch input { opacity: 0; width: 0; height: 0; }

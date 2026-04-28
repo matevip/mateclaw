@@ -283,8 +283,18 @@ public class ChatController {
                     String replayPrompt = "继续执行已批准的工具调用。";
 
                     streamTracker.incrementFlux(conversationId);
+                    // RFC-063r §2.12: prefer the persisted Memento snapshot
+                    // (covers cross-restart approval where the original channel
+                    // is gone) and fall back to a fresh web-origin
+                    // ChatOrigin when none was captured.
+                    vip.mate.agent.context.ChatOrigin replayOrigin =
+                            approvalService.restoreChatOrigin(finalConsumed.getChatOrigin());
+                    if (replayOrigin == vip.mate.agent.context.ChatOrigin.EMPTY) {
+                        replayOrigin = vip.mate.agent.context.ChatOrigin.web(
+                                conversationId, username, workspaceId, null);
+                    }
                     Disposable disposable = agentService.chatWithReplayStream(
-                            replayAgentId, replayPrompt, conversationId, finalConsumed.getToolCallPayload(), username)
+                            replayAgentId, replayPrompt, conversationId, finalConsumed.getToolCallPayload(), username, replayOrigin)
                             .doOnNext(delta -> {
                                 if (approvalEmitterDone.get()) return;
                                 try {
@@ -460,7 +470,12 @@ public class ChatController {
                 ));
 
                 streamTracker.incrementFlux(conversationId);
-                Disposable disposable = agentService.chatStructuredStream(agentId, promptText, conversationId, username, request.getThinkingLevel())
+                // RFC-063r §2.5: web entry — null channelId / no ChannelTarget;
+                // tools that need a workspace path read it from the agent (origin
+                // is enriched with workspaceBasePath in StateGraph buildInitialState).
+                vip.mate.agent.context.ChatOrigin webOrigin =
+                        vip.mate.agent.context.ChatOrigin.web(conversationId, username, workspaceId, null);
+                Disposable disposable = agentService.chatStructuredStream(agentId, promptText, conversationId, username, request.getThinkingLevel(), webOrigin)
                         .doOnNext(delta -> {
                             if (emitterDone.get()) return;
                             try {
@@ -1061,7 +1076,12 @@ public class ChatController {
         broadcastEvent(conversationId, "message_start", Map.of("role", "assistant"));
 
         streamTracker.incrementFlux(conversationId);
-        Disposable disposable = agentService.chatStructuredStream(agentId, queuedMessage, conversationId, requesterId)
+        // RFC-063r §2.5: queued messages land in the same conversation; carry
+        // a web-origin ChatOrigin so any cron job created during the queued
+        // turn keeps a consistent (null-channel) binding.
+        vip.mate.agent.context.ChatOrigin queuedOrigin =
+                vip.mate.agent.context.ChatOrigin.web(conversationId, requesterId, null, null);
+        Disposable disposable = agentService.chatStructuredStream(agentId, queuedMessage, conversationId, requesterId, null, queuedOrigin)
                 .doOnNext(delta -> {
                     if (emitterDone.get()) return;
                     try {

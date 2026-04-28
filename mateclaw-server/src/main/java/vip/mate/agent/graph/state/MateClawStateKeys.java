@@ -155,4 +155,16 @@ public final class MateClawStateKeys {
      * tool batch, used by FinalAnswerNode to assemble the final answer.
      */
     public static final String DIRECT_TOOL_OUTPUTS = "direct_tool_outputs";
+
+    // ===== RFC-063r: ChatOrigin propagation through the StateGraph =====
+
+    /**
+     * RFC-063r §2.5: top-level agent writes the {@code ChatOrigin} value object
+     * into graph state once at {@code buildInitialState}; nodes (especially
+     * {@code StepExecutionNode} in the Plan-Execute sub-graph) read it
+     * read-only when invoking {@link vip.mate.agent.graph.executor.ToolExecutionExecutor}
+     * so child graphs and delegated agents inherit the originating channel /
+     * workspace context.
+     */
+    public static final String CHAT_ORIGIN = "chat_origin";
 }

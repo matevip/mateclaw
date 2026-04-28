@@ -1432,6 +1432,15 @@ export default {
       lastRun: 'Last Run',
       enabled: 'Enabled',
       actions: 'Actions',
+      // RFC-063r §2.14: list-page "Last Delivery" column
+      lastDelivery: 'Last Delivery',
+    },
+    // RFC-063r §2.14: delivery_status state machine labels
+    lastDelivery: {
+      none: 'No delivery',
+      pending: 'In flight',
+      delivered: 'Delivered',
+      not_delivered: 'Failed',
     },
     taskTypes: { text: 'Text Message', agent: 'Agent Goal' },
     cronTypes: { hourly: 'Hourly', daily: 'Daily', weekly: 'Weekly', custom: 'Custom' },
