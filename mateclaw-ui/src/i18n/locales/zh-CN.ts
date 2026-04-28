@@ -1502,15 +1502,15 @@ export default {
     },
     types: {
       web: 'Web API',
-      dingtalk: 'DingTalk (钉钉)',
-      feishu: 'Feishu / Lark (飞书)',
+      dingtalk: '钉钉',
+      feishu: '飞书',
       telegram: 'Telegram',
       discord: 'Discord',
-      wecom: 'WeChat Work (企业微信)',
-      weixin: 'WeChat (微信)',
+      wecom: '企业微信',
+      weixin: '微信',
       qq: 'QQ',
       slack: 'Slack',
-      webchat: 'WebChat 嵌入',
+      webchat: '网页嵌入',
       webhook: 'Webhook',
     },
     tabs: {
@@ -1617,9 +1617,9 @@ export default {
       feishu: {
         step1: '前往 <a href="https://open.feishu.cn/" target="_blank" rel="noopener">飞书开放平台</a> 创建企业自建应用',
         step2: '将应用的 <b>App ID</b> 和 <b>App Secret</b> 填入下方配置',
-        step3: '<b>Webhook 模式</b>：在「事件订阅」配置中将请求地址设置为上方 Webhook URL，并订阅 <code>im.message.receive_v1</code> 事件',
-        step4: '<b>WebSocket 模式</b>：无需公网地址，在下方接入模式中选择「WebSocket（长连接）」即可。需在飞书后台「事件订阅」中选择长连接方式',
-        step5: '如需昵称显示，请在「权限管理」中申请 <code>contact:user.base:readonly</code> 权限',
+        webhookStep: '在飞书后台「事件订阅」中将请求地址设置为上方 Webhook URL，订阅 <code>im.message.receive_v1</code> 事件',
+        websocketStep: '在飞书后台「事件订阅」中选择「长连接」订阅方式，订阅 <code>im.message.receive_v1</code> 事件（无需公网 IP）',
+        permissionStep: '如需昵称显示，请在「权限管理」中申请 <code>contact:user.base:readonly</code> 权限',
       },
       telegram: {
         step1: '在 Telegram 中搜索 <a href="https://t.me/BotFather" target="_blank" rel="noopener">{at}BotFather</a>，发送 <code>/newbot</code> 创建 Bot',

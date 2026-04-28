@@ -445,7 +445,6 @@ const currentFieldDefs = computed<ChannelFieldDef[]>(() => {
 
 const WEBHOOK_GUIDES = computed<Record<string, { steps: string[] }>>(() => ({
   dingtalk: { steps: [t('channels.guide.dingtalk.step1'), t('channels.guide.dingtalk.step2'), t('channels.guide.dingtalk.step3')] },
-  feishu: { steps: [t('channels.guide.feishu.step1'), t('channels.guide.feishu.step2'), t('channels.guide.feishu.step3'), t('channels.guide.feishu.step4'), t('channels.guide.feishu.step5')] },
   telegram: { steps: [t('channels.guide.telegram.step1'), t('channels.guide.telegram.step2'), t('channels.guide.telegram.step3'), t('channels.guide.telegram.step4')] },
   discord: { steps: [t('channels.guide.discord.step1'), t('channels.guide.discord.step2'), t('channels.guide.discord.step3'), t('channels.guide.discord.step4'), t('channels.guide.discord.step5')] },
   wecom: { steps: [t('channels.guide.wecom.step1'), t('channels.guide.wecom.step2'), t('channels.guide.wecom.step3'), t('channels.guide.wecom.step4')] },
@@ -453,7 +452,26 @@ const WEBHOOK_GUIDES = computed<Record<string, { steps: string[] }>>(() => ({
   qq: { steps: [t('channels.guide.qq.step1'), t('channels.guide.qq.step2'), t('channels.guide.qq.step3'), t('channels.guide.qq.step4')] },
 }))
 
-const webhookGuide = computed(() => WEBHOOK_GUIDES.value[form.value.channelType || ''] || null)
+// Feishu's guide is mode-aware: showing both webhook and websocket setup
+// instructions side-by-side (the original behavior) was confusing — the user
+// only ever uses one mode, so we filter the mode-specific step accordingly.
+// Webhook + websocket steps live as separate i18n keys; we assemble at render time.
+const webhookGuide = computed(() => {
+  const type = form.value.channelType
+  if (!type) return null
+  if (type === 'feishu') {
+    const mode = channelConfig.value.connection_mode === 'webhook' ? 'webhook' : 'websocket'
+    return {
+      steps: [
+        t('channels.guide.feishu.step1'),
+        t('channels.guide.feishu.step2'),
+        t(`channels.guide.feishu.${mode}Step`),
+        t('channels.guide.feishu.permissionStep'),
+      ],
+    }
+  }
+  return WEBHOOK_GUIDES.value[type] || null
+})
 
 const needsWebhookUrl = computed(() => {
   const type = form.value.channelType

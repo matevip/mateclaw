@@ -1607,9 +1607,9 @@ export default {
       feishu: {
         step1: 'Go to <a href="https://open.feishu.cn/" target="_blank" rel="noopener">Feishu Open Platform</a> and create an enterprise app',
         step2: 'Fill in the app\'s <b>App ID</b> and <b>App Secret</b> below',
-        step3: '<b>Webhook mode</b>: Set the request URL to the Webhook URL above in "Event Subscriptions", and subscribe to <code>im.message.receive_v1</code> event',
-        step4: '<b>WebSocket mode</b>: No public address needed, select "WebSocket (Long Connection)" in the connection mode below. Enable long connection in Feishu "Event Subscriptions"',
-        step5: 'For nickname display, request <code>contact:user.base:readonly</code> permission in "Permission Management"',
+        webhookStep: 'In Feishu "Event Subscriptions", set the request URL to the Webhook URL above and subscribe to <code>im.message.receive_v1</code>',
+        websocketStep: 'In Feishu "Event Subscriptions", choose the "Long Connection" subscription method and subscribe to <code>im.message.receive_v1</code> (no public IP required)',
+        permissionStep: 'For nickname display, request <code>contact:user.base:readonly</code> permission in "Permission Management"',
       },
       telegram: {
         step1: 'Search for <a href="https://t.me/BotFather" target="_blank" rel="noopener">{at}BotFather</a> in Telegram, send <code>/newbot</code> to create a Bot',

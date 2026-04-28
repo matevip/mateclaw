@@ -458,6 +458,15 @@ public abstract class AbstractChannelAdapter implements ChannelAdapter {
         return defaultValue;
     }
 
+    protected long getConfigLong(String key, long defaultValue) {
+        Object value = config.get(key);
+        if (value instanceof Number n) return n.longValue();
+        if (value instanceof String s && !s.isBlank()) {
+            try { return Long.parseLong(s.trim()); } catch (NumberFormatException ignored) {}
+        }
+        return defaultValue;
+    }
+
     /**
      * 获取配置中的列表值
      */

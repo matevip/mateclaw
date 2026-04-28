@@ -373,12 +373,13 @@ export const CHANNEL_FIELD_DEFS: Record<string, ChannelFieldDef[]> = {
   feishu: [
     { key: 'app_id', label: 'App ID', placeholder: 'cli_xxxxxxxx', required: true, type: 'text', tooltip: '飞书开放平台应用的 App ID' },
     { key: 'app_secret', label: 'App Secret', placeholder: 'xxxxxxxxxxxxxxxx', required: true, sensitive: true, type: 'password', tooltip: '飞书开放平台应用的 App Secret' },
-    { key: 'connection_mode', label: '接入模式', placeholder: '', type: 'select', defaultValue: 'webhook', tooltip: 'Webhook 需要公网回调地址；WebSocket 长连接无需公网 IP，适合本地开发和内网部署', options: [{ label: 'Webhook（HTTP 回调）', value: 'webhook' }, { label: 'WebSocket（长连接）', value: 'websocket' }] },
+    { key: 'connection_mode', label: '接入模式', placeholder: '', type: 'select', defaultValue: 'websocket', tooltip: 'WebSocket 长连接无需公网 IP（推荐，本地开发和内网部署都能直接用）；Webhook 需要公网回调地址', options: [{ label: 'WebSocket（长连接，推荐）', value: 'websocket' }, { label: 'Webhook（HTTP 回调）', value: 'webhook' }] },
     { key: 'domain', label: '服务区域', placeholder: '', type: 'select', defaultValue: 'feishu', tooltip: '国内版使用 feishu（open.feishu.cn），国际版使用 lark（open.larksuite.com）', options: [{ label: '飞书（国内版）', value: 'feishu' }, { label: 'Lark（国际版）', value: 'lark' }] },
-    { key: 'verification_token', label: '验证 Token', placeholder: 'xxxxxxxx', type: 'text', tooltip: '事件订阅的 Verification Token（Webhook 模式需要）' },
-    { key: 'encrypt_key', label: '加密密钥', placeholder: '可选，事件加密密钥', sensitive: true, type: 'password', tooltip: 'Encrypt Key，用于事件回调的消息解密（可选）' },
+    { key: 'verification_token', label: '验证 Token', placeholder: 'xxxxxxxx', type: 'text', tooltip: '事件订阅的 Verification Token', showIf: { field: 'connection_mode', value: 'webhook' } },
+    { key: 'encrypt_key', label: '加密密钥', placeholder: '事件加密密钥（webhook 模式必填）', sensitive: true, type: 'password', tooltip: 'Encrypt Key，用于 webhook 事件回调的消息解密（webhook 模式下必填，否则启动时会拒绝）', showIf: { field: 'connection_mode', value: 'webhook' } },
     { key: 'enable_reaction', label: '消息反应', placeholder: '', type: 'switch', defaultValue: true, tooltip: '收到消息后自动添加 👍 表情反应，让用户知道消息已收到' },
     { key: 'enable_nickname_cache', label: '昵称获取', placeholder: '', type: 'switch', defaultValue: true, tooltip: '通过联系人 API 获取用户真实昵称（需要 contact:user.base:readonly 权限）' },
+    { key: 'enable_quoted_context', label: '引用消息上下文', placeholder: '', type: 'switch', defaultValue: true, tooltip: '用户引用某条消息回复时，自动拉取被引用消息内容注入到 prompt，agent 才能理解"解释一下"这种缺主语的引用' },
     { key: 'media_download_enabled', label: '媒体下载', placeholder: '', type: 'switch', defaultValue: false, tooltip: '下载消息中的图片和文件到本地（保存至 ~/.mateclaw/media/feishu/）' },
   ],
   telegram: [
