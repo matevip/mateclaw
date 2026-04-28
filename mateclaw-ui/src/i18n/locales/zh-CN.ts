@@ -1653,6 +1653,17 @@ export default {
         step4: '启动渠道后通过 <b>WebSocket 长连接</b>自动接收消息，<b>无需公网 IP 和回调 URL</b>',
       },
     },
+    dingtalkRegister: {
+      title: '一键创建钉钉机器人',
+      hint: '点击按钮获取二维码，使用钉钉扫一扫并授权后，会自动在你的企业里创建机器人应用，Client ID / Client Secret 自动填入下方。',
+      button: '扫码自动创建机器人',
+      buttonLoading: '正在准备二维码…',
+      scanHint: '请使用钉钉 App 扫描上方二维码并确认授权',
+      confirmed: '机器人创建成功，Client ID 和 Secret 已自动填入',
+      expired: '二维码已过期，请重新生成',
+      denied: '授权被拒绝',
+      startFailed: '获取二维码失败，请检查网络',
+    },
     feishuRegister: {
       title: '一键创建飞书应用',
       hint: '点击按钮获取二维码，使用飞书扫一扫并确认授权后，会自动在你的企业里创建自建应用，App ID / App Secret 自动填入下方。',

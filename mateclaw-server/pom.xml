@@ -195,7 +195,7 @@
         <dependency>
             <groupId>com.dingtalk.open</groupId>
             <artifactId>dingtalk-stream</artifactId>
-            <version>1.3.5</version>
+            <version>1.3.12</version>
         </dependency>
 
         <!-- ===== 飞书 / Lark Open API SDK（WebSocket 长连接 + 事件分发） ===== -->

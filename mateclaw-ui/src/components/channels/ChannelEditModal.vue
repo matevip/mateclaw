@@ -116,6 +116,39 @@
               </div>
             </div>
 
+            <!-- 钉钉一键机器人注册（OAuth Device Flow） -->
+            <div v-if="form.channelType === 'dingtalk'" class="dingtalk-register-card">
+              <div class="dingtalk-register-header">
+                <strong>{{ t('channels.dingtalkRegister.title') }}</strong>
+              </div>
+              <p class="dingtalk-register-hint">{{ t('channels.dingtalkRegister.hint') }}</p>
+              <button
+                type="button"
+                class="dingtalk-register-btn"
+                @click="dingtalkRegister.start()"
+                :disabled="dingtalkRegister.loading.value || dingtalkRegister.status.value === 'waiting'"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+                  <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="3" height="3"/>
+                  <line x1="21" y1="14" x2="21" y2="17"/><line x1="14" y1="21" x2="17" y2="21"/>
+                  <line x1="21" y1="21" x2="21" y2="21"/>
+                </svg>
+                {{ dingtalkRegister.loading.value
+                  ? t('channels.dingtalkRegister.buttonLoading')
+                  : t('channels.dingtalkRegister.button') }}
+              </button>
+              <div v-if="dingtalkRegister.qrcodeUrl.value" class="dingtalk-register-qrcode">
+                <img :src="dingtalkRegister.qrcodeUrl.value" :alt="t('channels.dingtalkRegister.button')" class="dingtalk-register-qrcode-img" />
+                <p class="dingtalk-register-status" :class="dingtalkRegister.status.value">
+                  <template v-if="dingtalkRegister.status.value === 'confirmed'">{{ t('channels.dingtalkRegister.confirmed') }}</template>
+                  <template v-else-if="dingtalkRegister.status.value === 'expired'">{{ t('channels.dingtalkRegister.expired') }}</template>
+                  <template v-else-if="dingtalkRegister.status.value === 'denied'">{{ t('channels.dingtalkRegister.denied') }}</template>
+                  <template v-else>{{ t('channels.dingtalkRegister.scanHint') }}</template>
+                </p>
+              </div>
+            </div>
+
             <!-- 飞书一键应用注册（oapi-sdk 2.6+） -->
             <div v-if="form.channelType === 'feishu'" class="feishu-register-card">
               <div class="feishu-register-header">
@@ -396,6 +429,7 @@ import {
 import { useWeixinQrcodePoll } from '@/composables/channels/useWeixinQrcodePoll'
 import { useWecomBotAuth } from '@/composables/channels/useWecomBotAuth'
 import { useFeishuAppRegister } from '@/composables/channels/useFeishuAppRegister'
+import { useDingTalkAppRegister } from '@/composables/channels/useDingTalkAppRegister'
 
 interface Props {
   modelValue: boolean
@@ -471,6 +505,13 @@ const wecom = useWecomBotAuth((bot) => {
 const feishuRegister = useFeishuAppRegister(({ appId, appSecret }) => {
   channelConfig.value.app_id = appId
   channelConfig.value.app_secret = appSecret
+})
+
+// DingTalk one-click app registration via Device Flow — same UX shape as
+// feishu's flow, returns client_id/client_secret instead.
+const dingtalkRegister = useDingTalkAppRegister(({ clientId, clientSecret }) => {
+  channelConfig.value.client_id = clientId
+  channelConfig.value.client_secret = clientSecret
 })
 
 // ========== Field defs (derived) ==========
@@ -734,6 +775,21 @@ function save() {
 .guide-steps :deep(a:hover) { text-decoration: underline; }
 .guide-steps :deep(code) { font-size: 12px; background: var(--mc-bg-sunken); padding: 1px 5px; border-radius: 3px; }
 .guide-steps :deep(b) { color: var(--mc-text-primary); font-weight: 600; }
+
+/* DingTalk one-click register */
+.dingtalk-register-card { background: linear-gradient(135deg, rgba(31,121,255,0.05), rgba(0,144,255,0.05)); border: 1px solid rgba(31,121,255,0.2); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+.dingtalk-register-header { font-size: 13px; color: var(--mc-text-primary); margin-bottom: 6px; }
+.dingtalk-register-hint { font-size: 12px; color: var(--mc-text-secondary); margin: 0 0 10px 0; line-height: 1.6; }
+.dingtalk-register-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 10px 16px; background: #1f79ff; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+.dingtalk-register-btn:hover:not(:disabled) { background: #1668e3; transform: translateY(-1px); box-shadow: 0 2px 8px rgba(31,121,255,0.3); }
+.dingtalk-register-btn:active:not(:disabled) { transform: translateY(0); }
+.dingtalk-register-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.dingtalk-register-qrcode { display: flex; flex-direction: column; align-items: center; margin-top: 16px; padding: 16px; background: #fff; border-radius: 8px; border: 1px solid var(--mc-border); }
+.dingtalk-register-qrcode-img { width: 200px; height: 200px; border-radius: 4px; }
+.dingtalk-register-status { font-size: 13px; color: var(--mc-text-secondary); margin-top: 10px; transition: color 0.2s; text-align: center; }
+.dingtalk-register-status.confirmed { color: #10b981; font-weight: 500; }
+.dingtalk-register-status.expired { color: #f56c6c; }
+.dingtalk-register-status.denied { color: #f56c6c; }
 
 /* Feishu one-click register */
 .feishu-register-card { background: linear-gradient(135deg, rgba(0,128,255,0.05), rgba(99,102,241,0.05)); border: 1px solid rgba(99,102,241,0.2); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }

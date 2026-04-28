@@ -1643,6 +1643,17 @@ export default {
         step4: 'After starting the channel, auto-receives messages via <b>WebSocket long connection</b>, <b>no public IP or callback URL required</b>',
       },
     },
+    dingtalkRegister: {
+      title: 'One-click DingTalk Bot Creation',
+      hint: 'Click the button to get a QR code. Scan it with DingTalk and approve authorization — a bot app will be created in your tenant and the Client ID / Client Secret will be auto-filled below.',
+      button: 'Scan to Create Bot',
+      buttonLoading: 'Preparing QR code…',
+      scanHint: 'Scan the QR code above with the DingTalk app and confirm authorization',
+      confirmed: 'Bot created. Client ID and Secret have been auto-filled.',
+      expired: 'QR code expired, please try again',
+      denied: 'Authorization was denied',
+      startFailed: 'Failed to fetch QR code, please check your network',
+    },
     feishuRegister: {
       title: 'One-click Feishu App Creation',
       hint: 'Click the button to get a QR code. Scan it with Feishu and confirm authorization — an in-house app will be created in your tenant and the App ID / App Secret will be auto-filled below.',

@@ -237,6 +237,11 @@ export const channelApi = {
     http.post(`/channels/webhook/feishu/register/begin?domain=${encodeURIComponent(domain)}`),
   feishuRegisterStatus: (sessionId: string) =>
     http.get(`/channels/webhook/feishu/register/status?session=${encodeURIComponent(sessionId)}`),
+  // DingTalk one-click app registration (OAuth Device Flow)
+  dingtalkRegisterBegin: () =>
+    http.post('/channels/webhook/dingtalk/register/begin'),
+  dingtalkRegisterStatus: (sessionId: string) =>
+    http.get(`/channels/webhook/dingtalk/register/status?session=${encodeURIComponent(sessionId)}`),
 }
 
 // ==================== MCP Server ====================
