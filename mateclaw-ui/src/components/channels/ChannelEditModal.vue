@@ -138,7 +138,12 @@
                   ? t('channels.dingtalkRegister.buttonLoading')
                   : t('channels.dingtalkRegister.button') }}
               </button>
-              <div v-if="dingtalkRegister.qrcodeUrl.value" class="dingtalk-register-qrcode">
+              <!-- Loading placeholder (same dimensions as the QR area to avoid layout shift) -->
+              <div v-if="dingtalkRegister.loading.value && !dingtalkRegister.qrcodeUrl.value" class="dingtalk-register-qrcode dingtalk-register-qrcode--loading">
+                <div class="dingtalk-register-qrcode-spinner"></div>
+                <p class="dingtalk-register-status">{{ t('channels.dingtalkRegister.qrcodeLoading') }}…</p>
+              </div>
+              <div v-else-if="dingtalkRegister.qrcodeUrl.value" class="dingtalk-register-qrcode">
                 <img :src="dingtalkRegister.qrcodeUrl.value" :alt="t('channels.dingtalkRegister.button')" class="dingtalk-register-qrcode-img" />
                 <p class="dingtalk-register-status" :class="dingtalkRegister.status.value">
                   <template v-if="dingtalkRegister.status.value === 'confirmed'">{{ t('channels.dingtalkRegister.confirmed') }}</template>
@@ -171,7 +176,12 @@
                   ? t('channels.feishuRegister.buttonLoading')
                   : t('channels.feishuRegister.button') }}
               </button>
-              <div v-if="feishuRegister.qrcodeUrl.value" class="feishu-register-qrcode">
+              <!-- Loading placeholder (same dimensions as the QR area to avoid layout shift) -->
+              <div v-if="feishuRegister.loading.value && !feishuRegister.qrcodeUrl.value" class="feishu-register-qrcode feishu-register-qrcode--loading">
+                <div class="feishu-register-qrcode-spinner"></div>
+                <p class="feishu-register-status">{{ t('channels.feishuRegister.qrcodeLoading') }}…</p>
+              </div>
+              <div v-else-if="feishuRegister.qrcodeUrl.value" class="feishu-register-qrcode">
                 <img :src="feishuRegister.qrcodeUrl.value" :alt="t('channels.feishuRegister.button')" class="feishu-register-qrcode-img" />
                 <p class="feishu-register-status" :class="feishuRegister.status.value">
                   <template v-if="feishuRegister.status.value === 'confirmed'">{{ t('channels.feishuRegister.confirmed') }}</template>
@@ -786,6 +796,9 @@ function save() {
 .dingtalk-register-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .dingtalk-register-qrcode { display: flex; flex-direction: column; align-items: center; margin-top: 16px; padding: 16px; background: #fff; border-radius: 8px; border: 1px solid var(--mc-border); }
 .dingtalk-register-qrcode-img { width: 200px; height: 200px; border-radius: 4px; }
+.dingtalk-register-qrcode--loading { min-height: 240px; justify-content: center; }
+.dingtalk-register-qrcode-spinner { width: 40px; height: 40px; border: 3px solid rgba(31,121,255,0.2); border-top-color: #1f79ff; border-radius: 50%; animation: dingtalk-register-spin 0.8s linear infinite; }
+@keyframes dingtalk-register-spin { to { transform: rotate(360deg); } }
 .dingtalk-register-status { font-size: 13px; color: var(--mc-text-secondary); margin-top: 10px; transition: color 0.2s; text-align: center; }
 .dingtalk-register-status.confirmed { color: #10b981; font-weight: 500; }
 .dingtalk-register-status.expired { color: #f56c6c; }
@@ -801,6 +814,9 @@ function save() {
 .feishu-register-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .feishu-register-qrcode { display: flex; flex-direction: column; align-items: center; margin-top: 16px; padding: 16px; background: #fff; border-radius: 8px; border: 1px solid var(--mc-border); }
 .feishu-register-qrcode-img { width: 200px; height: 200px; border-radius: 4px; }
+.feishu-register-qrcode--loading { min-height: 240px; justify-content: center; }
+.feishu-register-qrcode-spinner { width: 40px; height: 40px; border: 3px solid rgba(99,102,241,0.2); border-top-color: #6366f1; border-radius: 50%; animation: feishu-register-spin 0.8s linear infinite; }
+@keyframes feishu-register-spin { to { transform: rotate(360deg); } }
 .feishu-register-status { font-size: 13px; color: var(--mc-text-secondary); margin-top: 10px; transition: color 0.2s; text-align: center; }
 .feishu-register-status.confirmed { color: #10b981; font-weight: 500; }
 .feishu-register-status.expired { color: #f56c6c; }
