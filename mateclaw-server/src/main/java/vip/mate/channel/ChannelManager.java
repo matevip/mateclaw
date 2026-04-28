@@ -44,6 +44,7 @@ public class ChannelManager {
     private final ChannelMessageRouter messageRouter;
     private final ChannelSessionStore channelSessionStore;
     private final ObjectMapper objectMapper;
+    private final vip.mate.tool.document.GeneratedFileCache generatedFileCache;
 
     /** 运行中的渠道适配器：channelId -> adapter */
     private final Map<Long, ChannelAdapter> activeAdapters = new HashMap<>();
@@ -440,7 +441,7 @@ public class ChannelManager {
         String type = channel.getChannelType();
         return switch (type) {
             case "web" -> new WebChannelAdapter(channel, messageRouter, objectMapper);
-            case "dingtalk" -> new DingTalkChannelAdapter(channel, messageRouter, objectMapper);
+            case "dingtalk" -> new DingTalkChannelAdapter(channel, messageRouter, objectMapper, generatedFileCache);
             case "feishu" -> new FeishuChannelAdapter(channel, messageRouter, objectMapper);
             case "telegram" -> new TelegramChannelAdapter(channel, messageRouter, objectMapper);
             case "discord" -> new DiscordChannelAdapter(channel, messageRouter, objectMapper);
