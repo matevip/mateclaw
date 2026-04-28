@@ -295,6 +295,14 @@ export const modelApi = {
   testModel: (providerId: string, modelId: string) =>
     http.post(`/models/${providerId}/models/${encodeURIComponent(modelId)}/test`),
 
+  // ==================== RFC-074: enabled / catalog ====================
+  /** Full provider catalog including enabled=false rows; powers the Add Provider drawer. */
+  catalog: () => http.get('/models/catalog'),
+  /** Opt a provider into the dropdown; backend triggers re-probe via ModelConfigChangedEvent. */
+  enableProvider: (providerId: string) => http.post(`/models/${providerId}/enable`),
+  /** Hide a provider; if it owned the current default model, backend auto-promotes a replacement. */
+  disableProvider: (providerId: string) => http.post(`/models/${providerId}/disable`),
+
   // ==================== Embedding Model (RFC Embedding UI) ====================
   listByType: (modelType: 'chat' | 'embedding') =>
     http.get('/models/by-type', { params: { modelType } }),

@@ -652,6 +652,18 @@ export interface ProviderInfo {
   lastProbedAtMs?: number
   /** Remaining cooldown window in ms, populated only when liveness == COOLDOWN. */
   cooldownRemainingMs?: number
+  /** RFC-074: whether the user has explicitly opted this provider into the dropdown. */
+  enabled?: boolean
+}
+
+/**
+ * RFC-074: response payload from POST /models/{id}/enable | disable.
+ * Frontend reads this to decide whether to fire a "switched default to X" toast.
+ */
+export interface EnableResult {
+  defaultSwitched: boolean
+  newDefaultProviderId?: string | null
+  newDefaultModel?: string | null
 }
 
 export interface ActiveModelsInfo {

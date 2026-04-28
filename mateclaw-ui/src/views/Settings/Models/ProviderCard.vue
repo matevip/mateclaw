@@ -132,6 +132,15 @@
       >
         {{ reprobing ? t('settings.model.poolReprobing') : t('settings.model.poolReprobe') }}
       </button>
+      <!-- RFC-074 PR-2: hide an enabled provider. Soft-disable; the row moves
+           back into the catalog drawer where the user can re-enable later. -->
+      <button
+        v-if="provider.enabled"
+        class="card-btn danger-soft"
+        @click="$emit('disable-provider', provider)"
+      >
+        {{ t('settings.model.disable') }}
+      </button>
     </div>
 
     <div v-if="connectionResults[provider.id]" class="connection-result" :class="connectionResults[provider.id].success ? 'success' : 'error'">
@@ -166,6 +175,7 @@ defineEmits<{
   'provider-settings': [provider: ProviderInfo]
   'test-connection': [provider: ProviderInfo]
   'delete-provider': [provider: ProviderInfo]
+  'disable-provider': [provider: ProviderInfo]
   'reprobe': [provider: ProviderInfo]
 }>()
 
@@ -242,6 +252,9 @@ const { t } = useI18n()
 .card-btn { border: none; border-radius: 10px; padding: 9px 14px; font-size: 14px; cursor: pointer; transition: all 0.15s; background: var(--mc-primary-bg); color: var(--mc-primary); }
 .card-btn:hover { background: rgba(217, 119, 87, 0.18); }
 .card-btn.danger { background: var(--mc-danger-bg); color: var(--mc-danger); }
+/* RFC-074 PR-2: soft-danger (disable) — softer than delete to signal reversibility. */
+.card-btn.danger-soft { background: var(--mc-bg-sunken); color: var(--mc-text-secondary); }
+.card-btn.danger-soft:hover { background: var(--mc-danger-bg); color: var(--mc-danger); }
 .card-btn.testing { opacity: 0.6; cursor: wait; }
 .connection-result { margin-top: 10px; padding: 8px 12px; border-radius: 8px; font-size: 12px; }
 .connection-result.success { background: var(--mc-primary-bg); color: var(--mc-primary); }

@@ -56,6 +56,16 @@ public class ModelProviderEntity {
      */
     private Integer fallbackPriority;
 
+    /**
+     * RFC-074: explicit user-enabled flag. {@code FALSE} means the provider is
+     * known to the catalog but hidden from the dropdown / chat fallback chain
+     * — the user must opt in via the "Add Provider" drawer. Default {@code FALSE}
+     * for fresh installs; V55 migration backfills {@code TRUE} for rows with
+     * evidence of prior use (real api_key, OAuth token, recent chat usage,
+     * or current default model).
+     */
+    private Boolean enabled;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

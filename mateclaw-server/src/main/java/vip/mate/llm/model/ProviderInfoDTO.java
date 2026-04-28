@@ -39,4 +39,6 @@ public class ProviderInfoDTO {
     private Long lastProbedAtMs;
     /** Remaining cooldown window in ms, populated only when liveness == COOLDOWN. */
     private Long cooldownRemainingMs;
+    /** RFC-074: whether the user has explicitly enabled this provider. False = lives in the catalog drawer only. */
+    private Boolean enabled;
 }

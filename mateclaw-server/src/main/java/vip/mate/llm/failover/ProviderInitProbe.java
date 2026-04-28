@@ -230,7 +230,11 @@ public class ProviderInitProbe {
     }
 
     private List<ModelProviderEntity> listConfiguredProviders() {
+        // RFC-074: skip rows the user hasn't opted into — no point spending
+        // probe budget on disabled built-ins (Ollama / LM Studio / etc.) that
+        // wouldn't show up in the dropdown anyway.
         return providerMapper.selectList(null).stream()
+                .filter(p -> Boolean.TRUE.equals(p.getEnabled()))
                 .filter(p -> providerService.isProviderConfigured(p.getProviderId()))
                 .toList();
     }

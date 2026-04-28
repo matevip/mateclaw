@@ -61,7 +61,19 @@
 
             <!-- 无结果 -->
             <div v-if="filteredGroups.length === 0" class="model-empty">
-              {{ $t('chat.noMatchModel') }}
+              <!-- RFC-074 PR-2: when there are zero usable models AND the user
+                   isn't searching, this is the "no providers configured" empty
+                   state. Push them into Settings/Models with the drawer
+                   pre-opened via ?addProvider=1. -->
+              <template v-if="query.trim() === '' && groups.length === 0">
+                {{ $t('chat.noProvidersConfigured') }}
+                <RouterLink class="model-empty__cta" to="/settings/models?addProvider=1" @click="open = false">
+                  {{ $t('chat.goConfigure') }}
+                </RouterLink>
+              </template>
+              <template v-else>
+                {{ $t('chat.noMatchModel') }}
+              </template>
             </div>
           </div>
         </div>
@@ -73,6 +85,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, type CSSProperties } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { RouterLink } from 'vue-router'
 import type { ProviderInfo } from '@/types'
 
 const { t } = useI18n()
@@ -422,6 +435,18 @@ watch(open, async (isOpen) => {
   font-size: 13px;
   color: var(--mc-text-quaternary);
 }
+.model-empty__cta {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--mc-primary);
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.model-empty__cta:hover { background: var(--mc-primary-hover, var(--mc-primary)); }
 
 /* ---- Transition ---- */
 
