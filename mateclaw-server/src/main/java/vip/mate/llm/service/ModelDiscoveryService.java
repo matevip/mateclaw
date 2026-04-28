@@ -385,11 +385,11 @@ public class ModelDiscoveryService {
                 .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
                 .build();
 
-        RestClient.RequestHeadersSpec<?> spec = client.get().uri("/v1/models");
+        RestClient.RequestHeadersSpec<?> spec = client.get().uri(resolveModelsPath(baseUrl));
         if (modelProviderService.hasUsableApiKey(apiKey)) {
             spec = spec.header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey.trim());
         }
-        // 添加自定义 headers（从 generateKwargs 中读取）
+        // Apply any custom headers declared in generateKwargs.
         Map<String, Object> kwargs = modelProviderService.readProviderGenerateKwargs(provider);
         applyCustomHeaders(spec, kwargs);
 
@@ -717,25 +717,47 @@ public class ModelDiscoveryService {
 
     // ==================== 工具方法 ====================
 
+    // Trailing "/v{digits}" segment in a base URL — restricted to numeric major versions,
+    // which is the OpenAI-compatible convention (/v1 OpenAI, /v3 Volcano Ark, /v4 Zhipu).
+    private static final java.util.regex.Pattern BASE_URL_VERSION_SUFFIX =
+            java.util.regex.Pattern.compile(".*/v\\d+$");
+
     /**
-     * 从 generateKwargs 中解析 completionsPath，处理 baseUrl 与路径前缀的重叠。
-     * 例如：baseUrl 以 /v4 结尾，completionsPath 为 /chat/completions → 最终 /chat/completions
-     *       baseUrl 以 /v1 结尾，completionsPath 为 /v1/chat/completions → 最终 /chat/completions
+     * Resolve the chat-completions path. An explicit {@code completionsPath} in
+     * {@code generateKwargs} is always honored as-is. Otherwise we default to
+     * {@code /v1/chat/completions} and dedupe the {@code /v1} prefix when the
+     * baseUrl already carries a {@code /v{N}} segment (e.g. Volcano Engine Ark
+     * base {@code https://ark.cn-beijing.volces.com/api/v3}).
      */
     private String resolveCompletionsPath(String baseUrl, Map<String, Object> kwargs) {
-        String path = "/v1/chat/completions";
         if (kwargs != null) {
             Object raw = kwargs.get("completionsPath");
             if (raw instanceof String value && StringUtils.hasText(value)) {
-                path = value.trim();
+                String path = value.trim();
                 if (!path.startsWith("/")) {
                     path = "/" + path;
                 }
+                return path;
             }
         }
-        // 避免路径重叠：如果 baseUrl 以 /v1 结尾且 path 以 /v1/ 开头，去掉重复
-        if (baseUrl != null && baseUrl.endsWith("/v1") && path.startsWith("/v1/")) {
+        String path = "/v1/chat/completions";
+        // If baseUrl already ends with /v{N}, strip the /v1 prefix from the default
+        // so we don't end up with /api/v3/v1/chat/completions (404).
+        if (baseUrl != null && BASE_URL_VERSION_SUFFIX.matcher(baseUrl).matches() && path.startsWith("/v1/")) {
             path = path.substring(3);
+        }
+        return path;
+    }
+
+    /**
+     * Resolve the OpenAI-compatible {@code /v1/models} path against a base URL,
+     * stripping the {@code /v1} prefix when the base already carries a {@code /v{N}}
+     * suffix (Volcano Engine Ark, etc.).
+     */
+    private String resolveModelsPath(String baseUrl) {
+        String path = "/v1/models";
+        if (baseUrl != null && BASE_URL_VERSION_SUFFIX.matcher(baseUrl).matches()) {
+            path = "/models";
         }
         return path;
     }

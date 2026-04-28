@@ -1408,17 +1408,28 @@ public class AgentGraphBuilder {
         return result;
     }
 
+    // Trailing "/v{digits}" segment in a base URL — the OpenAI-compatible convention
+    // (/v1 OpenAI, /v3 Volcano Ark, /v4 Zhipu). When the baseUrl already carries this
+    // segment, the default /v1 prefix on the path must be stripped to avoid building
+    // a broken URL like /api/v3/v1/chat/completions.
+    private static final java.util.regex.Pattern OPENAI_BASE_URL_VERSION_SUFFIX =
+            java.util.regex.Pattern.compile(".*/v\\d+$");
+
     private String resolveOpenAiCompletionsPath(String baseUrl, Map<String, Object> kwargs) {
         Object raw = kwargs.get("completionsPath");
-        String path = raw instanceof String value && StringUtils.hasText(value) ? value.trim() : "/v1/chat/completions";
+        boolean explicit = raw instanceof String value && StringUtils.hasText(value);
+        String path = explicit ? ((String) raw).trim() : "/v1/chat/completions";
         if (!path.startsWith("/")) {
             path = "/" + path;
         }
-        if (baseUrl.endsWith("/v1") && path.startsWith("/v1/")) {
+        // An explicit completionsPath is honored as-is. Otherwise, dedupe the /v1
+        // prefix when the baseUrl already ends with /v{N} (Volcano Engine Ark /v3,
+        // Zhipu /v4, etc.).
+        if (!explicit
+                && baseUrl != null
+                && OPENAI_BASE_URL_VERSION_SUFFIX.matcher(baseUrl).matches()
+                && path.startsWith("/v1/")) {
             path = path.substring(3);
-            if (!path.startsWith("/")) {
-                path = "/" + path;
-            }
         }
         return path;
     }
