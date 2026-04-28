@@ -143,6 +143,9 @@ export default {
     switchModelFailed: 'Failed to switch model',
     searchModel: 'Search models…',
     noMatchModel: 'No matching models',
+    // RFC-073: liveness hints shown in the model dropdown header
+    modelLivenessUnprobed: 'Checking availability',
+    modelLivenessCooldown: 'In cooldown ({seconds}s remaining)',
     uploadFailed: 'File upload failed',
     dropToUpload: 'Drop files or folders here',
     copyFailed: 'Copy failed',
@@ -353,6 +356,13 @@ export default {
       poolReprobing: 'Probing...',
       poolReprobeOk: 'Probe passed; back in the available pool',
       poolReprobeFail: 'Probe failed: {error}',
+      // RFC-073: status-pill labels driven by Liveness
+      livenessLive: 'Live',
+      livenessCooldown: 'Cooling down',
+      livenessRemoved: 'Disconnected',
+      livenessUnprobed: 'Probing',
+      livenessUnprobedTooltip: 'Checking availability after startup; will refresh shortly',
+      livenessUnconfigured: 'Needs setup',
       searchHint: 'When enabled, the LLM will use its built-in search engine to retrieve real-time information (DashScope/Kimi/OpenAI supported).',
       searchStrategyDefault: 'Default',
       oauthTitle: 'OpenAI OAuth Login',

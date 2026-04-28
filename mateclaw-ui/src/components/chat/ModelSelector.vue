@@ -34,12 +34,24 @@
               <div class="model-group-header">
                 <span class="model-group-header__name">{{ group.provider.name }}</span>
                 <span v-if="group.provider.isLocal" class="model-group-header__badge model-group-header__badge--local">Local</span>
+                <!-- RFC-073: liveness dot. UNPROBED = grey (still booting),
+                     COOLDOWN = amber (transient backoff). LIVE has no dot. -->
+                <span
+                  v-if="group.provider.liveness === 'UNPROBED'"
+                  class="model-group-header__dot model-group-header__dot--unprobed"
+                  :title="$t('chat.modelLivenessUnprobed')"
+                ></span>
+                <span
+                  v-else-if="group.provider.liveness === 'COOLDOWN'"
+                  class="model-group-header__dot model-group-header__dot--cooldown"
+                  :title="$t('chat.modelLivenessCooldown', { seconds: cooldownSeconds(group.provider) })"
+                ></span>
               </div>
               <div
                 v-for="item in group.models"
                 :key="item.value"
                 class="model-dropdown-item"
-                :class="{ active: item.value === activeValue }"
+                :class="{ active: item.value === activeValue, dimmed: group.provider.liveness === 'COOLDOWN' || group.provider.liveness === 'UNPROBED' }"
                 @click="handleSelect(item.value)"
               >
                 <span class="model-dropdown-item__name">{{ item.name }}</span>
@@ -118,12 +130,19 @@ function toggle() {
 }
 
 // 按 provider 分组，云端在前，本地在后
+// RFC-073: 仅过滤 UNCONFIGURED / REMOVED；UNPROBED + COOLDOWN 仍显示但视觉上区分。
+function isHidden(p: ProviderInfo): boolean {
+  // 旧后端不返回 liveness 时退回 available 行为，避免渐进升级期间 UI 全空。
+  if (!p.liveness) return !p.available
+  return p.liveness === 'UNCONFIGURED' || p.liveness === 'REMOVED'
+}
+
 const groups = computed<ModelGroup[]>(() => {
   const cloud: ModelGroup[] = []
   const local: ModelGroup[] = []
 
   for (const provider of props.providers) {
-    if (!provider.available) continue
+    if (isHidden(provider)) continue
     const allModels = [...(provider.models || []), ...(provider.extraModels || [])]
     if (allModels.length === 0) continue
 
@@ -145,6 +164,10 @@ const groups = computed<ModelGroup[]>(() => {
 
   return [...cloud, ...local]
 })
+
+function cooldownSeconds(provider: ProviderInfo): number {
+  return Math.max(1, Math.ceil((provider.cooldownRemainingMs || 0) / 1000))
+}
 
 const totalCount = computed(() =>
   groups.value.reduce((n, g) => n + g.models.length, 0)
@@ -329,6 +352,26 @@ watch(open, async (isOpen) => {
   color: var(--mc-success, #34c759);
 }
 
+/* RFC-073 liveness dot — sits next to the provider name */
+.model-group-header__dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  cursor: help;
+}
+.model-group-header__dot--unprobed {
+  background: var(--mc-text-quaternary, #c0c4cc);
+  animation: model-dot-pulse 1.6s ease-in-out infinite;
+}
+.model-group-header__dot--cooldown {
+  background: #f59e0b;
+}
+@keyframes model-dot-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
 /* ---- Items ---- */
 
 .model-dropdown-item {
@@ -348,6 +391,14 @@ watch(open, async (isOpen) => {
 
 .model-dropdown-item.active {
   background: var(--mc-primary-bg);
+}
+
+/* RFC-073: cooldown / unprobed models render dimmed but still selectable. */
+.model-dropdown-item.dimmed {
+  opacity: 0.55;
+}
+.model-dropdown-item.dimmed:hover {
+  opacity: 0.85;
 }
 
 .model-dropdown-item__name {

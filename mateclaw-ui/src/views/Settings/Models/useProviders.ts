@@ -2,7 +2,6 @@ import { computed, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { claudeCodeOAuthApi, modelApi, oauthApi, providerPoolApi } from '@/api'
-import type { ProviderPoolEntry } from '@/api'
 import type { ActiveModelsInfo, DiscoverResult, ProviderInfo, ProviderModelInfo, TestResult } from '@/types'
 
 export function useProviders() {
@@ -10,9 +9,10 @@ export function useProviders() {
 
   const providers = ref<ProviderInfo[]>([])
   const activeModels = ref<ActiveModelsInfo | null>(null)
-  // RFC-009 Phase 4: pool snapshot, indexed by providerId for O(1) lookup in templates.
-  const providerPool = ref<Record<string, ProviderPoolEntry>>({})
-  // RFC-009 Phase 4 PR-1e: providerId currently being manually reprobed.
+  // RFC-073: pool / cooldown / probe state now ships inline on each ProviderInfo
+  // via `liveness`. Separate snapshot / indexed map removed — see ProviderCard.vue
+  // for how the five states render.
+  // PR-1e manual reprobe still tracks which provider is in flight.
   const reprobingId = ref<string | null>(null)
   const editingProvider = ref<ProviderInfo | null>(null)
   const currentProvider = ref<ProviderInfo | null>(null)
@@ -70,35 +70,16 @@ export function useProviders() {
   }
 
   /**
-   * RFC-009 Phase 4: fetch the pool snapshot. Best-effort — if it 404s
-   * (older backend) or errors, the badges just don't render. Don't block
-   * the rest of the model settings page on it.
-   */
-  async function loadProviderPool() {
-    try {
-      const res: any = await providerPoolApi.snapshot()
-      const list: ProviderPoolEntry[] = res.data || []
-      providerPool.value = list.reduce((acc, entry) => {
-        acc[entry.providerId] = entry
-        return acc
-      }, {} as Record<string, ProviderPoolEntry>)
-    } catch (err) {
-      console.warn('[ProviderPool] snapshot failed (badges will be hidden)', err)
-      providerPool.value = {}
-    }
-  }
-
-  /**
-   * RFC-009 Phase 4 PR-1e: synchronously re-probe one provider, then
-   * refresh the pool snapshot so the badge updates. Returns the result
-   * so callers can show a toast.
+   * RFC-073: synchronously re-probe one provider, then re-fetch the
+   * provider list — `liveness` ships inline now so a single round-trip
+   * refreshes everything the UI needs.
    */
   async function reprobeProvider(provider: ProviderInfo) {
     reprobingId.value = provider.id
     try {
       const res: any = await providerPoolApi.reprobe(provider.id)
       const data = res.data || {}
-      await loadProviderPool()
+      await loadProviders()
       if (data.success) {
         ElMessage.success(t('settings.model.poolReprobeOk'))
       } else {
@@ -411,11 +392,23 @@ export function useProviders() {
       : t('settings.model.apiKeyInput')
   })
 
-  // Utility functions
+  // RFC-073: status pill is driven by liveness. Falls back to the legacy
+  // configured/available booleans for older backends that don't yet send liveness.
   function providerStatus(provider: ProviderInfo) {
-    if (provider.available) {
-      return { type: 'configured', label: t('settings.model.configured') }
+    switch (provider.liveness) {
+      case 'LIVE':
+        return { type: 'configured', label: t('settings.model.livenessLive') }
+      case 'COOLDOWN':
+        return { type: 'partial', label: t('settings.model.livenessCooldown') }
+      case 'REMOVED':
+        return { type: 'unavailable', label: t('settings.model.livenessRemoved') }
+      case 'UNPROBED':
+        return { type: 'partial', label: t('settings.model.livenessUnprobed') }
+      case 'UNCONFIGURED':
+        return { type: 'unavailable', label: t('settings.model.livenessUnconfigured') }
     }
+    // Legacy backend (no liveness field)
+    if (provider.available) return { type: 'configured', label: t('settings.model.configured') }
     if (provider.configured || (provider.models?.length || 0) + (provider.extraModels?.length || 0) > 0) {
       return { type: 'partial', label: t('settings.model.partial') }
     }
@@ -553,10 +546,9 @@ export function useProviders() {
     providerBaseUrlPlaceholder,
     providerBaseUrlHint,
     providerApiKeyPlaceholder,
-    // RFC-009 Phase 4
-    providerPool,
+    // RFC-073: pool/cooldown/probe data is now baked into providers[].liveness.
+    // The standalone snapshot/loadProviderPool are gone — saves a round trip.
     reprobingId,
-    loadProviderPool,
     reprobeProvider,
     // Methods
     loadProviders,

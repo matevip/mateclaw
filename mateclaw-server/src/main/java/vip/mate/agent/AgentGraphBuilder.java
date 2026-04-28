@@ -15,6 +15,8 @@ import lombok.extern.slf4j.Slf4j;
 // PR-0b: Anthropic imports moved with the construction code into AgentAnthropicChatModelBuilder.
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.model.ApiKey;
+import org.springframework.ai.model.NoopApiKey;
 import org.springframework.ai.model.SimpleApiKey;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -1006,7 +1008,13 @@ public class AgentGraphBuilder {
             throw new MateClawException("err.agent.provider_not_configured", "Provider 未完成配置，请在模型设置中填写有效的 API Key 和 Base URL");
         }
         String apiKey = provider.getApiKey();
-        if (!modelProviderService.hasUsableApiKey(apiKey)) {
+        // Honor the provider's requireApiKey flag instead of hard-failing on every empty key.
+        // Local + key-free providers (Ollama, LM Studio, MLX, llama.cpp, OpenCode) declare
+        // requireApiKey=false; for them an empty / placeholder key means "no Authorization
+        // header" — Spring AI's NoopApiKey expresses that. Without this the chat path
+        // rejected providers that probe / discovery / connection-test all considered usable.
+        boolean keyRequired = !Boolean.FALSE.equals(provider.getRequireApiKey());
+        if (keyRequired && !modelProviderService.hasUsableApiKey(apiKey)) {
             throw new MateClawException("err.agent.provider_apikey_invalid", "Provider API Key 未配置或无效: " + provider.getProviderId());
         }
         String baseUrl = normalizeOpenAiBaseUrl(provider.getBaseUrl());
@@ -1042,9 +1050,12 @@ public class AgentGraphBuilder {
         boolean kimiSearchEnabled = isKimiProvider(provider)
                 && Boolean.TRUE.equals(kwargs.get("enableSearch"));
 
+        ApiKey apiKeyImpl = (keyRequired && StringUtils.hasText(apiKey))
+                ? new SimpleApiKey(apiKey.trim())
+                : new NoopApiKey();
         return new OpenAiApi(
                 baseUrl,
-                new SimpleApiKey(apiKey.trim()),
+                apiKeyImpl,
                 headers,
                 completionsPath,
                 "/v1/embeddings",

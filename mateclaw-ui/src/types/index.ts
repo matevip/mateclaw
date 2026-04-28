@@ -368,7 +368,7 @@ export const CHANNEL_FIELD_DEFS: Record<string, ChannelFieldDef[]> = {
     { key: 'connection_mode', label: '接入模式', placeholder: '', type: 'select', defaultValue: 'stream', tooltip: 'Stream 长连接无需公网 IP（推荐）；Webhook 需要公网回调地址', options: [{ label: 'Stream（长连接，推荐）', value: 'stream' }, { label: 'Webhook（HTTP 回调）', value: 'webhook' }] },
     { key: 'message_type', label: '消息格式', placeholder: '', type: 'select', defaultValue: 'markdown', tooltip: 'markdown: 普通消息；card: AI 流式卡片（需配置模板 ID）', options: [{ label: 'Markdown', value: 'markdown' }, { label: 'AI Card（流式卡片）', value: 'card' }] },
     { key: 'card_template_id', label: '卡片模板 ID', placeholder: 'dt_card_1234', required: true, type: 'text', tooltip: '钉钉 AI Card 模板 ID', showIf: { field: 'message_type', value: 'card' } },
-    { key: 'robot_code', label: '机器人编码', placeholder: 'dingxxxxxxxx', type: 'text', tooltip: '机器人 robot_code，群聊场景建议配置', showIf: { field: 'message_type', value: 'card' } },
+    { key: 'robot_code', label: '机器人编码', placeholder: '留空将自动使用 AppKey（适用于自建应用机器人）', type: 'text', tooltip: '钉钉机器人 robotCode，用于发送附件（图片 / DOCX）和 AI Card。绝大多数自建应用机器人 robotCode == AppKey，不填会自动 fallback；只有第三方应用 / 单独申请的机器人才必须显式填' },
   ],
   feishu: [
     { key: 'app_id', label: 'App ID', placeholder: 'cli_xxxxxxxx', required: true, type: 'text', tooltip: '飞书开放平台应用的 App ID' },
@@ -610,6 +610,16 @@ export interface ProviderModelInfo {
   supportsThinking?: boolean
 }
 
+/**
+ * RFC-073: combined runtime state of a provider.
+ * - LIVE         pool member, not in cooldown — usable
+ * - COOLDOWN     pool member, transient backoff after consecutive failures
+ * - REMOVED      probed and HARD-removed (auth/billing/init-probe failure)
+ * - UNPROBED     startup window, decision not made yet
+ * - UNCONFIGURED user hasn't supplied required credentials
+ */
+export type Liveness = 'LIVE' | 'COOLDOWN' | 'REMOVED' | 'UNPROBED' | 'UNCONFIGURED'
+
 export interface ProviderInfo {
   id: string
   name: string
@@ -634,6 +644,14 @@ export interface ProviderInfo {
   oauthExpiresAt?: number
   /** RFC-009 P3.5: position in the multi-model failover chain (0 = excluded). */
   fallbackPriority?: number
+  /** RFC-073: runtime state — UI source of truth for whether this provider is usable now. */
+  liveness?: Liveness
+  /** Populated only when liveness ∈ {REMOVED, COOLDOWN}. */
+  unavailableReason?: string
+  /** Epoch ms of the most recent removal, populated only when liveness == REMOVED. */
+  lastProbedAtMs?: number
+  /** Remaining cooldown window in ms, populated only when liveness == COOLDOWN. */
+  cooldownRemainingMs?: number
 }
 
 export interface ActiveModelsInfo {

@@ -143,6 +143,9 @@ export default {
     switchModelFailed: '切换模型失败',
     searchModel: '搜索模型…',
     noMatchModel: '没有匹配的模型',
+    // RFC-073: liveness hints shown in the model dropdown header
+    modelLivenessUnprobed: '正在检查可用性',
+    modelLivenessCooldown: '冷却中（{seconds} 秒后自动恢复）',
     uploadFailed: '文件上传失败',
     dropToUpload: '拖放文件或文件夹到此处',
     copyFailed: '复制失败',
@@ -343,6 +346,13 @@ export default {
       poolReprobing: '检测中...',
       poolReprobeOk: '检测通过，已重新加入可用池',
       poolReprobeFail: '检测失败：{error}',
+      // RFC-073: status-pill labels driven by Liveness
+      livenessLive: '可用',
+      livenessCooldown: '冷却中',
+      livenessRemoved: '未连接',
+      livenessUnprobed: '检测中',
+      livenessUnprobedTooltip: '启动后正在检测可用性，稍候自动更新',
+      livenessUnconfigured: '需要配置',
       searchHint: '开启后，大模型将在回答时自动调用内置搜索引擎获取实时信息（DashScope/Kimi/OpenAI 支持）。',
       searchStrategyDefault: '默认',
       oauthTitle: 'OpenAI OAuth 登录',

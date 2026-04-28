@@ -27,37 +27,42 @@
           >
             {{ t('settings.model.fallbackBadge', { priority: provider.fallbackPriority }) }}
           </span>
-          <!-- RFC-009 Phase 4: pool status. Three mutually-exclusive states:
-               removed > cooldown > in-pool. Hidden when no pool data is loaded yet
-               or when the provider isn't configured (pool would never have probed it). -->
-          <template v-if="poolEntry && provider.configured">
-            <span
-              v-if="!poolEntry.inPool"
-              class="provider-badge pool-removed"
-              :title="t('settings.model.poolBadgeRemovedTitle', {
-                source: poolSourceLabel(poolEntry.removalSource),
-                message: poolEntry.removalMessage || '—'
-              })"
-            >
-              {{ t('settings.model.poolBadgeRemoved') }}
-            </span>
-            <span
-              v-else-if="poolEntry.inCooldown"
-              class="provider-badge pool-cooldown"
-              :title="t('settings.model.poolBadgeCooldownTitle', {
-                seconds: Math.ceil(poolEntry.cooldownRemainingMs / 1000)
-              })"
-            >
-              {{ t('settings.model.poolBadgeCooldown') }}
-            </span>
-            <span
-              v-else
-              class="provider-badge pool-in"
-              :title="t('settings.model.poolBadgeInPoolTitle')"
-            >
-              {{ t('settings.model.poolBadgeInPool') }}
-            </span>
-          </template>
+          <!-- RFC-073: liveness badge. Single source of truth replacing the old
+               configured / pool-entry combo. UNCONFIGURED renders no badge — the
+               status pill on the right already says "needs configuration". -->
+          <span
+            v-if="provider.liveness === 'LIVE'"
+            class="provider-badge pool-in"
+            :title="t('settings.model.poolBadgeInPoolTitle')"
+          >
+            {{ t('settings.model.poolBadgeInPool') }}
+          </span>
+          <span
+            v-else-if="provider.liveness === 'COOLDOWN'"
+            class="provider-badge pool-cooldown"
+            :title="t('settings.model.poolBadgeCooldownTitle', {
+              seconds: Math.max(1, Math.ceil((provider.cooldownRemainingMs || 0) / 1000))
+            })"
+          >
+            {{ t('settings.model.poolBadgeCooldown') }}
+          </span>
+          <span
+            v-else-if="provider.liveness === 'REMOVED'"
+            class="provider-badge pool-removed"
+            :title="t('settings.model.poolBadgeRemovedTitle', {
+              source: t('settings.model.poolSourceInitProbe'),
+              message: provider.unavailableReason || '—'
+            })"
+          >
+            {{ t('settings.model.poolBadgeRemoved') }}
+          </span>
+          <span
+            v-else-if="provider.liveness === 'UNPROBED'"
+            class="provider-badge pool-unprobed"
+            :title="t('settings.model.livenessUnprobedTooltip')"
+          >
+            {{ t('settings.model.livenessUnprobed') }}
+          </span>
         </div>
         <p class="provider-id">{{ provider.id }}</p>
       </div>
@@ -115,10 +120,11 @@
       >
         {{ t('common.delete') }}
       </button>
-      <!-- RFC-009 Phase 4: manual reprobe — visible when the provider has been
-           HARD-removed from the pool, lets the user recover without restart. -->
+      <!-- RFC-073: manual reprobe — visible when the provider was HARD-removed,
+           lets the user recover without restart. Also useful in COOLDOWN to
+           short-circuit the wait. -->
       <button
-        v-if="poolEntry && !poolEntry.inPool && provider.configured"
+        v-if="provider.liveness === 'REMOVED' || provider.liveness === 'COOLDOWN'"
         class="card-btn"
         :class="{ testing: reprobing }"
         :disabled="reprobing"
@@ -142,15 +148,12 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import type { ProviderInfo } from '@/types'
-import type { ProviderPoolEntry } from '@/api'
 
 defineProps<{
   provider: ProviderInfo
   connectionTestingId: string | null
   connectionResults: Record<string, any>
-  // RFC-009 Phase 4: pool status for this provider; null when pool API hasn't loaded yet.
-  poolEntry?: ProviderPoolEntry | null
-  // RFC-009 Phase 4: true while a manual reprobe is in flight for this provider.
+  // RFC-073: true while a manual reprobe is in flight for this provider.
   reprobing?: boolean
   isProviderActive: (provider: ProviderInfo) => boolean
   providerStatus: (provider: ProviderInfo) => { type: string; label: string }
@@ -167,18 +170,6 @@ defineEmits<{
 }>()
 
 const { t } = useI18n()
-
-/** Translate the backend RemovalSource enum into a human-readable label. */
-function poolSourceLabel(source: string | null): string {
-  switch (source) {
-    case 'AUTH_ERROR': return t('settings.model.poolSourceAuthError')
-    case 'BILLING': return t('settings.model.poolSourceBilling')
-    case 'MODEL_NOT_FOUND': return t('settings.model.poolSourceModelNotFound')
-    case 'INIT_PROBE': return t('settings.model.poolSourceInitProbe')
-    case 'MANUAL': return t('settings.model.poolSourceManual')
-    default: return source || '—'
-  }
-}
 </script>
 
 <style scoped>
@@ -230,6 +221,14 @@ function poolSourceLabel(source: string | null): string {
 .provider-badge.pool-in { background: rgba(34, 197, 94, 0.12); color: #16a34a; cursor: help; }
 .provider-badge.pool-cooldown { background: rgba(245, 158, 11, 0.14); color: #b45309; cursor: help; }
 .provider-badge.pool-removed { background: rgba(239, 68, 68, 0.14); color: #dc2626; cursor: help; }
+/* RFC-073: UNPROBED — neutral grey with a gentle pulse so it's clearly transient. */
+.provider-badge.pool-unprobed {
+  background: rgba(156, 163, 175, 0.16);
+  color: var(--mc-text-tertiary, #6b7280);
+  cursor: help;
+  animation: mc-card-dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes mc-card-dot-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 .provider-status { flex-shrink: 0; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .provider-status.configured { background: var(--mc-primary-bg); color: var(--mc-primary); }
 .provider-status.partial { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }

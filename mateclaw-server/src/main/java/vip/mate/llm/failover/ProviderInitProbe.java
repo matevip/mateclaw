@@ -15,6 +15,7 @@ import vip.mate.llm.service.ModelProviderService;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.*;
 
 /**
@@ -50,6 +51,14 @@ public class ProviderInitProbe {
     private final ModelProviderService providerService;
     private final AvailableProviderPool pool;
     private final Map<ModelProtocol, ProviderProbeStrategy> strategies;
+
+    /**
+     * RFC-073: providers we've made a probe decision for (success / fail /
+     * deferred / fail-open). Lets the UI distinguish "still booting" from
+     * "probed and removed" without inventing a parallel state machine.
+     * Monotonic — entries are never removed; re-probing simply re-asserts.
+     */
+    private final Set<String> probedProviderIds = ConcurrentHashMap.newKeySet();
 
     public ProviderInitProbe(ModelProviderMapper providerMapper,
                              ModelProviderService providerService,
@@ -122,6 +131,7 @@ public class ProviderInitProbe {
                     log.debug("[ProviderInitProbe] no probe strategy for {} (protocol={}), defaulting to in-pool",
                             provider.getProviderId(), provider.getChatModel());
                     pool.add(provider.getProviderId());
+                    probedProviderIds.add(provider.getProviderId());
                     continue;
                 }
                 futures.put(provider.getProviderId(),
@@ -161,6 +171,7 @@ public class ProviderInitProbe {
                     log.warn("[ProviderInitProbe] provider={} FAIL ({} ms): {}",
                             id, result.latencyMs(), result.errorMessage());
                 }
+                probedProviderIds.add(id);
             }
             log.info("[ProviderInitProbe] done — passed={}, failed={}, deferred={}, pool size={}",
                     passed, failed, deferred, pool.snapshot().size());
@@ -193,6 +204,7 @@ public class ProviderInitProbe {
         if (strategy == null) {
             // No strategy for this protocol — fail-open: assume usable.
             pool.add(providerId);
+            probedProviderIds.add(providerId);
             return ProbeResult.ok(0);
         }
         ProbeResult result = strategy.probe(provider);
@@ -202,7 +214,19 @@ public class ProviderInitProbe {
             pool.remove(providerId, AvailableProviderPool.RemovalSource.INIT_PROBE,
                     "reprobe failed: " + result.errorMessage());
         }
+        probedProviderIds.add(providerId);
         return result;
+    }
+
+    /**
+     * RFC-073: has this provider been through at least one probe attempt
+     * (success, failure, deferred fail-open, or strategy-missing fail-open)?
+     * Returns false during the startup window before {@code probeAllConfigured}
+     * has touched it. Used by {@code ModelProviderService} to distinguish
+     * UNPROBED from REMOVED in the UI.
+     */
+    public boolean hasBeenProbed(String providerId) {
+        return providerId != null && probedProviderIds.contains(providerId);
     }
 
     private List<ModelProviderEntity> listConfiguredProviders() {

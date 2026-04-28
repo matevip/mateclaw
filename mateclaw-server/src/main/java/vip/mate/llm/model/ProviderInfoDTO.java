@@ -31,4 +31,12 @@ public class ProviderInfoDTO {
     private Long oauthExpiresAt;
     /** RFC-009 P3.5: position in the failover chain (0 = excluded, 1..N = priority). */
     private Integer fallbackPriority;
+    /** RFC-073: combined runtime state — UI source of truth for "is this provider usable right now". */
+    private Liveness liveness;
+    /** Human-readable reason populated only when liveness ∈ {REMOVED, COOLDOWN}. */
+    private String unavailableReason;
+    /** Epoch ms of the most recent removal, populated only when liveness == REMOVED. */
+    private Long lastProbedAtMs;
+    /** Remaining cooldown window in ms, populated only when liveness == COOLDOWN. */
+    private Long cooldownRemainingMs;
 }

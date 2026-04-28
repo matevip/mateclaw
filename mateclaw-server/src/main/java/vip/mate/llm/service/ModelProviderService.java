@@ -11,6 +11,9 @@ import org.springframework.util.StringUtils;
 import vip.mate.exception.MateClawException;
 import vip.mate.llm.anthropic.oauth.ClaudeCodeOAuthService;
 import vip.mate.llm.event.ModelConfigChangedEvent;
+import vip.mate.llm.failover.AvailableProviderPool;
+import vip.mate.llm.failover.ProviderHealthTracker;
+import vip.mate.llm.failover.ProviderInitProbe;
 import vip.mate.llm.model.*;
 import vip.mate.llm.repository.ModelProviderMapper;
 
@@ -32,6 +35,15 @@ public class ModelProviderService {
     private final ApplicationEventPublisher eventPublisher;
     /** Lazy provider — avoids forcing the bean to exist in test contexts that don't load the anthropic package. */
     private final ObjectProvider<ClaudeCodeOAuthService> claudeCodeOAuthServiceProvider;
+    /** RFC-073: pool / cooldown / probe-completion signals that drive {@link Liveness}. */
+    private final AvailableProviderPool providerPool;
+    private final ProviderHealthTracker providerHealthTracker;
+    /**
+     * Lazy provider — {@link ProviderInitProbe} depends on this service, so direct injection
+     * would create a startup cycle. The probe always exists at runtime; the indirection only
+     * defers Spring's wiring decision past construction.
+     */
+    private final ObjectProvider<ProviderInitProbe> providerInitProbeProvider;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** Plugin-registered ChatModel instances: providerId -> ChatModel */
@@ -67,8 +79,13 @@ public class ModelProviderService {
                 .orderByAsc(ModelProviderEntity::getName));
         Map<String, List<ModelConfigEntity>> modelsByProvider = modelConfigService.listModels().stream()
                 .collect(Collectors.groupingBy(ModelConfigEntity::getProvider));
+        // RFC-073: batch the runtime snapshots once so each toProviderInfo call is O(1)
+        // instead of N pool/tracker round-trips per render.
+        LivenessContext liveness = livenessContext();
 
-        return providers.stream().map(provider -> toProviderInfo(provider, modelsByProvider.get(provider.getProviderId()))).toList();
+        return providers.stream()
+                .map(provider -> toProviderInfo(provider, modelsByProvider.get(provider.getProviderId()), liveness))
+                .toList();
     }
 
     public ProviderInfoDTO updateProviderConfig(String providerId, ProviderConfigRequest request) {
@@ -229,6 +246,12 @@ public class ModelProviderService {
     }
 
     private ProviderInfoDTO toProviderInfo(ModelProviderEntity provider, List<ModelConfigEntity> models) {
+        return toProviderInfo(provider, models, livenessContext());
+    }
+
+    private ProviderInfoDTO toProviderInfo(ModelProviderEntity provider,
+                                           List<ModelConfigEntity> models,
+                                           LivenessContext liveness) {
         ProviderInfoDTO dto = new ProviderInfoDTO();
         dto.setId(provider.getProviderId());
         dto.setName(provider.getName());
@@ -242,9 +265,15 @@ public class ModelProviderService {
         dto.setFreezeUrl(Boolean.TRUE.equals(provider.getFreezeUrl()));
         dto.setRequireApiKey(Boolean.TRUE.equals(provider.getRequireApiKey()));
         boolean configured = isProviderConfigured(provider);
-        boolean available = configured && models != null && !models.isEmpty();
+        // RFC-073: `available` retains its boolean meaning ("usable right now") but is now
+        // gated on Liveness.LIVE rather than just configuration completeness, so the chat
+        // path and the dropdown stop disagreeing about local providers.
+        Liveness providerLiveness = computeLiveness(provider, configured, liveness);
+        boolean available = providerLiveness == Liveness.LIVE && models != null && !models.isEmpty();
         dto.setConfigured(configured);
         dto.setAvailable(available);
+        dto.setLiveness(providerLiveness);
+        applyLivenessDetails(dto, provider.getProviderId(), providerLiveness, liveness);
         dto.setApiKey(maskApiKey(provider.getApiKey()));
         dto.setBaseUrl(provider.getBaseUrl());
         dto.setGenerateKwargs(readJson(provider.getGenerateKwargs()));
@@ -363,4 +392,56 @@ public class ModelProviderService {
             return "{}";
         }
     }
+
+    // ============================================================
+    // RFC-073: Liveness computation
+    // ============================================================
+
+    /** Take one snapshot per render-batch so {@link #toProviderInfo} stays O(1) per provider. */
+    private LivenessContext livenessContext() {
+        return new LivenessContext(providerPool.snapshot(), providerHealthTracker.snapshot(),
+                providerInitProbeProvider.getIfAvailable());
+    }
+
+    private Liveness computeLiveness(ModelProviderEntity provider, boolean configured, LivenessContext ctx) {
+        if (!configured) return Liveness.UNCONFIGURED;
+        String id = provider.getProviderId();
+        // Probe absent in test contexts → fail-open to LIVE so test fixtures don't trip on UNPROBED.
+        if (ctx.initProbe() != null && !ctx.initProbe().hasBeenProbed(id)) {
+            return Liveness.UNPROBED;
+        }
+        AvailableProviderPool.RemovalReason reason = ctx.poolSnapshot().get(id);
+        boolean inPool = ctx.poolSnapshot().containsKey(id) && reason == null;
+        if (!inPool) return Liveness.REMOVED;
+        ProviderHealthTracker.ProviderHealthSnapshot health = ctx.healthSnapshot().get(id);
+        if (health != null && health.cooldownRemainingMs() > 0) return Liveness.COOLDOWN;
+        return Liveness.LIVE;
+    }
+
+    private void applyLivenessDetails(ProviderInfoDTO dto, String providerId,
+                                       Liveness liveness, LivenessContext ctx) {
+        switch (liveness) {
+            case REMOVED -> {
+                AvailableProviderPool.RemovalReason reason = ctx.poolSnapshot().get(providerId);
+                if (reason != null) {
+                    dto.setUnavailableReason(reason.message());
+                    dto.setLastProbedAtMs(reason.removedAtMs());
+                }
+            }
+            case COOLDOWN -> {
+                ProviderHealthTracker.ProviderHealthSnapshot health = ctx.healthSnapshot().get(providerId);
+                if (health != null) {
+                    dto.setCooldownRemainingMs(health.cooldownRemainingMs());
+                }
+                dto.setUnavailableReason("provider in cooldown after consecutive failures");
+            }
+            default -> { /* LIVE / UNPROBED / UNCONFIGURED — no extra fields */ }
+        }
+    }
+
+    /** Per-render snapshot of pool / cooldown / probe-completion state. */
+    private record LivenessContext(
+            Map<String, AvailableProviderPool.RemovalReason> poolSnapshot,
+            Map<String, ProviderHealthTracker.ProviderHealthSnapshot> healthSnapshot,
+            ProviderInitProbe initProbe) {}
 }
