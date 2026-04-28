@@ -1240,13 +1240,13 @@ UPDATE mate_skill SET skill_content = '# Steve Jobs · 思维操作系统
 
 -- 1. Web Console（默认启用）
 INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000001, 'Web Console', 'web', 1000000001, '', '{}', TRUE,
+VALUES (1000000001, 'Web 控制台', 'web', 1000000001, '', '{}', TRUE,
         '默认 Web 控制台渠道，通过浏览器 SSE 流式交互', NOW(), NOW(), 0)
 ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), agent_id=VALUES(agent_id), bot_prefix=VALUES(bot_prefix), config_json=VALUES(config_json), enabled=VALUES(enabled), description=VALUES(description), update_time=VALUES(update_time), deleted=VALUES(deleted);
 
 -- 2. 钉钉（默认禁用，需配置 client_id/client_secret）
 INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000002, 'DingTalk Bot', 'dingtalk', 1000000001, '', '{
+VALUES (1000000002, '钉钉机器人', 'dingtalk', 1000000001, '', '{
   "client_id": "",
   "client_secret": "",
   "robot_code": "",
@@ -1266,7 +1266,7 @@ ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), ag
 
 -- 3. 飞书（默认禁用，需配置 app_id/app_secret）
 INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000003, 'Feishu Bot', 'feishu', 1000000001, '', '{
+VALUES (1000000003, '飞书机器人', 'feishu', 1000000001, '', '{
   "app_id": "",
   "app_secret": "",
   "encrypt_key": "",
@@ -1285,7 +1285,7 @@ ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), ag
 
 -- 4. Telegram（默认禁用，需配置 bot_token）
 INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000004, 'Telegram Bot', 'telegram', 1000000001, '', '{
+VALUES (1000000004, 'Telegram 机器人', 'telegram', 1000000001, '', '{
   "bot_token": "",
   "http_proxy": "",
   "show_typing": true,
@@ -1303,7 +1303,7 @@ ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), ag
 
 -- 5. Discord（默认禁用，需配置 bot_token）
 INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000005, 'Discord Bot', 'discord', 1000000001, '!mc ', '{
+VALUES (1000000005, 'Discord 机器人', 'discord', 1000000001, '!mc ', '{
   "bot_token": "",
   "http_proxy": "",
   "dm_policy": "open",
@@ -1320,7 +1320,7 @@ ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), ag
 
 -- 6. 企业微信智能机器人（默认禁用，需配置 bot_id/secret）
 INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000006, 'WeCom Bot', 'wecom', 1000000001, '', '{
+VALUES (1000000006, '企业微信机器人', 'wecom', 1000000001, '', '{
   "bot_id": "",
   "secret": "",
   "welcome_text": "",
@@ -1341,7 +1341,7 @@ ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), ag
 
 -- 7. QQ 机器人（默认禁用，需配置 app_id/client_secret）
 INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000007, 'QQ Bot', 'qq', 1000000001, '', '{
+VALUES (1000000007, 'QQ 机器人', 'qq', 1000000001, '', '{
   "app_id": "",
   "client_secret": "",
   "markdown_enabled": true,
@@ -1378,7 +1378,7 @@ ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), ag
 
 -- 9. Slack（默认禁用，需配置 bot_token / app_token）
 INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000009, 'Slack Bot', 'slack', 1000000001, '', '{
+VALUES (1000000009, 'Slack 机器人', 'slack', 1000000001, '', '{
   "bot_token": "",
   "app_token": "",
   "signing_secret": "",
