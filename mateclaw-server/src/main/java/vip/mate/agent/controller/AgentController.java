@@ -4,6 +4,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import vip.mate.channel.web.Utf8SseEmitter;
@@ -11,9 +12,12 @@ import vip.mate.agent.AgentService;
 import vip.mate.agent.AgentState;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.audit.service.AuditEventService;
+import vip.mate.auth.model.UserEntity;
+import vip.mate.auth.service.AuthService;
 import vip.mate.common.result.R;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
+import vip.mate.workspace.core.service.WorkspaceService;
 
 import java.io.IOException;
 import java.util.List;
@@ -34,6 +38,8 @@ public class AgentController {
 
     private final AgentService agentService;
     private final AuditEventService auditEventService;
+    private final AuthService authService;
+    private final WorkspaceService workspaceService;
     private final ExecutorService sseExecutor = Executors.newCachedThreadPool();
 
     @Operation(summary = "获取Agent列表")
@@ -61,9 +67,12 @@ public class AgentController {
     @RequireWorkspaceRole("member")
     public R<AgentEntity> create(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
-            @RequestBody AgentEntity agent) {
+            @RequestBody AgentEntity agent,
+            Authentication auth) {
         // 始终注入 workspace_id，无 header 时使用默认
         agent.setWorkspaceId(workspaceId != null ? workspaceId : 1L);
+        // RFC-077 §4.4: 记录创建者，让 member 后续可删除自建 Agent
+        agent.setCreatorUserId(resolveUserId(auth));
         AgentEntity created = agentService.createAgent(agent);
         auditEventService.record("CREATE", "AGENT", String.valueOf(created.getId()), created.getName(), null);
         return R.ok(created);
@@ -85,11 +94,24 @@ public class AgentController {
 
     @Operation(summary = "删除Agent")
     @DeleteMapping("/{id}")
-    @RequireWorkspaceRole("admin")
+    @RequireWorkspaceRole("member")
     public R<Void> delete(@PathVariable Long id,
-                          @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+                          @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+                          Authentication auth) {
         AgentEntity agent = agentService.getAgent(id);
         verifyResourceWorkspace(agent.getWorkspaceId(), workspaceId);
+
+        // RFC-077 §4.4: 三选一鉴权 — 系统 admin / workspace admin+ / 创建者本人
+        Long userId = resolveUserId(auth);
+        boolean systemAdmin = isSystemAdmin(auth);
+        boolean workspaceAdmin = !systemAdmin
+                && workspaceService.hasPermission(agent.getWorkspaceId(), userId, "admin");
+        boolean isCreator = userId.equals(agent.getCreatorUserId());
+        if (!systemAdmin && !workspaceAdmin && !isCreator) {
+            throw new MateClawException("err.agent.delete_forbidden", 403,
+                    "Only the creator or a workspace admin can delete this Agent");
+        }
+
         agentService.deleteAgent(id);
         auditEventService.record("DELETE", "AGENT", String.valueOf(id), agent.getName(), null);
         return R.ok();
@@ -184,5 +206,24 @@ public class AgentController {
         if (resourceWorkspaceId != null && !resourceWorkspaceId.equals(requestedWs)) {
             throw new MateClawException("err.common.wrong_workspace", "资源不属于当前工作区");
         }
+    }
+
+    private Long resolveUserId(Authentication auth) {
+        if (auth == null) {
+            throw new MateClawException("err.auth.unauthenticated", 401, "Not authenticated");
+        }
+        UserEntity user = authService.findByUsername(auth.getName());
+        if (user == null) {
+            throw new MateClawException("err.auth.user_not_found", 401, "User not found: " + auth.getName());
+        }
+        return user.getId();
+    }
+
+    private boolean isSystemAdmin(Authentication auth) {
+        if (auth == null) {
+            return false;
+        }
+        UserEntity user = authService.findByUsername(auth.getName());
+        return user != null && "admin".equalsIgnoreCase(user.getRole());
     }
 }

@@ -65,17 +65,19 @@ public class TemplateService {
     /**
      * 应用模板创建 Agent 及其工作区文件
      *
-     * @param templateId 模板 ID
+     * @param templateId   模板 ID
+     * @param workspaceId  目标工作区 ID（来自 X-Workspace-Id header）
+     * @param creatorUserId 当前用户 ID（用于 RFC-077 创建者归属）
      * @return 创建的 AgentEntity
      */
     @Transactional
-    public AgentEntity applyTemplate(String templateId) {
+    public AgentEntity applyTemplate(String templateId, Long workspaceId, Long creatorUserId) {
         TemplateDTO template = listTemplates().stream()
                 .filter(t -> t.getId().equals(templateId))
                 .findFirst()
                 .orElseThrow(() -> new MateClawException("err.agent.template_not_found", "模板不存在: " + templateId));
 
-        // 1. 创建 Agent
+        // 1. 创建 Agent — RFC-077: 显式注入 workspaceId/creatorUserId，避免 DB 默认值兜底成 1（issue #26 Bug A）
         AgentEntity agent = new AgentEntity();
         agent.setName(template.getName());
         agent.setDescription(template.getDescription());
@@ -83,6 +85,8 @@ public class TemplateService {
         agent.setIcon(template.getIcon());
         agent.setTags(template.getTags());
         agent.setMaxIterations(template.getMaxIterations());
+        agent.setWorkspaceId(workspaceId);
+        agent.setCreatorUserId(creatorUserId);
         AgentEntity created = agentService.createAgent(agent);
 
         // 2. 创建工作区文件
