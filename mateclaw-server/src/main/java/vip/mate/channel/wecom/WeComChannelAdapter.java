@@ -26,6 +26,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -143,11 +144,23 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
 
     private record WeComReplyContext(String frameReqId, String processingStreamId) {}
 
+    /**
+     * Single-flight guard for failure signals. JDK WebSocket can fire onClose
+     * AND onError for the same outage, plus connect-exception and heartbeat
+     * timeout, all routing to the disconnect path. The first one wins; the
+     * rest are deduped. Cleared at the start of each new connect attempt and
+     * after auth_succeed in markReady().
+     */
+    private final AtomicBoolean disconnectInflight = new AtomicBoolean(false);
+
     public WeComChannelAdapter(ChannelEntity channelEntity,
                                ChannelMessageRouter messageRouter,
                                ObjectMapper objectMapper) {
         super(channelEntity, messageRouter, objectMapper);
-        int maxAttempts = -1;
+        // Default to 8 bounded attempts (~4 minutes total at 2s..30s exponential)
+        // so the UI eventually settles in ERROR instead of getting stuck in
+        // RECONNECTING forever. User config still overrides (-1 = infinite).
+        int maxAttempts = 8;
         Object val = config.get("max_reconnect_attempts");
         if (val instanceof Number n) {
             maxAttempts = n.intValue();
@@ -180,81 +193,75 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
 
     @Override
     protected void doStop() {
-        // 停止心跳
-        if (heartbeatFuture != null) {
-            heartbeatFuture.cancel(false);
-            heartbeatFuture = null;
-        }
-
-        // 关闭 WebSocket
-        if (webSocket != null) {
-            try {
-                webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "Manual disconnect")
-                        .orTimeout(3, TimeUnit.SECONDS)
-                        .exceptionally(ex -> null)
-                        .join();
-            } catch (Exception e) {
-                log.debug("[wecom] Error closing WebSocket: {}", e.getMessage());
-            }
-            webSocket = null;
-        }
-
-        // 等待 WS 线程结束
-        if (wsThread != null) {
-            wsThread.interrupt();
-            try {
-                wsThread.join(5000);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-            wsThread = null;
-        }
-
-        // 清理挂起的 ACK
-        pendingAcks.forEach((k, f) -> f.completeExceptionally(new RuntimeException("Channel stopped")));
-        pendingAcks.clear();
-        replyQueues.clear();
-        pendingFrames.clear();
+        releaseConnectionResources("stopped");
+        // doStop also clears history that survives reconnects (processedMessageIds)
         processedMessageIds.clear();
-        replyContexts.clear();
-
-        this.httpClient = null;
         log.info("[wecom] WeCom bot channel stopped");
     }
 
     @Override
     protected void doReconnect() {
         log.info("[wecom] Reconnecting WebSocket...");
-        // 清理旧连接
+        releaseConnectionResources("reconnecting");
+
+        // releaseConnectionResources nulls httpClient — rebuild a fresh one.
+        // This is the core fix: each reconnect starts from a clean SSL/I-O
+        // surface, mirroring what manual stop+start has been doing in the field.
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
+
+        String botId = getConfigString("bot_id");
+        String secret = getConfigString("secret");
+        connectWebSocket(botId, secret);
+    }
+
+    /**
+     * Release every per-connection resource so a fresh HttpClient + WebSocket
+     * are always built next. Shared by doStop (channel teardown) and
+     * doReconnect (auto-recovery cycle).
+     *
+     * <p>Why drop {@code httpClient} too: the JDK HttpClient caches SSL
+     * sessions and keeps an async selector loop. After certain WS error paths
+     * the SSL session can be poisoned, causing every subsequent handshake to
+     * be RST'd by the server ("Remote host terminated the handshake"). Dropping
+     * the client forces a clean rebuild — this is exactly what manual
+     * "Disable + Enable" did to recover.
+     */
+    private void releaseConnectionResources(String reason) {
         if (heartbeatFuture != null) {
             heartbeatFuture.cancel(false);
             heartbeatFuture = null;
         }
         if (webSocket != null) {
-            try { webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "Reconnecting"); } catch (Exception ignored) {}
+            try {
+                webSocket.sendClose(WebSocket.NORMAL_CLOSURE, reason)
+                        .orTimeout(2, TimeUnit.SECONDS)
+                        .exceptionally(ex -> null)
+                        .join();
+            } catch (Exception e) {
+                log.debug("[wecom] release: ws close: {}", e.getMessage());
+            }
             webSocket = null;
         }
         if (wsThread != null) {
             wsThread.interrupt();
-            try { wsThread.join(3000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+            try {
+                wsThread.join(3000);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
             wsThread = null;
         }
-        pendingAcks.forEach((k, f) -> f.completeExceptionally(new RuntimeException("Reconnecting")));
+        pendingAcks.forEach((k, f) ->
+                f.completeExceptionally(new RuntimeException("Channel " + reason)));
         pendingAcks.clear();
         replyQueues.clear();
         pendingFrames.clear();
         replyContexts.clear();
         missedPongCount.set(0);
 
-        if (this.httpClient == null) {
-            this.httpClient = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(10))
-                    .build();
-        }
-
-        String botId = getConfigString("bot_id");
-        String secret = getConfigString("secret");
-        connectWebSocket(botId, secret);
+        this.httpClient = null;
     }
 
     // ==================== WebSocket 连接 ====================
@@ -263,6 +270,9 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
      * 在守护线程中建立 WebSocket 连接
      */
     private void connectWebSocket(String botId, String secret) {
+        // Fresh attempt — allow new failure signals to register again.
+        disconnectInflight.set(false);
+
         wsThread = new Thread(() -> {
             try {
                 log.info("[wecom] WebSocket connecting to {}...", DEFAULT_WS_URL);
@@ -279,13 +289,58 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
 
             } catch (Exception e) {
                 log.error("[wecom] WebSocket connection failed: {}", e.getMessage(), e);
-                if (running.get()) {
-                    onDisconnected("WebSocket connection failed: " + e.getMessage());
-                }
+                handleFailure("WebSocket connection failed: " + e.getMessage());
             }
         }, "wecom-ws-" + channelEntity.getId());
         wsThread.setDaemon(true);
         wsThread.start();
+    }
+
+    /**
+     * Single-flight failure handler. JDK WebSocket can fire onClose AND
+     * onError for the same outage, plus connect-exception and heartbeat
+     * timeout, all wanting to trigger reconnect. Without dedup this fans out
+     * into 2-4 concurrent reconnect attempts, which collide on shared state
+     * (httpClient, wsThread) and amplify failure into a storm.
+     *
+     * <p>Only the first signal of a given outage gets through; later signals
+     * are logged at debug level and dropped. The flag is cleared at the start
+     * of each new connect attempt and on auth success (markReady).
+     */
+    private void handleFailure(String reason) {
+        if (!disconnectInflight.compareAndSet(false, true)) {
+            log.debug("[wecom] handleFailure dedup: {}", reason);
+            return;
+        }
+        if (!running.get()) {
+            return;
+        }
+        onDisconnected(reason);
+    }
+
+    /**
+     * Suppressed at the framework's call site. {@link AbstractChannelAdapter}
+     * invokes this immediately after {@code doReconnect()} returns, but our
+     * doReconnect only fire-and-forget schedules an async WS connect — the
+     * connection isn't actually ready yet. Letting the framework reset
+     * {@code backoff} here causes attempts to stall at #1 forever.
+     *
+     * <p>Real reset happens in {@link #markReady()} when the WeCom
+     * {@code aibot_subscribe} auth response confirms the session is up.
+     */
+    @Override
+    protected void onReconnectSuccess() {
+        // intentionally empty
+    }
+
+    /**
+     * Called when WeCom auth_succeed frame is received — the only point at
+     * which the connection is genuinely usable. Resets backoff and clears
+     * the failure dedup flag so the next outage (if any) can register.
+     */
+    private void markReady() {
+        super.onReconnectSuccess();
+        disconnectInflight.set(false);
     }
 
     /**
@@ -328,18 +383,14 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
         @Override
         public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
             log.warn("[wecom] WebSocket closed: code={}, reason={}", statusCode, reason);
-            if (running.get()) {
-                onDisconnected("WebSocket closed: code=" + statusCode + ", reason=" + reason);
-            }
+            handleFailure("WebSocket closed: code=" + statusCode + ", reason=" + reason);
             return null;
         }
 
         @Override
         public void onError(WebSocket webSocket, Throwable error) {
             log.error("[wecom] WebSocket error: {}", error.getMessage());
-            if (running.get()) {
-                onDisconnected("WebSocket error: " + error.getMessage());
-            }
+            handleFailure("WebSocket error: " + error.getMessage());
         }
     }
 
@@ -389,10 +440,21 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
                 if (errcode != null && errcode != 0) {
                     log.error("[wecom] Authentication failed: errcode={}, errmsg={}", errcode, frame.get("errmsg"));
                     lastError = "Authentication failed: " + frame.get("errmsg");
+                    // RFC-080 §8 follow-up: route auth_succeed errcode!=0 through
+                    // the same single-flight failure path the transport-level
+                    // failures use. Without this the WS stays open as a zombie
+                    // (no heartbeat, no reconnect) and connectionState stays
+                    // CONNECTED — the UI then shows "已连接" while no message
+                    // can ever arrive. Letting handleFailure run flips the state
+                    // to RECONNECTING and (after maxAttempts) to ERROR so the
+                    // green dot stops lying.
+                    handleFailure("Authentication failed: errcode=" + errcode
+                            + ", errmsg=" + frame.get("errmsg"));
                     return;
                 }
                 log.info("[wecom] Authentication successful");
                 missedPongCount.set(0);
+                markReady();
                 startHeartbeat();
                 return;
             }
@@ -452,9 +514,7 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
                 heartbeatFuture.cancel(false);
                 heartbeatFuture = null;
             }
-            if (running.get()) {
-                onDisconnected("Heartbeat timeout: " + missedPongCount.get() + " missed pongs");
-            }
+            handleFailure("Heartbeat timeout: " + missedPongCount.get() + " missed pongs");
             return;
         }
 

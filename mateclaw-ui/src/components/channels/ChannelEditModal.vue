@@ -503,11 +503,13 @@ const weixin = useWeixinQrcodePoll(({ botToken, baseUrl }) => {
       form.value.name = t('channels.weixin.newAccountName') + ' (' + suffix + ')'
     }
   }
+  form.value.enabled = true
 })
 
 const wecom = useWecomBotAuth((bot) => {
   channelConfig.value.bot_id = bot.botid
   channelConfig.value.secret = bot.secret
+  form.value.enabled = true
 })
 
 // Feishu one-click app registration: scan-to-create flow that returns
@@ -515,6 +517,10 @@ const wecom = useWecomBotAuth((bot) => {
 const feishuRegister = useFeishuAppRegister(({ appId, appSecret }) => {
   channelConfig.value.app_id = appId
   channelConfig.value.app_secret = appSecret
+  // Auto-enable on confirmed scan: skipping this trapped users into thinking
+  // the channel was ready to go after scanning, when in fact the toggle was
+  // still off and the adapter never started.
+  form.value.enabled = true
 })
 
 // DingTalk one-click app registration via Device Flow — same UX shape as
@@ -522,6 +528,7 @@ const feishuRegister = useFeishuAppRegister(({ appId, appSecret }) => {
 const dingtalkRegister = useDingTalkAppRegister(({ clientId, clientSecret }) => {
   channelConfig.value.client_id = clientId
   channelConfig.value.client_secret = clientSecret
+  form.value.enabled = true
 })
 
 // ========== Field defs (derived) ==========

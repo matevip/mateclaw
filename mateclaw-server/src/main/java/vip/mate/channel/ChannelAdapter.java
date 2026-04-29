@@ -1,5 +1,6 @@
 package vip.mate.channel;
 
+import vip.mate.channel.health.ChannelHealth;
 import vip.mate.workspace.conversation.model.MessageContentPart;
 
 import java.time.Duration;
@@ -160,5 +161,25 @@ public interface ChannelAdapter {
      */
     default Duration stalenessThreshold() {
         return Duration.ofMinutes(60);
+    }
+
+    /**
+     * Real-time health snapshot of this adapter.
+     *
+     * <p>This is the source of truth the frontend "connected" green dot
+     * should bind to — {@code mate_channel.enabled} only records the
+     * user's intent to run the channel, not whether the underlying
+     * transport (WebSocket / webhook subscription / API token) is
+     * actually healthy.
+     *
+     * <p>Default returns {@code OUT_OF_SERVICE} when {@link #isRunning()}
+     * is false and {@code UP} otherwise. Concrete adapters override to
+     * surface RECONNECTING / DOWN with specific reasons (auth failure,
+     * staleness exceeded, etc).
+     */
+    default ChannelHealth health() {
+        return isRunning()
+                ? ChannelHealth.up(getChannelType(), null, java.time.Instant.now())
+                : ChannelHealth.outOfService(getChannelType(), null);
     }
 }

@@ -1,0 +1,41 @@
+name: "✨ Feature Request (English)"
+description: Propose a new feature or improvement. Start with why, then what.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The key to a new feature is not "what it is" but "**who suffers without it, and how**".
+
+        If you can't articulate who would use it and why, the feature probably shouldn't be built.
+
+  - type: textarea
+    id: why
+    attributes:
+      label: What problem are you solving? (required)
+      description: |
+        Describe a real scenario. **Don't jump to "add an XX button"** — first explain why you need that button, and what hurts without it.
+      placeholder: |
+        Example: I switch the default model for 5 different Agents every day, and each switch takes 3 clicks in the settings page.
+        A global "quick switch default model" menu would save me 30 clicks a day.
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: How should it work? (required)
+      description: |
+        A paragraph or a few bullets. If you can sketch it or share a mockup, even better (drag in images).
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've tried? (optional)
+      description: |
+        If you can't think of any, leave it blank. **Don't invent content just to fill the field.**
+    validations:
+      required: false

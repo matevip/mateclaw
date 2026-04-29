@@ -176,31 +176,62 @@ public class DingTalkChannelAdapter extends AbstractChannelAdapter implements St
             payload.put("conversationType", msg.getConversationType());
             payload.put("sessionWebhook", msg.getSessionWebhook());
 
-            // 消息内容
-            // 钉钉服务端已经把语音转写好放在 MessageContent.recognition 里（跟
-            // 企业微信 voice.content 一个模式），不需要 STT。优先读 recognition；
-            // picture msgtype 把 downloadCode / pictureDownloadCode 透传给 webhook 处理；
-            // 否则读 text.content。
-            // richText 还没接上 —— stream 模式收到 richText 会重新落到 webhook 默认 else
-            // 分支静默丢消息，单独修。
+            // Dispatch by content type. DingTalk pre-transcribes voice into
+            // MessageContent.recognition (same shape as WeCom voice.content),
+            // so we never need to run STT ourselves.
+            //   - audio (recognition)             -> forwarded as text
+            //   - picture / downloadCode          -> webhook picture branch fetches bytes
+            //   - richText (List<MessageContent>) -> rebuild the webhook richText payload
+            //   - text                            -> text.content
             com.dingtalk.open.app.api.models.bot.MessageContent body = msg.getContent();
             String recognition = body != null ? body.getRecognition() : null;
             String pictureDownloadCode = body != null ? body.getPictureDownloadCode() : null;
             String downloadCode = body != null ? body.getDownloadCode() : null;
+            java.util.List<com.dingtalk.open.app.api.models.bot.MessageContent> richTextItems =
+                    body != null ? body.getRichText() : null;
+            String msgtype = msg.getMsgtype();
 
             if (recognition != null && !recognition.isBlank()) {
                 payload.put("msgtype", "audio");
                 payload.put("audio", Map.of("recognition", recognition));
-            } else if ("picture".equals(msg.getMsgtype())
+            } else if ("picture".equals(msgtype)
                     && (pictureDownloadCode != null || downloadCode != null)) {
                 payload.put("msgtype", "picture");
                 Map<String, Object> picture = new java.util.HashMap<>();
                 if (pictureDownloadCode != null) picture.put("pictureDownloadCode", pictureDownloadCode);
                 if (downloadCode != null) picture.put("downloadCode", downloadCode);
                 payload.put("picture", picture);
+            } else if ("richText".equalsIgnoreCase(msgtype)
+                    || (richTextItems != null && !richTextItems.isEmpty())) {
+                // richText: rebuild a webhook-compatible richText.richText array.
+                // Without this branch, group @-mentions / formatted text /
+                // quoted replies all fall through to the default webhook else
+                // branch and get silently dropped — that's the "console
+                // doesn't receive" symptom users hit on first DingTalk test.
+                List<Map<String, Object>> items = new ArrayList<>();
+                if (richTextItems != null) {
+                    for (com.dingtalk.open.app.api.models.bot.MessageContent item : richTextItems) {
+                        if (item == null) continue;
+                        Map<String, Object> m = new java.util.HashMap<>();
+                        if (item.getText() != null) m.put("text", item.getText());
+                        if (item.getType() != null) m.put("type", item.getType());
+                        if (item.getDownloadCode() != null) m.put("downloadCode", item.getDownloadCode());
+                        if (item.getPictureDownloadCode() != null) {
+                            m.put("pictureDownloadCode", item.getPictureDownloadCode());
+                        }
+                        if (!m.isEmpty()) items.add(m);
+                    }
+                }
+                payload.put("msgtype", "richText");
+                payload.put("richText", Map.of("richText", items));
             } else if (msg.getText() != null) {
                 payload.put("msgtype", "text");
-                payload.put("text", Map.of("content", msg.getText().getContent() != null ? msg.getText().getContent() : ""));
+                payload.put("text", Map.of("content",
+                        msg.getText().getContent() != null ? msg.getText().getContent() : ""));
+            } else {
+                log.warn("[dingtalk-stream] unsupported msgtype={}, msgId={}, dropping",
+                        msgtype, msg.getMsgId());
+                return;
             }
 
             handleWebhook(payload);
@@ -345,9 +376,16 @@ public class DingTalkChannelAdapter extends AbstractChannelAdapter implements St
                     outTrackId, e.getMessage(), e);
             aiCardManager.failCard(outTrackId, e.getMessage());
 
+            // Tag the returned content with the "[错误] " prefix so
+            // ChannelMessageRouter.isErrorReply flips status='error' on the
+            // persisted row and BaseAgent.sanitizeForLlm filters it out of
+            // the next turn's history. Without this, AICard partial output
+            // (e.g. LLM 400'd mid-stream) would re-enter the prompt as a
+            // valid assistant turn and re-trigger the same 400.
             String partial = contentAccumulator.toString();
+            String errorPrefix = "[错误] AI Card streaming failed: " + e.getMessage();
             if (!partial.isBlank()) {
-                return partial;
+                return errorPrefix + "\n\n（已生成的部分内容，已忽略）\n" + partial;
             }
             throw new RuntimeException("AI Card streaming failed: " + e.getMessage(), e);
         }

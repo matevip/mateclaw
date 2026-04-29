@@ -13,17 +13,11 @@ import vip.mate.channel.dingtalk.DingTalkChannelAdapter;
 import vip.mate.channel.discord.DiscordChannelAdapter;
 import vip.mate.channel.feishu.FeishuAppRegistrationService;
 import vip.mate.channel.feishu.FeishuChannelAdapter;
+import vip.mate.channel.qrcode.util.QrCodeImageEncoder;
 import vip.mate.channel.telegram.TelegramChannelAdapter;
 import vip.mate.channel.weixin.ILinkClient;
 import vip.mate.channel.weixin.WeixinChannelAdapter;
-import com.google.zxing.BarcodeFormat;
-import com.google.zxing.EncodeHintType;
-import com.google.zxing.client.j2se.MatrixToImageWriter;
-import com.google.zxing.common.BitMatrix;
-import com.google.zxing.qrcode.QRCodeWriter;
-import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 
-import java.io.ByteArrayOutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
@@ -261,19 +255,9 @@ public class ChannelWebhookController {
                 new com.fasterxml.jackson.databind.ObjectMapper());
     }
 
-    /**
-     * 使用 ZXing 生成 QR 码 PNG 图片并返回 Base64 编码
-     */
+    /** Delegated to the shared encoder so future tweaks live in one place. */
     private String generateQrCodeBase64(String content) throws Exception {
-        QRCodeWriter writer = new QRCodeWriter();
-        Map<EncodeHintType, Object> hints = Map.of(
-                EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.M,
-                EncodeHintType.MARGIN, 2
-        );
-        BitMatrix bitMatrix = writer.encode(content, BarcodeFormat.QR_CODE, 300, 300, hints);
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        MatrixToImageWriter.writeToStream(bitMatrix, "PNG", baos);
-        return java.util.Base64.getEncoder().encodeToString(baos.toByteArray());
+        return QrCodeImageEncoder.toBase64(content);
     }
 
     @Operation(summary = "获取微信登录二维码")

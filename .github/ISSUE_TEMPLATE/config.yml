@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 使用问题先看文档 / Check the docs first
+    url: https://claw.mate.vip/docs
+    about: 安装、配置、用法问题文档里大多有答案 / Install, config, and usage questions are usually answered in the docs.
+  - name: 🔒 安全漏洞私下报告 / Report security issues privately
+    url: https://github.com/matevip/mateclaw/security/advisories/new
+    about: 安全相关问题请走 Security Advisory，不要开公开 issue / Please use Security Advisory for security-related issues, don't open a public issue.

@@ -130,6 +130,55 @@ public class ChannelController {
         return R.ok(channelManager.getStatus());
     }
 
+    @RequireWorkspaceRole("viewer")
+    @Operation(summary = "获取指定渠道的实时健康状态（真连接状态，前端绿点应该绑这个）")
+    @GetMapping("/{id}/health")
+    public R<Map<String, Object>> health(@PathVariable Long id,
+                                          @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        ChannelEntity channel = channelService.getChannel(id);
+        verifyResourceWorkspace(channel.getWorkspaceId(), workspaceId);
+        return R.ok(channelManager.getAdapter(id)
+                .map(adapter -> adapter.health().toMap())
+                .orElseGet(() -> {
+                    // Adapter not in active map: either disabled, never started,
+                    // or still booting. Surface as OUT_OF_SERVICE so the frontend
+                    // dot stays gray instead of red.
+                    Map<String, Object> body = new java.util.LinkedHashMap<>();
+                    body.put("channelType", channel.getChannelType());
+                    body.put("channelId", id);
+                    body.put("status", "OUT_OF_SERVICE");
+                    body.put("detail", Boolean.TRUE.equals(channel.getEnabled())
+                            ? "channel enabled but adapter not active" : "channel disabled");
+                    return body;
+                }));
+    }
+
+    @RequireWorkspaceRole("admin")
+    @Operation(summary = "批量获取所有渠道健康状态")
+    @GetMapping("/health")
+    public R<List<Map<String, Object>>> healthAll(
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        long ws = workspaceId != null ? workspaceId : 1L;
+        return R.ok(channelService.listChannelsByWorkspace(ws).stream()
+                .map(c -> {
+                    Map<String, Object> body = channelManager.getAdapter(c.getId())
+                            .map(a -> a.health().toMap())
+                            .orElseGet(() -> {
+                                Map<String, Object> m = new java.util.LinkedHashMap<>();
+                                m.put("channelType", c.getChannelType());
+                                m.put("channelId", c.getId());
+                                m.put("status", "OUT_OF_SERVICE");
+                                m.put("detail", Boolean.TRUE.equals(c.getEnabled())
+                                        ? "channel enabled but adapter not active" : "channel disabled");
+                                return m;
+                            });
+                    body.put("name", c.getName());
+                    body.put("enabled", Boolean.TRUE.equals(c.getEnabled()));
+                    return body;
+                })
+                .toList());
+    }
+
     private void verifyResourceWorkspace(Long resourceWorkspaceId, Long headerWorkspaceId) {
         long requestedWs = headerWorkspaceId != null ? headerWorkspaceId : 1L;
         if (resourceWorkspaceId != null && !resourceWorkspaceId.equals(requestedWs)) {

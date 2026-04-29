@@ -1556,8 +1556,14 @@ public class AgentGraphBuilder {
                 continue;
             }
 
-            // Cross-turn assistant: never patch (symmetric with stripThinkingFromPrompt)
-            if (i <= lastUserIdx) {
+            // Cross-turn assistant: usually skip per stripThinkingFromPrompt's
+            // "thinking resets across user turns" rule. But DeepSeek (since
+            // 2026-04) requires reasoning_content even on prior-turn assistants
+            // and rejects requests where any prior assistant has it null. For
+            // policies with patchCrossTurn=true, fall through and patch with
+            // the empty fallback (" ") so multi-turn conversations don't 400
+            // before sanitizeForLlm has a chance to filter the previous error.
+            if (i <= lastUserIdx && !policy.patchCrossTurn) {
                 patched.add(msg);
                 continue;
             }
@@ -1667,19 +1673,33 @@ public class AgentGraphBuilder {
         // tolerance KIMI/OPENAI use restores forward progress; the producer-side
         // capture gap remains a real bug to fix in RFC-049 PR-3 but doesn't
         // belong on the user-facing failure path.
-        DEEPSEEK(" ",  false, true),
-        KIMI    (" ",  false, false),
-        OPENAI  (" ",  false, false),
-        DEFAULT (" ",  false, false);
+        //
+        // 2026-04-29 follow-up: DeepSeek tightened thinking-mode validation to
+        // require reasoning_content on EVERY assistant message in the request,
+        // including prior-turn history. We never persist reasoning_content to
+        // mate_message, so any conversation with >=1 prior turn fails with
+        // 400 "reasoning_content must be passed back" on the very first reasoning
+        // call. patchCrossTurn=true lets us extend the " " fallback to prior-turn
+        // assistants too, restoring forward progress for multi-turn IM chats.
+        // Real reasoning_content recovery (RFC-049 PR-3) is the proper long-term
+        // fix; this keeps users unblocked.
+        DEEPSEEK(" ",  false, true,  true),
+        KIMI    (" ",  false, false, false),
+        OPENAI  (" ",  false, false, false),
+        DEFAULT (" ",  false, false, false);
 
         final String emptyFallback;
         final boolean warnOnMissingReal;
         final boolean patchNonToolCall;
+        /** Whether to also patch prior-turn assistants ({@code i <= lastUserIdx}). */
+        final boolean patchCrossTurn;
 
-        FallbackPolicy(String emptyFallback, boolean warnOnMissingReal, boolean patchNonToolCall) {
+        FallbackPolicy(String emptyFallback, boolean warnOnMissingReal,
+                       boolean patchNonToolCall, boolean patchCrossTurn) {
             this.emptyFallback = emptyFallback;
             this.warnOnMissingReal = warnOnMissingReal;
             this.patchNonToolCall = patchNonToolCall;
+            this.patchCrossTurn = patchCrossTurn;
         }
 
         static FallbackPolicy forProvider(ModelProviderEntity provider) {

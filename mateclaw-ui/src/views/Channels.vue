@@ -196,19 +196,32 @@ async function loadChannels() {
 
 async function loadStatus() {
   try {
-    const res: any = await channelApi.status()
-    const statusData = res.data
-    if (statusData && Array.isArray(statusData.channels)) {
-      const map: Record<number, any> = {}
-      for (const ch of statusData.channels) {
-        map[ch.id] = {
-          connectionState: ch.connectionState || 'DISCONNECTED',
-          lastError: ch.lastError || null,
-          reconnectAttempts: ch.reconnectAttempts || 0,
-        }
+    // Prefer the new typed health endpoint — it surfaces OUT_OF_SERVICE
+    // (enabled in DB but adapter not active, e.g. start failed silently)
+    // which the legacy /status endpoint conflated with DISCONNECTED. The
+    // older shape is still returned by the fallback below in case the
+    // backend is mid-rollout.
+    const res: any = await channelApi.healthAll()
+    const list: any[] = res.data || []
+    const map: Record<number, any> = {}
+    for (const h of list) {
+      const status: string = h.status || 'UNKNOWN'
+      // Translate the typed health status onto the existing connection
+      // state vocabulary the UI helpers were built against, so the rest
+      // of the page (icons, tooltips, css classes) keeps working unchanged.
+      const connectionState =
+        status === 'UP' ? 'CONNECTED'
+        : status === 'RECONNECTING' ? 'RECONNECTING'
+        : status === 'DOWN' ? 'ERROR'
+        : status === 'OUT_OF_SERVICE' ? 'OUT_OF_SERVICE'
+        : 'DISCONNECTED'
+      map[h.channelId] = {
+        connectionState,
+        lastError: h.detail || null,
+        reconnectAttempts: 0,
       }
-      channelStatusMap.value = map
     }
+    channelStatusMap.value = map
   } catch {
     // silent — next poll will retry
   }
@@ -225,6 +238,7 @@ function getConnectionIcon(channel: Channel): string {
     case 'CONNECTED': return '🟢'
     case 'RECONNECTING': return '🟡'
     case 'ERROR': return '🔴'
+    case 'OUT_OF_SERVICE': return '🟠'
     default: return '⚪'
   }
 }
@@ -234,6 +248,7 @@ function getConnectionLabel(channel: Channel): string {
     case 'CONNECTED': return t('channels.connection.connected')
     case 'RECONNECTING': return t('channels.connection.reconnecting')
     case 'ERROR': return t('channels.connection.error')
+    case 'OUT_OF_SERVICE': return t('channels.connection.outOfService')
     case 'DISCONNECTED': return t('channels.connection.disconnected')
     default: return ''
   }
@@ -244,6 +259,7 @@ function getConnectionClass(channel: Channel): string {
     case 'CONNECTED': return 'conn-connected'
     case 'RECONNECTING': return 'conn-reconnecting'
     case 'ERROR': return 'conn-error'
+    case 'OUT_OF_SERVICE': return 'conn-out-of-service'
     default: return 'conn-disconnected'
   }
 }
@@ -367,6 +383,7 @@ function getChannelIconPath(type: string) {
 .conn-connected { color: var(--mc-primary); background: var(--mc-primary-bg); }
 .conn-reconnecting { color: var(--mc-primary-hover); background: var(--mc-primary-bg); animation: pulse-reconnecting 1.5s ease-in-out infinite; }
 .conn-error { color: var(--mc-danger); background: var(--mc-danger-bg); }
+.conn-out-of-service { color: var(--mc-warning, #f59e0b); background: var(--mc-warning-bg, rgba(245, 158, 11, 0.1)); }
 .conn-disconnected { color: var(--mc-text-tertiary); background: var(--mc-bg-sunken); }
 @keyframes pulse-reconnecting { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 

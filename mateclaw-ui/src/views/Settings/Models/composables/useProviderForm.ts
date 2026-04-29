@@ -1,5 +1,6 @@
 import { computed, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { ElMessageBox } from 'element-plus'
 import { modelApi } from '@/api'
 import type { ProviderInfo } from '@/types'
 import { safeParseJson } from '@/utils/safeJson'
@@ -184,8 +185,40 @@ export function useProviderForm(deps: ListDeps) {
     await Promise.all([deps.loadProviders(), deps.loadActiveModel()])
   }
 
+  /**
+   * Inline API-key save from the provider card — bypasses the modal so the
+   * 90% case (paste a key, hit save) doesn't require opening a settings dialog.
+   *
+   * Backend updateProviderConfig is a PUT that overwrites baseUrl / chatModel /
+   * generateKwargs unconditionally, so we must echo the existing values to
+   * avoid clobbering them when we only want to change the key.
+   */
+  async function saveProviderApiKey(provider: ProviderInfo, apiKey: string) {
+    const trimmed = apiKey.trim()
+    if (!trimmed) return
+    await modelApi.updateProviderConfig(provider.id, {
+      apiKey: trimmed,
+      baseUrl: provider.baseUrl ?? '',
+      protocol: provider.protocol || chatModelToProtocol(provider.chatModel),
+      chatModel: provider.chatModel,
+      generateKwargs: provider.generateKwargs ?? {},
+      // Omit fallbackPriority — backend treats null as "leave untouched".
+    })
+    await Promise.all([deps.loadProviders(), deps.loadActiveModel()])
+  }
+
   async function deleteProvider(provider: ProviderInfo) {
-    if (!confirm(t('settings.model.deleteConfirm', { name: provider.name }))) {
+    try {
+      await ElMessageBox.confirm(
+        t('settings.model.deleteConfirm', { name: provider.name }),
+        t('common.confirm'),
+        {
+          type: 'warning',
+          confirmButtonText: t('common.delete'),
+          cancelButtonText: t('common.cancel'),
+        },
+      )
+    } catch {
       return false
     }
     await modelApi.deleteCustomProvider(provider.id)
@@ -206,6 +239,7 @@ export function useProviderForm(deps: ListDeps) {
     openProviderConfigModal,
     closeProviderModal,
     saveProvider,
+    saveProviderApiKey,
     deleteProvider,
   }
 }

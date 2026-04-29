@@ -46,12 +46,18 @@
         {{ t('settings.model.localProviders') }}
       </h3>
       <div class="provider-grid">
-        <div v-for="provider in localProviders" :key="provider.id" class="provider-card">
+        <div
+          v-for="provider in localProviders"
+          :key="provider.id"
+          class="provider-card"
+          :class="{ 'provider-card--active': isProviderActive(provider) }"
+        >
           <ProviderCard
             :provider="provider"
             :connection-testing-id="connectionTestingId"
             :connection-results="connectionResults"
             :reprobing="reprobingId === provider.id"
+            :saving-api-key-id="savingApiKeyId"
             :is-provider-active="isProviderActive"
             :provider-status="providerStatus"
             :get-provider-icon="getProviderIcon"
@@ -62,6 +68,8 @@
             @delete-provider="onDeleteProvider"
             @disable-provider="onDisableProvider"
             @reprobe="reprobeProvider"
+            @oauth-login="onCardOAuthLogin"
+            @save-api-key="onSaveApiKey"
           />
         </div>
       </div>
@@ -76,12 +84,18 @@
         {{ t('settings.model.cloudProviders') }}
       </h3>
       <div class="provider-grid">
-        <div v-for="provider in cloudProviders" :key="provider.id" class="provider-card">
+        <div
+          v-for="provider in cloudProviders"
+          :key="provider.id"
+          class="provider-card"
+          :class="{ 'provider-card--active': isProviderActive(provider) }"
+        >
           <ProviderCard
             :provider="provider"
             :connection-testing-id="connectionTestingId"
             :connection-results="connectionResults"
             :reprobing="reprobingId === provider.id"
+            :saving-api-key-id="savingApiKeyId"
             :is-provider-active="isProviderActive"
             :provider-status="providerStatus"
             :get-provider-icon="getProviderIcon"
@@ -92,6 +106,8 @@
             @delete-provider="onDeleteProvider"
             @disable-provider="onDisableProvider"
             @reprobe="reprobeProvider"
+            @oauth-login="onCardOAuthLogin"
+            @save-api-key="onSaveApiKey"
           />
         </div>
       </div>
@@ -162,7 +178,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import type { ProviderInfo, ProviderModelInfo } from '@/types'
 import { useProviders } from './useProviders'
@@ -214,6 +230,7 @@ const {
   openProviderConfigModal,
   closeProviderModal,
   saveProvider,
+  saveProviderApiKey,
   deleteProvider,
   openManageModelsModal,
   closeManageModelsModal,
@@ -246,6 +263,13 @@ const {
 const localProviders = computed(() => providers.value.filter(p => p.isLocal))
 const cloudProviders = computed(() => providers.value.filter(p => !p.isLocal))
 
+/**
+ * Inline-save in-flight tracker — child cards reflect this to disable
+ * their input while the request is on the wire. Single concurrent save
+ * (one user, one card) so a scalar id is enough.
+ */
+const savingApiKeyId = ref<string | null>(null)
+
 const route = useRoute()
 const router = useRouter()
 /** sessionStorage guard so the drawer auto-opens at most once per session per workspace. */
@@ -275,8 +299,39 @@ onMounted(async () => {
 })
 
 async function onDisableProvider(provider: ProviderInfo) {
-  if (!confirm(t('settings.model.disableConfirm', { name: provider.name }))) return
+  // ElMessageBox throws on cancel — that's our cancel branch.
+  try {
+    await ElMessageBox.confirm(
+      t('settings.model.disableConfirm', { name: provider.name }),
+      t('common.confirm'),
+      {
+        type: 'warning',
+        confirmButtonText: t('settings.model.disable'),
+        cancelButtonText: t('common.cancel'),
+      },
+    )
+  } catch {
+    return
+  }
   await disableProvider(provider.id)
+}
+
+async function onSaveApiKey({ provider, apiKey }: { provider: ProviderInfo; apiKey: string }) {
+  savingApiKeyId.value = provider.id
+  try {
+    await saveProviderApiKey(provider, apiKey)
+    showSavedTip(t('settings.model.inlineApiKeySaved'))
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : t('settings.model.inlineApiKeySaveFailed'))
+  } finally {
+    savingApiKeyId.value = null
+  }
+}
+
+// Card emits oauth-login with the provider; the OAuth composable already
+// accepts a providerId, so this is a thin pass-through.
+function onCardOAuthLogin(provider: ProviderInfo) {
+  handleOAuthLogin(provider.id)
 }
 
 async function onSaveProvider() {
@@ -373,6 +428,14 @@ function showSavedTip(message: string) {
 }
 .provider-card {
   background: var(--mc-bg-elevated); border: 1px solid var(--mc-border); border-radius: 16px; padding: 18px; box-shadow: 0 8px 24px rgba(124, 63, 30, 0.04);
+  /* Inset shadow technique: layout doesn't shift between active/inactive
+     because we're not using border-left. Default rail is transparent so
+     the same rule paints on both states — only the color changes. */
+  box-shadow: inset 4px 0 0 transparent, 0 8px 24px rgba(124, 63, 30, 0.04);
+  transition: box-shadow 0.18s ease;
+}
+.provider-card--active {
+  box-shadow: inset 4px 0 0 var(--mc-primary), 0 8px 24px rgba(124, 63, 30, 0.06);
 }
 .btn-primary { border: none; border-radius: 10px; padding: 9px 14px; font-size: 14px; cursor: pointer; transition: all 0.15s; background: var(--mc-primary); color: white; }
 .btn-primary:hover { background: var(--mc-primary-hover); }

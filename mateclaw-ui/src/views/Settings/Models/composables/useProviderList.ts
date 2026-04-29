@@ -74,6 +74,8 @@ export function useProviderList() {
     'dashscope': '/icons/providers/dashscope.png',
     'modelscope': '/icons/providers/modelscope.svg',
     'aliyun-codingplan': '/icons/providers/aliyun-codingplan.svg',
+    // bailian-team is an Aliyun product line — reuse the aliyun mark.
+    'bailian-team': '/icons/providers/aliyun-codingplan.svg',
     'openai': '/icons/providers/openai.svg',
     'azure-openai': '/icons/providers/azure-openai.svg',
     'minimax': '/icons/providers/minimax.png',
@@ -92,6 +94,10 @@ export function useProviderList() {
     'zhipu-cn': '/icons/providers/zhipu.svg',
     'zhipu-intl': '/icons/providers/zhipu.svg',
     'volcengine': '/icons/providers/volcengine.svg',
+    // volcengine-plan = "Volcano Engine Coding Plan" — same brand, reuse mark.
+    'volcengine-plan': '/icons/providers/volcengine.svg',
+    'siliconflow-cn': '/icons/providers/siliconcloud.svg',
+    'siliconflow-intl': '/icons/providers/siliconcloud.svg',
     'openai-chatgpt': '/icons/providers/openai.svg',
     'anthropic-claude-code': '/icons/providers/anthropic.svg',
   }

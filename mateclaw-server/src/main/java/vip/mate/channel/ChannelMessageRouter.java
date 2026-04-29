@@ -56,6 +56,7 @@ public class ChannelMessageRouter {
     private final ObjectMapper objectMapper;
     private final ChatStreamTracker streamTracker;
     private final ChannelChatOriginFactory chatOriginFactory;
+    private final ChannelErrorClassifier errorClassifier;
 
     /** 队列条目：封装消息及其路由上下文 */
     private record QueueEntry(ChannelMessage message, ChannelAdapter adapter, ChannelEntity channelEntity) {}
@@ -101,7 +102,8 @@ public class ChannelMessageRouter {
                                 TtsService ttsService,
                                 ObjectMapper objectMapper,
                                 ChatStreamTracker streamTracker,
-                                ChannelChatOriginFactory chatOriginFactory) {
+                                ChannelChatOriginFactory chatOriginFactory,
+                                ChannelErrorClassifier errorClassifier) {
         this.agentService = agentService;
         this.conversationService = conversationService;
         this.channelService = channelService;
@@ -113,6 +115,7 @@ public class ChannelMessageRouter {
         this.objectMapper = objectMapper;
         this.streamTracker = streamTracker;
         this.chatOriginFactory = chatOriginFactory;
+        this.errorClassifier = errorClassifier;
     }
 
     // ==================== 防抖辅助类 ====================
@@ -465,10 +468,20 @@ public class ChannelMessageRouter {
                         log.info("[{}] Approval triggered during chat, sent notice (NOT saved to DB): tool={}",
                                 adapter.getChannelType(), newPending.getToolName());
                     } else {
-                        // 正常回复：保存并发送
-                        MessageEntity saved = conversationService.saveMessage(conversationId, "assistant", reply);
+                        // Tag error replies (matched by ChannelErrorClassifier — the
+                        // "[错误]" content prefix / Bad request: / LLM error templates)
+                        // with status='error' so BaseAgent.sanitizeForLlm drops them
+                        // from the next turn's LLM history, breaking the self-replicating
+                        // 400 loop. Only successful replies fire the ConversationCompletedEvent —
+                        // error turns must not pollute memory extraction.
+                        boolean isError = errorClassifier.isErrorReply(reply);
+                        String status = isError ? "error" : "completed";
+                        MessageEntity saved = conversationService.saveMessage(
+                                conversationId, "assistant", reply, null, status);
                         savedAssistantId = saved != null ? saved.getId() : null;
-                        publishConversationCompletedEvent(agentId, conversationId, message.getContent(), reply);
+                        if (!isError) {
+                            publishConversationCompletedEvent(agentId, conversationId, message.getContent(), reply);
+                        }
                         adapter.renderAndSend(replyTarget, reply);
                         log.info("[{}] Reply sent to {}: {}chars",
                                 adapter.getChannelType(), replyTarget, reply.length());
@@ -551,9 +564,15 @@ public class ChannelMessageRouter {
                 log.info("[{}] Approval triggered during streaming (NOT saved to DB): tool={}",
                         channelType, newPending.getToolName());
             } else if (finalContent != null && !finalContent.isBlank()) {
-                MessageEntity saved = conversationService.saveMessage(conversationId, "assistant", finalContent);
-                publishConversationCompletedEvent(agentId, conversationId, promptText, finalContent);
-                log.info("[{}] Streaming completed: contentLen={}", channelType, finalContent.length());
+                boolean isError = errorClassifier.isErrorReply(finalContent);
+                String status = isError ? "error" : "completed";
+                MessageEntity saved = conversationService.saveMessage(
+                        conversationId, "assistant", finalContent, null, status);
+                if (!isError) {
+                    publishConversationCompletedEvent(agentId, conversationId, promptText, finalContent);
+                }
+                log.info("[{}] Streaming completed: contentLen={}, isError={}",
+                        channelType, finalContent.length(), isError);
 
                 // 流式回复完成后也触发语音回复
                 String replyTarget = resolveReplyTarget(message);
@@ -566,7 +585,17 @@ public class ChannelMessageRouter {
 
         } catch (Exception e) {
             log.error("[{}] Streaming processing failed: {}", channelType, e.getMessage(), e);
-            // 尝试发送错误提示
+            // Persist an error placeholder (status='error') so that the next
+            // turn's history does not show a user → user sequence (which some
+            // providers reject with 400). sanitizeForLlm filters this row out
+            // before the LLM sees it, so it costs nothing at the prompt layer.
+            try {
+                conversationService.saveMessage(conversationId, "assistant",
+                        "[错误] " + e.getMessage(), null, "error");
+            } catch (Exception persistErr) {
+                log.warn("[{}] Failed to persist error placeholder: {}",
+                        channelType, persistErr.getMessage());
+            }
             try {
                 String errorTarget = resolveReplyTarget(message);
                 streamingAdapter.sendMessage(errorTarget, "抱歉，流式处理失败：" + e.getMessage());
@@ -576,6 +605,7 @@ public class ChannelMessageRouter {
         }
         return null;
     }
+
 
     // ==================== 审批重放 ====================
 
@@ -613,8 +643,13 @@ public class ChannelMessageRouter {
             String reply = agentService.chatWithReplay(
                     agentId, replayPrompt, conversationId, consumed.getToolCallPayload(), replayOrigin);
 
-            // 保存 replay 结果（这是正常结果，入库）
-            conversationService.saveMessage(conversationId, "assistant", reply);
+            // Persist the replay result. If the LLM 400'd during replay,
+            // the error reply must also get status='error' — otherwise the
+            // next turn's history would re-feed the error placeholder back
+            // into the prompt and re-trigger the same failure.
+            boolean isError = errorClassifier.isErrorReply(reply);
+            conversationService.saveMessage(conversationId, "assistant", reply, null,
+                    isError ? "error" : "completed");
 
             // 发送回复
             adapter.renderAndSend(replyTarget, reply);

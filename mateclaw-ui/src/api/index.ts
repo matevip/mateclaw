@@ -228,6 +228,10 @@ export const channelApi = {
   toggle: (id: string | number, enabled: boolean) =>
     http.put(`/channels/${id}/toggle?enabled=${enabled}`),
   status: () => http.get('/channels/status'),
+  /** Real-time per-channel health (true transport state, not DB enabled flag). */
+  health: (id: string | number) => http.get(`/channels/${id}/health`),
+  /** Batch health for all channels in current workspace. */
+  healthAll: () => http.get('/channels/health'),
   // 微信 iLink Bot QR 码登录
   weixinQrcode: () => http.get('/channels/webhook/weixin/qrcode'),
   weixinQrcodeStatus: (qrcode: string) =>
