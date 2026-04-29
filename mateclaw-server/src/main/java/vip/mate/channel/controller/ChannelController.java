@@ -184,9 +184,25 @@ public class ChannelController {
                             });
                     body.put("name", c.getName());
                     body.put("enabled", Boolean.TRUE.equals(c.getEnabled()));
+                    body.put("identity", parseIdentity(c.getIdentityJson()));
                     return body;
                 })
                 .toList());
+    }
+
+    /**
+     * Parse identity_json into a map for the list-page card. Returns an
+     * empty map for legacy rows that have not been re-verified yet, so the
+     * frontend can render the type-level description as a fallback.
+     */
+    private Map<String, Object> parseIdentity(String identityJson) {
+        if (identityJson == null || identityJson.isBlank()) return Collections.emptyMap();
+        try {
+            return objectMapper.readValue(identityJson, new TypeReference<>() {});
+        } catch (Exception e) {
+            log.debug("identity_json parse failed (treating as empty): {}", e.getMessage());
+            return Collections.emptyMap();
+        }
     }
 
     @RequireWorkspaceRole("admin")

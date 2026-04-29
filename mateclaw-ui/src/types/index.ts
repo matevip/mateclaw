@@ -336,6 +336,9 @@ export interface Channel {
   agentId?: string | number
   botPrefix?: string
   configJson?: string
+  /** Identity snapshot from the most recent successful credential verify
+   *  (RFC-084). JSON-encoded {accountName, accountId, team, region, ...}. */
+  identityJson?: string
   enabled: boolean
   description?: string
   // 前端扩展字段

@@ -631,7 +631,21 @@ async function onDone() {
       accessControl: defaultAccessControl(),
       renderConfig: defaultRenderConfig(),
     })
-    const payload: Partial<Channel> = { ...form.value, configJson, enabled: true }
+    // Persist identity from the verifyResult so the list page can show
+    // "Connected as @MyBot" without waiting for the next adapter probe.
+    // Skipped channels (web/webchat/webhook) carry an empty identity, so
+    // the field stays null in the DB and the legacy description path is
+    // still available as a fallback.
+    const identityMap = verifyResult.value?.identity || {}
+    const identityJson = Object.keys(identityMap).length > 0
+      ? JSON.stringify(identityMap)
+      : undefined
+    const payload: Partial<Channel> = {
+      ...form.value,
+      configJson,
+      identityJson,
+      enabled: true,
+    }
     const res: any = await channelApi.create(payload)
     ElMessage.success(t('channels.messages.saveSuccess'))
     emit('created', res.data as Channel)

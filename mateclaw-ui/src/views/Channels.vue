@@ -8,7 +8,7 @@
             <h1 class="mc-page-title">{{ t('channels.title') }}</h1>
             <p class="mc-page-desc">{{ t('channels.desc') }}</p>
           </div>
-          <button class="btn-primary" @click="openCreateModal">
+          <button v-if="channels.length > 0" class="btn-primary" @click="openCreateModal">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
             </svg>
@@ -16,71 +16,119 @@
           </button>
         </div>
 
-        <!-- 加载中骨架 -->
+        <!-- Loading skeleton (initial fetch) -->
         <div v-if="isInitialLoading" class="channel-grid">
-          <div v-for="i in 4" :key="i" class="channel-card mc-surface-card channel-card-skeleton">
+          <div v-for="i in 3" :key="i" class="channel-card mc-surface-card channel-card-skeleton">
             <el-skeleton :rows="3" animated />
           </div>
         </div>
 
-        <!-- 渠道卡片 -->
-        <div v-else class="channel-grid">
-          <div v-for="channel in channels" :key="channel.id" class="channel-card mc-surface-card">
-            <div class="channel-header">
-              <div class="channel-icon-wrap">
-                <img class="channel-icon-img" :src="getChannelIconPath(channel.channelType)" :alt="channel.channelType" />
-              </div>
-              <div class="channel-meta">
-                <h3 class="channel-name">{{ channel.name }}</h3>
-                <span class="channel-type">{{ channel.channelType }}</span>
-              </div>
-              <div class="channel-status-group">
-                <div class="channel-status" :class="channel.enabled ? 'status-on' : 'status-off'">
-                  {{ channel.enabled ? t('channels.status.active') : t('channels.status.inactive') }}
-                </div>
-                <div
-                  v-if="channel.enabled"
-                  class="connection-indicator"
-                  :class="getConnectionClass(channel)"
-                  :title="getConnectionTooltip(channel)"
-                >
-                  {{ getConnectionIcon(channel) }} {{ getConnectionLabel(channel) }}
-                </div>
-              </div>
-            </div>
-            <p class="channel-desc">{{ channel.description }}</p>
-            <div class="channel-footer">
-              <button class="card-btn" @click="openEditModal(channel)">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                </svg>
-                {{ t('channels.configure') }}
-              </button>
-              <button class="card-btn" @click="toggleChannel(channel)">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10"/>
-                  <line v-if="channel.enabled" x1="8" y1="12" x2="16" y2="12"/>
-                  <polyline v-else points="10 8 16 12 10 16"/>
-                </svg>
-                {{ channel.enabled ? t('channels.disable') : t('channels.enable') }}
-              </button>
-              <button class="card-btn danger" @click="deleteChannel(channel.id)">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline points="3 6 5 6 21 6"/>
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                </svg>
-                {{ t('common.delete') }}
-              </button>
-            </div>
+        <!-- 0-channel hero empty state.
+             Replaces the 11-card "catalog soup" with a single CTA. The
+             type catalog moves into ChannelTypePicker (one click away),
+             so the default view is silent until the user has actually
+             configured something. -->
+        <div v-else-if="channels.length === 0" class="empty-hero mc-surface-card">
+          <div class="empty-hero-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+            </svg>
+          </div>
+          <h2 class="empty-hero-title">{{ t('channels.empty.title') }}</h2>
+          <p class="empty-hero-desc">{{ t('channels.empty.desc') }}</p>
+          <button class="btn-primary empty-hero-cta" @click="openCreateModal">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            {{ t('channels.empty.cta') }}
+          </button>
+        </div>
+
+        <!-- Configured-channels view: stats + cards -->
+        <template v-else>
+          <!-- Stats bar — small one-liner so "is anything broken?" is
+               answerable at a glance without scanning every card. -->
+          <div class="stats-bar">
+            <span class="stat" :class="{ ok: stats.active > 0 }">
+              <span class="stat-dot conn-connected"></span>
+              {{ t('channels.stats.active', { n: stats.active }) }}
+            </span>
+            <span v-if="stats.reconnecting > 0" class="stat warn">
+              <span class="stat-dot conn-reconnecting"></span>
+              {{ t('channels.stats.reconnecting', { n: stats.reconnecting }) }}
+            </span>
+            <span v-if="stats.errors > 0" class="stat danger">
+              <span class="stat-dot conn-error"></span>
+              {{ t('channels.stats.errors', { n: stats.errors }) }}
+            </span>
+            <span v-if="stats.disabled > 0" class="stat muted">
+              {{ t('channels.stats.disabled', { n: stats.disabled }) }}
+            </span>
           </div>
 
-          <!-- 添加渠道卡片 -->
-          <div class="channel-card add-card mc-surface-card" @click="openCreateModal">
-            <div class="add-icon">+</div>
-            <p class="add-label">{{ t('channels.addChannel') }}</p>
+          <div class="channel-grid">
+            <div v-for="channel in channels" :key="channel.id" class="channel-card mc-surface-card">
+              <div class="channel-header">
+                <div class="channel-icon-wrap">
+                  <img class="channel-icon-img" :src="getChannelIconPath(channel.channelType)" :alt="channel.channelType" />
+                </div>
+                <div class="channel-meta">
+                  <h3 class="channel-name">{{ channel.name }}</h3>
+                  <span class="channel-type">{{ channel.channelType }}</span>
+                </div>
+                <div class="channel-status-group">
+                  <div
+                    v-if="channel.enabled"
+                    class="connection-indicator"
+                    :class="getConnectionClass(channel)"
+                    :title="getConnectionTooltip(channel)"
+                  >
+                    {{ getConnectionIcon(channel) }} {{ getConnectionLabel(channel) }}
+                  </div>
+                  <div v-else class="channel-status status-off">
+                    {{ t('channels.status.inactive') }}
+                  </div>
+                </div>
+              </div>
+              <!-- Identity-driven description: "Connected as @MyBot in TeamX".
+                   Falls back to the type-level description for legacy rows
+                   that have not been re-verified yet. -->
+              <p class="channel-desc">{{ getChannelDescription(channel) }}</p>
+              <div class="channel-footer">
+                <button class="card-btn" @click="openEditModal(channel)">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                  {{ t('channels.configure') }}
+                </button>
+                <button class="card-btn" @click="toggleChannel(channel)">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line v-if="channel.enabled" x1="8" y1="12" x2="16" y2="12"/>
+                    <polyline v-else points="10 8 16 12 10 16"/>
+                  </svg>
+                  {{ channel.enabled ? t('channels.disable') : t('channels.enable') }}
+                </button>
+                <button class="card-btn danger" @click="deleteChannel(channel.id)">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                  </svg>
+                  {{ t('common.delete') }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Compact "+ add another" tail card. iOS Mail pattern: it
+                 stays visible only when the user already has channels, so
+                 it's a familiar repeat-action shortcut, not a hero CTA. -->
+            <button class="add-card-compact mc-surface-card" @click="openCreateModal">
+              <div class="add-icon-compact">+</div>
+              <span class="add-label-compact">{{ t('channels.addChannel') }}</span>
+            </button>
           </div>
-        </div>
+        </template>
       </div>
     </div>
 
@@ -120,7 +168,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, defineAsyncComponent, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue'
+import { ref, computed, defineAsyncComponent, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { channelApi, agentApi } from '@/api'
@@ -163,6 +211,7 @@ const channelStatusMap = ref<Record<string | number, {
   connectionState: string
   lastError: string | null
   reconnectAttempts: number
+  identity: Record<string, any>
 }>>({})
 
 let statusPollTimer: ReturnType<typeof setInterval> | null = null
@@ -260,12 +309,52 @@ async function loadStatus() {
         connectionState,
         lastError: h.detail || null,
         reconnectAttempts: 0,
+        identity: h.identity || {},
       }
     }
     channelStatusMap.value = map
   } catch {
     // silent — next poll will retry
   }
+}
+
+// ==================== Stats / description ====================
+
+// Top-of-page summary so the "is anything broken?" question is answerable
+// without scanning every card. Disabled channels are surfaced too — they're
+// "my channels, paused", not noise.
+const stats = computed(() => {
+  let active = 0, reconnecting = 0, errors = 0, disabled = 0
+  for (const ch of channels.value) {
+    if (!ch.enabled) { disabled += 1; continue }
+    const state = channelStatusMap.value[ch.id]?.connectionState
+    if (state === 'CONNECTED') active += 1
+    else if (state === 'RECONNECTING') reconnecting += 1
+    else if (state === 'ERROR') errors += 1
+    // OUT_OF_SERVICE / DISCONNECTED are transient startup states — don't
+    // pollute the top bar with them; they show on the card itself.
+  }
+  return { active, reconnecting, errors, disabled }
+})
+
+/**
+ * Identity-driven description. Shows what THIS bot is, not what the
+ * channel type is. Falls back to channel.description (the type-level
+ * blurb seeded by DatabaseBootstrapRunner) for legacy rows that haven't
+ * been re-verified since RFC-084 landed.
+ */
+function getChannelDescription(channel: Channel): string {
+  const identity = channelStatusMap.value[channel.id]?.identity || {}
+  const accountName = identity.accountName as string | undefined
+  const team = identity.team as string | undefined
+  if (accountName && team) {
+    return t('channels.cardDesc.connectedAsIn', { account: accountName, team })
+  }
+  if (accountName) {
+    return t('channels.cardDesc.connectedAs', { account: accountName })
+  }
+  // Fall back to the seeded type-level description.
+  return channel.description || ''
 }
 
 // ==================== Connection state helpers ====================
@@ -453,9 +542,30 @@ function getChannelIconPath(type: string) {
 .card-btn:hover { background: var(--mc-bg-sunken); }
 .card-btn.danger:hover { background: var(--mc-danger-bg); border-color: var(--mc-danger); color: var(--mc-danger); }
 
-.add-card { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 238px; border: 2px dashed var(--mc-border); cursor: pointer; background: transparent; }
-.add-card:hover { border-color: var(--mc-primary); background: var(--mc-primary-bg); }
-.add-icon { font-size: 28px; color: var(--mc-text-tertiary); margin-bottom: 8px; }
-.add-label { font-size: 14px; color: var(--mc-text-tertiary); }
-.add-card:hover .add-icon, .add-card:hover .add-label { color: var(--mc-primary); }
+/* Compact add-another tail card — shown only when the user has at least
+   one channel. The 0-channel hero owns the primary CTA in that case. */
+.add-card-compact { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 238px; padding: 20px; border: 2px dashed var(--mc-border); border-radius: 16px; cursor: pointer; background: transparent; transition: all 0.15s; font-family: inherit; }
+.add-card-compact:hover { border-color: var(--mc-primary); background: var(--mc-primary-bg); }
+.add-icon-compact { font-size: 22px; color: var(--mc-text-tertiary); line-height: 1; }
+.add-label-compact { font-size: 14px; color: var(--mc-text-tertiary); font-weight: 600; }
+.add-card-compact:hover .add-icon-compact, .add-card-compact:hover .add-label-compact { color: var(--mc-primary); }
+
+/* Empty hero — single CTA, no decorative grid of inactive types. */
+.empty-hero { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 56px 32px; text-align: center; gap: 14px; }
+.empty-hero-icon { width: 84px; height: 84px; border-radius: 24px; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, rgba(217,119,87,0.08), rgba(24,74,69,0.05)); color: var(--mc-primary); margin-bottom: 4px; }
+.empty-hero-title { font-size: 22px; font-weight: 700; color: var(--mc-text-primary); margin: 0; }
+.empty-hero-desc { font-size: 14px; color: var(--mc-text-secondary); margin: 0; max-width: 480px; line-height: 1.6; }
+.empty-hero-cta { margin-top: 6px; padding: 12px 24px; font-size: 15px; }
+
+/* Stats bar — small one-liner summarizing the whole list. */
+.stats-bar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 0 4px 4px; }
+.stat { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: var(--mc-text-tertiary); }
+.stat.ok { color: var(--mc-text-primary); }
+.stat.warn { color: var(--mc-primary-hover); }
+.stat.danger { color: var(--mc-danger, #ef4444); }
+.stat.muted { color: var(--mc-text-tertiary); }
+.stat-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.stat-dot.conn-connected { background: var(--mc-primary); }
+.stat-dot.conn-reconnecting { background: var(--mc-primary-hover); animation: pulse-reconnecting 1.5s ease-in-out infinite; }
+.stat-dot.conn-error { background: var(--mc-danger, #ef4444); }
 </style>

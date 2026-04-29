@@ -1537,6 +1537,42 @@ export default {
     configure: 'Configure',
     enable: 'Enable',
     disable: 'Disable',
+    empty: {
+      title: 'Connect your first channel',
+      desc: 'Bring your agents into the apps your team already uses — Slack, WeChat Work, Telegram, and more.',
+      cta: 'Connect a Channel',
+    },
+    stats: {
+      active: '{n} active',
+      reconnecting: '{n} reconnecting',
+      errors: '{n} {n, plural, one {error} other {errors}}',
+      disabled: '{n} disabled',
+    },
+    cardDesc: {
+      connectedAs: 'Connected as {account}',
+      connectedAsIn: 'Connected as {account} in {team}',
+    },
+    catalog: {
+      subtitle: 'Pick a service to connect. You can change settings later.',
+      groups: {
+        im: 'Messaging',
+        enterprise: 'Enterprise platforms',
+        web: 'Web & API',
+      },
+      descriptions: {
+        telegram: 'Bot via long-poll. No public IP needed.',
+        discord: 'Bot via Gateway WebSocket. No public IP needed.',
+        slack: 'Slack app via Socket Mode.',
+        qq: 'QQ Bot via WebSocket. No public IP needed.',
+        wecom: 'WeCom smart bot. Scan QR to connect.',
+        weixin: 'WeChat personal account via iLink.',
+        feishu: 'Feishu / Lark app. One-click QR creation.',
+        dingtalk: 'DingTalk bot. One-click QR creation.',
+        web: 'Default browser channel. Always on.',
+        webchat: 'Embeddable chat widget for your site.',
+        webhook: 'Generic HTTP inbound endpoint.',
+      },
+    },
     modal: {
       editTitle: 'Edit Channel',
       newTitle: 'New Channel',

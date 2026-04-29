@@ -1547,6 +1547,42 @@ export default {
     configure: '配置',
     enable: '启用',
     disable: '停用',
+    empty: {
+      title: '连接第一个渠道',
+      desc: '把你的 Agent 接入团队已经在用的 IM 工具——Slack、企业微信、Telegram 等。',
+      cta: '连接一个渠道',
+    },
+    stats: {
+      active: '{n} 个运行中',
+      reconnecting: '{n} 个重连中',
+      errors: '{n} 个出错',
+      disabled: '{n} 个已停用',
+    },
+    cardDesc: {
+      connectedAs: '已连接：{account}',
+      connectedAsIn: '已连接：{account}（{team}）',
+    },
+    catalog: {
+      subtitle: '选一个服务接入，配置项稍后还能改。',
+      groups: {
+        im: 'IM 平台',
+        enterprise: '企业平台',
+        web: '网页与 API',
+      },
+      descriptions: {
+        telegram: '长轮询接入，无需公网 IP',
+        discord: 'Gateway WebSocket，无需公网 IP',
+        slack: 'Socket Mode 接入',
+        qq: 'WebSocket 长连接，无需公网 IP',
+        wecom: '企业微信智能机器人，扫码即用',
+        weixin: '微信个人号（iLink Bot）',
+        feishu: '飞书 / Lark 应用，扫码一键创建',
+        dingtalk: '钉钉机器人，扫码一键创建',
+        web: '默认浏览器渠道，始终可用',
+        webchat: '可嵌入网页的聊天小组件',
+        webhook: '通用 HTTP 接入端点',
+      },
+    },
     modal: {
       editTitle: '编辑渠道',
       newTitle: '新建渠道',
