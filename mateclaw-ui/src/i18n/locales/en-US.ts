@@ -1795,6 +1795,11 @@ export default {
       done: 'Done',
       verifying: 'Verifying with {service}…',
       verifySuccess: 'Connected',
+      // Used on Step 2 in place of the backend's English headline so the
+      // success line stays in the user's locale. Backend `headline` is
+      // still rendered on the failed path because diagnostic strings
+      // (errcodes, upstream error reasons) don't translate cleanly.
+      verifySuccessHeadline: 'Connected — {service} accepted the credentials',
       verifyFailed: 'Verification failed',
       verifySkipped: 'No live check needed',
       verifySkippedDetail: "This channel type doesn't have credentials to verify. You can save and start it directly.",
@@ -1809,6 +1814,26 @@ export default {
       saveFailed: 'Could not save the channel',
       noVerifierHint: 'No live check is available for {type}. Saving will start the channel; check the connection dot afterwards.',
       oauthScanHint: 'After scanning, the credentials will be filled and verified automatically — you do not need to copy anything.',
+      // Identity field labels rendered on Step 3. Keys not listed here
+      // fall back to a camelCase-to-spaces conversion (formatIdentityKey),
+      // so adding a new identity field on a new verifier still renders
+      // — it just lacks the polished label until i18n catches up.
+      identity: {
+        accountId: 'Account ID',
+        accountName: 'Account',
+        firstName: 'First name',
+        team: 'Team',
+        teamId: 'Team ID',
+        botId: 'Bot ID',
+        transport: 'Transport',
+        region: 'Region',
+        tokenTtl: 'Token TTL',
+        baseUrl: 'Base URL',
+        isBot: 'Bot account',
+        verified: 'Verified',
+        canJoinGroups: 'Can join groups',
+        canReadAllGroupMessages: 'Reads all group messages',
+      },
     },
   },
   skills: {

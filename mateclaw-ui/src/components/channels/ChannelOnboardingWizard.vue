@@ -184,7 +184,14 @@
           </div>
           <div v-else-if="verifyResult?.ok" class="verify-card success">
             <div class="verify-icon">✓</div>
-            <p class="verify-headline">{{ verifyResult.headline }}</p>
+            <!-- Frontend-localized success headline: backend's English
+                 `verifyResult.headline` is intentionally not used here
+                 (would leak English into Chinese builds). The failed
+                 branch below still uses it, because diagnostic messages
+                 from upstream APIs don't translate well. -->
+            <p class="verify-headline">
+              {{ t('channels.wizard.verifySuccessHeadline', { service: serviceName }) }}
+            </p>
             <p v-if="verifyResult.durationMs" class="verify-detail">
               {{ t('channels.wizard.durationMs', { n: verifyResult.durationMs }) }}
             </p>
@@ -670,7 +677,13 @@ function translateServiceName(type: string): string {
 }
 
 function formatIdentityKey(key: string): string {
-  // Turn camelCase keys into "Camel Case" for display.
+  // Look up the key's localized label in channels.wizard.identity.* first;
+  // when missing (e.g. a brand-new identity field a verifier just started
+  // returning, before i18n catches up), fall back to a camelCase-to-spaces
+  // conversion so the row still renders something readable.
+  const i18nKey = `channels.wizard.identity.${key}`
+  const translated = t(i18nKey)
+  if (translated !== i18nKey) return translated
   return key
     .replace(/([A-Z])/g, ' $1')
     .replace(/^./, (s) => s.toUpperCase())
