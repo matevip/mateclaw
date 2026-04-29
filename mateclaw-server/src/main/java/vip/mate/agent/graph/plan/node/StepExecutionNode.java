@@ -36,7 +36,12 @@ import java.util.Map;
  * 步骤执行节点
  * <p>
  * 执行当前步骤，使用显式工具执行循环（internalToolExecutionEnabled=false）。
- * 单步最大工具调用次数限制为 5 次，防止无限循环。
+ * 单步最大工具调用次数限制为 {@link #MAX_TOOL_CALLS_PER_STEP} 次，与
+ * {@code BaseAgent.MAX_ITERATIONS_HARD_CEILING} 对齐——因此实际生效的上限
+ * 永远是 agent 的 {@code max_iterations}（DB 列），单步本身不会先于 agent
+ * 的整体预算被打掉。早期 5 次的硬限制对"查新闻 + 整理 Word"这种合理多
+ * 工具任务过紧，被 LimitExceededNode 提前拦截后用户看到的是冷冰冰的
+ * "工具调用次数超出最大限制"。
  * <p>
  * 支持 NEEDS_APPROVAL 审批流程：对需要审批的工具调用创建 pending，
  * 发出 SSE 事件后立即返回审批提示（非阻塞）。审批通过后通过 replay 重新执行。
@@ -55,7 +60,15 @@ public class StepExecutionNode implements NodeAction {
     private final String reasoningEffort;
     private final NodeStreamingChatHelper streamingHelper;
 
-    private static final int MAX_TOOL_CALLS_PER_STEP = 5;
+    /**
+     * Per-step tool-call ceiling, aligned with {@code BaseAgent.MAX_ITERATIONS_HARD_CEILING}.
+     * Matching the agent-level cap means this constant is never the bottleneck —
+     * the agent's own {@code max_iterations} (DB column) will fire first if a
+     * task is genuinely runaway, and a well-budgeted multi-tool step (e.g.
+     * web_search + browser_navigate + browser_read*N + file_write) is no longer
+     * cut short by an arbitrary 5-call ceiling.
+     */
+    private static final int MAX_TOOL_CALLS_PER_STEP = 100;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public StepExecutionNode(ChatModel chatModel, AgentToolSet toolSet,
