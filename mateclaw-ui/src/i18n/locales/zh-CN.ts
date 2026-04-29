@@ -1504,7 +1504,7 @@ export default {
       updateSuccess: '定时任务更新成功',
       deleteSuccess: '定时任务删除成功',
       deleteConfirm: '确定删除任务「{name}」？删除后不可恢复。',
-      runTriggered: '任务已触发，请到会话列表查看「cron:{id}」对应对话',
+      runTriggered: '任务已触发，请到会话列表查看「cron_{id}」对应对话',
       enableSuccess: '任务已启用',
       disableSuccess: '任务已停用',
       invalidCron: 'Cron 表达式格式不正确，请使用 5 字段格式（分 时 日 月 周）',

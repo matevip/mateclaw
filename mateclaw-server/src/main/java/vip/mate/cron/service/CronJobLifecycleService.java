@@ -60,7 +60,7 @@ public class CronJobLifecycleService {
     public CronJobRunEntity startRun(CronJobEntity job, String userMessage, String triggerType) {
         CronJobRunEntity run = new CronJobRunEntity();
         run.setCronJobId(job.getId());
-        run.setConversationId("cron:" + job.getId());
+        run.setConversationId("cron_" + job.getId());
         run.setStatus("running");
         run.setTriggerType(triggerType != null ? triggerType : "scheduled");
         run.setStartedAt(LocalDateTime.now());
@@ -101,7 +101,7 @@ public class CronJobLifecycleService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void finishRunAndPublish(CronJobEntity job, CronJobRunEntity run,
                                     String userMessage, AssistantMessage result) {
-        String convId = "cron:" + job.getId();
+        String convId = "cron_" + job.getId();
         String text = result != null && result.getText() != null ? result.getText() : "";
 
         runMapper.update(null, new LambdaUpdateWrapper<CronJobRunEntity>()

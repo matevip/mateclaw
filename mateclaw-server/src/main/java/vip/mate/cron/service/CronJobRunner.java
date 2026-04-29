@@ -82,7 +82,7 @@ public class CronJobRunner {
         // any DB connection during this call.
         AssistantMessage result;
         try {
-            ChatOrigin origin = originFactory.from(job, "cron:" + job.getId());
+            ChatOrigin origin = originFactory.from(job, "cron_" + job.getId());
             result = runAgent(job, userMessage, origin);
         } catch (Exception e) {
             log.error("[CronRunner] runAgent failed for job {}: {}", job.getId(), e.getMessage(), e);
@@ -120,8 +120,8 @@ public class CronJobRunner {
     private AssistantMessage runAgent(CronJobEntity job, String userMessage, ChatOrigin origin) {
         String guarded = wrapWithDeliveryGuard(userMessage, origin);
         String text = "agent".equals(job.getTaskType())
-                ? agentService.execute(job.getAgentId(), guarded, "cron:" + job.getId(), origin)
-                : agentService.chat(job.getAgentId(), guarded, "cron:" + job.getId(), origin);
+                ? agentService.execute(job.getAgentId(), guarded, "cron_" + job.getId(), origin)
+                : agentService.chat(job.getAgentId(), guarded, "cron_" + job.getId(), origin);
         return new AssistantMessage(text != null ? text : "");
     }
 

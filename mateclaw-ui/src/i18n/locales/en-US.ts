@@ -1494,7 +1494,7 @@ export default {
       updateSuccess: 'Cron job updated',
       deleteSuccess: 'Cron job deleted',
       deleteConfirm: 'Delete job "{name}"? This cannot be undone.',
-      runTriggered: 'Job triggered. Check conversation "cron:{id}" for results.',
+      runTriggered: 'Job triggered. Check conversation "cron_{id}" for results.',
       enableSuccess: 'Job enabled',
       disableSuccess: 'Job disabled',
       invalidCron: 'Invalid cron expression. Use 5-field format (min hour day month weekday).',
