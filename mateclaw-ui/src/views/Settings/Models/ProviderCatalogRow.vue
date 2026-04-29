@@ -76,6 +76,20 @@ const busy = computed(() => props.togglingId === props.provider.id)
   border-radius: 8px;
   object-fit: contain;
 }
+/*
+ * In dark mode, monochrome dark-foreground logos (OpenRouter, Zhipu, …)
+ * disappear against the panel. Tile them on a cream surface — same trick
+ * .provider-icon-shell uses on the card itself, so the visual language
+ * stays consistent across drawer rows and cards.
+ * `padding + object-fit: contain` shrinks the logo into the tile without
+ * cropping; box-sizing: border-box keeps the cell at 32×32.
+ */
+:global(html.dark .catalog-row__icon) {
+  background: linear-gradient(180deg, #ffffff, #f5ede6);
+  border: 1px solid rgba(255, 248, 241, 0.18);
+  padding: 3px;
+  box-sizing: border-box;
+}
 .catalog-row__meta {
   flex: 1;
   min-width: 0;
