@@ -2,8 +2,10 @@ package vip.mate.tool.builtin;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import vip.mate.system.model.SystemSettingsDTO;
 import vip.mate.system.service.SystemSettingService;
@@ -29,6 +31,7 @@ public class ImageGenerateTool {
     private final SystemSettingService systemSettingService;
     private final AsyncTaskService asyncTaskService;
 
+    @vip.mate.tool.ConcurrencyUnsafe("creates async tasks and persists generated artifacts; provider rate limits also forbid parallel calls")
     @Tool(description = "Image generation tool. Supports actions: generate (default), list (show available providers), "
             + "status (check task status). Some providers are async (30s-2min), results auto-displayed in conversation.")
     public String image_generate(
@@ -38,14 +41,16 @@ public class ImageGenerateTool {
             @ToolParam(description = "Aspect ratio: 1:1 / 16:9 / 9:16, default 1:1", required = false) String aspectRatio,
             @ToolParam(description = "Generation count (1-4), default 1", required = false) Integer count,
             @ToolParam(description = "Model name (optional)", required = false) String model,
-            @ToolParam(description = "Task ID to check status (for status action)", required = false) String taskId
+            @ToolParam(description = "Task ID to check status (for status action)", required = false) String taskId,
+            // RFC-063r §2.5: ToolContext is hidden from the LLM by JsonSchemaGenerator.
+            @Nullable ToolContext ctx
     ) {
         String normalizedAction = (action == null || action.isBlank()) ? "generate" : action.trim().toLowerCase();
 
         return switch (normalizedAction) {
             case "list" -> handleListAction();
-            case "status" -> handleStatusAction(taskId);
-            default -> handleGenerateAction(prompt, size, aspectRatio, count, model);
+            case "status" -> handleStatusAction(taskId, ctx);
+            default -> handleGenerateAction(prompt, size, aspectRatio, count, model, ctx);
         };
     }
 
@@ -83,8 +88,8 @@ public class ImageGenerateTool {
 
     // ==================== action=status ====================
 
-    private String handleStatusAction(String taskId) {
-        String conversationId = ToolExecutionContext.conversationId();
+    private String handleStatusAction(String taskId, @Nullable ToolContext ctx) {
+        String conversationId = ToolExecutionContext.conversationId(ctx);
 
         if (taskId != null && !taskId.isBlank()) {
             AsyncTaskInfo info = imageGenerationService.checkTaskStatus(taskId);
@@ -116,9 +121,9 @@ public class ImageGenerateTool {
     // ==================== action=generate ====================
 
     private String handleGenerateAction(String prompt, String size, String aspectRatio,
-                                         Integer count, String model) {
-        String conversationId = ToolExecutionContext.conversationId();
-        String username = ToolExecutionContext.username();
+                                         Integer count, String model, @Nullable ToolContext ctx) {
+        String conversationId = ToolExecutionContext.conversationId(ctx);
+        String username = ToolExecutionContext.username(ctx);
 
         if (conversationId == null || conversationId.isBlank()) {
             return "错误：无法获取当前会话信息，请重试";

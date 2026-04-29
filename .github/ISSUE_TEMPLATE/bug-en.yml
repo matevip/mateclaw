@@ -1,0 +1,74 @@
+name: "🐛 Bug Report (English)"
+description: Report something that's broken. Three required fields — fill them and submit.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Three things, that's it — any less and we can't locate it; any more wastes your time.
+
+        > **Issues without a screenshot, log, or repro steps will be closed.** Not because we don't care — we genuinely can't fix what we can't reproduce.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What broke? (required, attach screenshot)
+      description: |
+        One sentence describing the symptom + at least one screenshot (drag it into the text box).
+        If it's a backend error, paste the stack trace here too (wrapped in ```).
+      placeholder: |
+        Example: As a `member`-role user in ws-b, I clicked "Create from template". The new Agent appeared in the default workspace instead of ws-b.
+
+        [drag in screenshot / screen recording]
+
+        [paste backend stack trace or frontend console error]
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce? (required, numbered steps)
+      description: |
+        Steps that someone with zero context can follow. **A symptom you can't reproduce is a guess, not a bug.**
+      placeholder: |
+        1. Log in as admin / admin123, create workspace ws-b
+        2. Add user bob as ws-b member
+        3. Log out, log back in as bob, switch UI to ws-b
+        4. Go to Agents → "Create from template" → pick assistant → apply
+        5. Switch to default workspace — the Agent shows up here
+    validations:
+      required: true
+
+  - type: dropdown
+    id: module
+    attributes:
+      label: Affected module (optional, multi-select)
+      description: Which part of the system? Skip if unsure — helps maintainers triage.
+      multiple: true
+      options:
+        - Backend / 后端
+        - Frontend (admin UI) / 前端
+        - Desktop / 桌面端
+        - Webchat embed widget
+        - Channel (DingTalk / Feishu / Telegram / Discord / QQ / Slack ...)
+        - Tool / 工具
+        - Skill / 技能
+        - Wiki / 知识库
+        - Memory / 记忆
+        - Agent / StateGraph runtime
+        - Auth / Workspace permission
+        - Deployment / DB migration
+        - Other
+    validations:
+      required: false
+
+  - type: input
+    id: env
+    attributes:
+      label: Environment (required, one line)
+      description: version / workspace role / browser or client. One line.
+      placeholder: "v0.x.y / member / Chrome 130 on macOS 14.5"
+    validations:
+      required: true

@@ -1,0 +1,24 @@
+You are checking for contradictions between facts about the same entity.
+
+For each pair below, determine if they genuinely contradict each other.
+A contradiction means the two facts CANNOT both be true at the same time.
+
+Pairs to check:
+{pairs}
+
+For each pair, respond in JSON array format:
+[
+  {
+    "factA": <id>,
+    "factB": <id>,
+    "isContradiction": true|false,
+    "reason": "brief explanation"
+  }
+]
+
+Rules:
+- Temporal differences are NOT contradictions (e.g. "uses Oracle" and "migrating to PostgreSQL" can coexist)
+- Different scopes are NOT contradictions (e.g. "dev uses H2" and "prod uses MySQL")
+- Only flag genuine logical conflicts where both cannot be simultaneously true
+- Maximum 5 pairs per batch
+- Output ONLY the JSON array, no explanation outside it

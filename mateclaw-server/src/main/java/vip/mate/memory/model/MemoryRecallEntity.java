@@ -50,12 +50,17 @@ public class MemoryRecallEntity {
     /** 是否已提升到 MEMORY.md */
     private Boolean promoted;
 
+    /** Times this candidate was reviewed but not promoted (Dream v2, Phase 1 write-only) */
+    private Integer reviewCount;
+
+    /** Last time this candidate was reviewed during a dream run */
+    private LocalDateTime lastReviewedAt;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updateTime;
 
-    @TableLogic
     private Integer deleted;
 }

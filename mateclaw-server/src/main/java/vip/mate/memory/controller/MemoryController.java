@@ -7,9 +7,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
-import vip.mate.memory.service.MemoryEmergenceService;
-import vip.mate.memory.service.MemoryRecallService;
-import vip.mate.memory.service.MemorySummarizationService;
+import vip.mate.memory.MemoryProperties;
+import vip.mate.memory.service.*;
 import vip.mate.memory.scheduler.DreamingScheduler;
 import vip.mate.workspace.document.WorkspaceFileService;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
@@ -35,19 +34,41 @@ public class MemoryController {
     private final MemoryEmergenceService emergenceService;
     private final MemorySummarizationService summarizationService;
     private final MemoryRecallService recallService;
+    private final MemoryProperties memoryProperties;
     private final DreamingScheduler dreamingScheduler;
     private final WorkspaceFileService workspaceFileService;
 
-    @Operation(summary = "手动触发记忆整合（daily notes → MEMORY.md）")
+    @Operation(summary = "手动触发记忆整合（daily notes → MEMORY.md，NIGHTLY 模式）")
     @PostMapping("/{agentId}/emergence")
     @RequireWorkspaceRole("member")
-    public R<Map<String, String>> triggerEmergence(@PathVariable Long agentId) {
+    public R<DreamReport> triggerEmergence(@PathVariable Long agentId) {
         try {
-            emergenceService.consolidate(agentId);
-            return R.ok(Map.of("status", "completed"));
+            DreamReport report = emergenceService.consolidate(agentId, DreamMode.NIGHTLY, null);
+            return R.ok(report);
         } catch (Exception e) {
             log.error("[Memory] Manual emergence failed for agent={}: {}", agentId, e.getMessage(), e);
             return R.fail("记忆整合失败: " + e.getMessage());
+        }
+    }
+
+    @Operation(summary = "Focused Dream — 围绕指定主题触发记忆整合")
+    @PostMapping("/{agentId}/dreaming/focused")
+    @RequireWorkspaceRole("member")
+    public R<DreamReport> triggerFocusedDream(@PathVariable Long agentId,
+                                              @RequestBody Map<String, String> body) {
+        if (!memoryProperties.getDream().isFocusedEnabled()) {
+            return R.fail(410, "Focused dream is disabled");
+        }
+        String topic = body != null ? body.get("topic") : null;
+        if (topic == null || topic.isBlank()) {
+            return R.fail("topic is required");
+        }
+        try {
+            DreamReport report = emergenceService.consolidate(agentId, DreamMode.FOCUSED, topic);
+            return R.ok(report);
+        } catch (Exception e) {
+            log.error("[Memory] Focused dream failed for agent={}: {}", agentId, e.getMessage(), e);
+            return R.fail("Focused dream failed: " + e.getMessage());
         }
     }
 

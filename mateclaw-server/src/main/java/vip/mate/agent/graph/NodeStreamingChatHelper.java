@@ -3,10 +3,12 @@ package vip.mate.agent.graph;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import vip.mate.agent.AssistantThinkingRelay;
 import vip.mate.channel.web.ChatStreamTracker;
 
 import reactor.core.Disposable;
@@ -44,17 +46,176 @@ public class NodeStreamingChatHelper {
 
     private final ChatStreamTracker streamTracker;
 
-    /** 备选模型（主模型连续失败后使用） */
-    private final ChatModel fallbackModel;
+    /**
+     * Ordered fallback chain tried after the primary model exhausts retries.
+     * Each entry is attempted once (no retry); the first successful response
+     * wins. Empty list disables fallover entirely. See RFC-009.
+     *
+     * <p>Stored as {@link vip.mate.llm.failover.FallbackEntry} (providerId +
+     * ChatModel) so the chain walker can consult {@link vip.mate.llm.failover.ProviderHealthTracker}
+     * — cooldown state is keyed by providerId, not by ChatModel instance.</p>
+     */
+    private final List<vip.mate.llm.failover.FallbackEntry> fallbackChain;
+
+    /** Optional cache-metrics aggregator; {@code null} in tests or when the bean is absent. */
+    private final vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics;
+
+    /** Optional per-provider health tracker; {@code null} in tests or when bean absent. */
+    private final vip.mate.llm.failover.ProviderHealthTracker healthTracker;
+
+    /**
+     * Provider id of the primary {@link ChatModel} this helper drives. Used
+     * by {@link #streamCallInternal} to consult / update {@link #healthTracker}
+     * for the primary too — if a provider's API key is revoked, primary
+     * cooldown lets us bypass the 5-retry stall on subsequent calls within
+     * the same conversation. Falls back to {@code null} when unknown
+     * (legacy callers, tests).
+     */
+    private final String primaryProviderId;
+
+    /**
+     * RFC-009 Phase 4: membership gate for usable providers. A provider is
+     * removed from the pool on HARD errors (AUTH_ERROR / BILLING /
+     * MODEL_NOT_FOUND) so subsequent requests skip it entirely without
+     * burning a round-trip. {@code null} disables the gate (legacy callers,
+     * tests) — every provider then counts as in-pool (fail-open).
+     */
+    private final vip.mate.llm.failover.AvailableProviderPool providerPool;
 
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker) {
-        this.streamTracker = streamTracker;
-        this.fallbackModel = null;
+        this(streamTracker, List.of(), null, null, null, null);
     }
 
+    /**
+     * @deprecated use the full constructor — a single fallback cannot
+     *     express the ordered multi-provider chain from RFC-009.
+     */
+    @Deprecated
     public NodeStreamingChatHelper(ChatStreamTracker streamTracker, ChatModel fallbackModel) {
+        this(streamTracker, wrap(fallbackModel), null, null, null, null);
+    }
+
+    /**
+     * @deprecated use the full constructor.
+     */
+    @Deprecated
+    public NodeStreamingChatHelper(ChatStreamTracker streamTracker, ChatModel fallbackModel,
+                                   vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics) {
+        this(streamTracker, wrap(fallbackModel), cacheMetrics, null, null, null);
+    }
+
+    /**
+     * Chain constructor without health tracker — primarily for tests and
+     * legacy wiring. Production callers should use the full constructor.
+     */
+    public NodeStreamingChatHelper(ChatStreamTracker streamTracker,
+                                   List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
+                                   vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics) {
+        this(streamTracker, fallbackChain, cacheMetrics, null, null, null);
+    }
+
+    /**
+     * Constructor with health tracker but unknown primary provider — used by
+     * tests where the helper isn't tied to a specific primary. Primary
+     * health tracking is disabled for instances built this way.
+     */
+    public NodeStreamingChatHelper(ChatStreamTracker streamTracker,
+                                   List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
+                                   vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics,
+                                   vip.mate.llm.failover.ProviderHealthTracker healthTracker) {
+        this(streamTracker, fallbackChain, cacheMetrics, healthTracker, null, null);
+    }
+
+    /**
+     * Constructor that wires health tracker + primary provider id but leaves
+     * the {@link vip.mate.llm.failover.AvailableProviderPool} disabled. Kept
+     * so existing tests (e.g. {@code NodeStreamingChatHelperFailoverTest})
+     * compile unchanged — they don't exercise the pool gate.
+     */
+    public NodeStreamingChatHelper(ChatStreamTracker streamTracker,
+                                   List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
+                                   vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics,
+                                   vip.mate.llm.failover.ProviderHealthTracker healthTracker,
+                                   String primaryProviderId) {
+        this(streamTracker, fallbackChain, cacheMetrics, healthTracker, primaryProviderId, null);
+    }
+
+    /**
+     * Full constructor — preferred for production wiring. The
+     * {@link vip.mate.llm.failover.AvailableProviderPool} hookup gates both
+     * the primary short-circuit and the fallback walker; passing {@code null}
+     * runs in fail-open mode (every provider counted as in-pool).
+     */
+    public NodeStreamingChatHelper(ChatStreamTracker streamTracker,
+                                   List<vip.mate.llm.failover.FallbackEntry> fallbackChain,
+                                   vip.mate.llm.cache.LlmCacheMetricsAggregator cacheMetrics,
+                                   vip.mate.llm.failover.ProviderHealthTracker healthTracker,
+                                   String primaryProviderId,
+                                   vip.mate.llm.failover.AvailableProviderPool providerPool) {
         this.streamTracker = streamTracker;
-        this.fallbackModel = fallbackModel;
+        this.fallbackChain = fallbackChain == null ? List.of() : List.copyOf(fallbackChain);
+        this.cacheMetrics = cacheMetrics;
+        this.healthTracker = healthTracker;
+        this.primaryProviderId = primaryProviderId;
+        this.providerPool = providerPool;
+    }
+
+    private static List<vip.mate.llm.failover.FallbackEntry> wrap(ChatModel m) {
+        // Legacy single-fallback path: providerId is unknown so health tracking
+        // is silently disabled for that one entry (it gets a synthetic id).
+        return m == null ? List.of() : List.of(new vip.mate.llm.failover.FallbackEntry("__legacy__", m));
+    }
+
+    /**
+     * Record a single primary-model outcome to the health tracker. No-op when
+     * either the tracker bean isn't wired or the primary's providerId is
+     * unknown (e.g., tests, legacy callers built without the full constructor).
+     */
+    private void recordPrimary(boolean success) {
+        if (healthTracker == null || primaryProviderId == null) return;
+        if (success) healthTracker.recordSuccess(primaryProviderId);
+        else healthTracker.recordFailure(primaryProviderId);
+    }
+
+    /**
+     * RFC-009 Phase 4 — map an {@link ErrorType} to the matching pool
+     * {@link vip.mate.llm.failover.AvailableProviderPool.RemovalSource} for
+     * HARD failures (AUTH / BILLING / MODEL_NOT_FOUND). Returns {@code null}
+     * for SOFT errors and benign types — those keep the provider in-pool and
+     * are handled by {@link vip.mate.llm.failover.ProviderHealthTracker}'s
+     * cooldown instead.
+     */
+    private static vip.mate.llm.failover.AvailableProviderPool.RemovalSource hardRemovalSource(ErrorType type) {
+        if (type == null) return null;
+        return switch (type) {
+            case AUTH_ERROR -> vip.mate.llm.failover.AvailableProviderPool.RemovalSource.AUTH_ERROR;
+            case BILLING -> vip.mate.llm.failover.AvailableProviderPool.RemovalSource.BILLING;
+            case MODEL_NOT_FOUND -> vip.mate.llm.failover.AvailableProviderPool.RemovalSource.MODEL_NOT_FOUND;
+            default -> null;
+        };
+    }
+
+    /** Convenience: pool-aware membership check. Null pool means fail-open (everyone in). */
+    private boolean inPool(String providerId) {
+        return providerPool == null || providerId == null || providerPool.contains(providerId);
+    }
+
+    /**
+     * Remove the given provider from the pool if {@code errorType} is HARD
+     * (AUTH_ERROR / BILLING / MODEL_NOT_FOUND). No-op when the pool is
+     * disabled, the provider id is unknown, or the error is SOFT.
+     */
+    private void removeFromPool(String providerId, ErrorType errorType, String message) {
+        if (providerPool == null || providerId == null) return;
+        var source = hardRemovalSource(errorType);
+        if (source == null) return;
+        providerPool.remove(providerId, source, message != null ? message : errorType.name());
+    }
+
+    /** Defensively re-affirm pool membership after a successful call. Idempotent + cheap. */
+    private void addToPool(String providerId) {
+        if (providerPool == null || providerId == null) return;
+        providerPool.add(providerId);
     }
 
     /**
@@ -97,9 +258,25 @@ public class NodeStreamingChatHelper {
         }
     }
 
+    /**
+     * Broadcast a lightweight progress event so the frontend shows activity
+     * during silent LLM calls (e.g. triage). Sent as a "progress" SSE event.
+     */
+    public void broadcastProgress(String conversationId, String message) {
+        if (streamTracker == null || conversationId == null || conversationId.isEmpty()) {
+            return;
+        }
+        streamTracker.broadcastObject(conversationId, "progress",
+                Map.of("message", message != null ? message : ""));
+    }
+
     // ==================== 重试配置 ====================
 
     private static final int MAX_RETRIES = 5;
+    // RATE_LIMIT: fail fast to failover chain — staying on the same
+    // provider during a rate-limit window wastes time without recovery.
+    // SERVER_ERROR keeps MAX_RETRIES (upstream flaps often self-heal).
+    private static final int MAX_RETRIES_RATE_LIMIT = 2;
     private static final long BACKOFF_BASE_MS = 3000;
     private static final long BACKOFF_CAP_MS = 60_000;
 
@@ -148,22 +325,41 @@ public class NodeStreamingChatHelper {
                 || msg.contains("thinking block")) {
             return ErrorType.THINKING_BLOCK_ERROR;
         }
+        // RFC-009 P3.2: BILLING — payment / quota exhausted. Distinct from AUTH because
+        // a different provider may have credits, so we should fall back instead of
+        // terminating the call. Both OpenAI ("insufficient_quota") and Anthropic
+        // ("credit balance is too low") use these phrases in 402-class responses.
+        if (msg.contains("402") || msg.contains("insufficient_quota")
+                || msg.contains("credit balance is too low")
+                || msg.contains("billing_error") || msg.contains("billing_hard_limit_reached")
+                || msg.contains("You exceeded your current quota")
+                || msg.contains("quota exceeded") || msg.contains("Quota exceeded")) {
+            return ErrorType.BILLING;
+        }
+        // RFC-009 P3.2: MODEL_NOT_FOUND — provider rejects the requested model id.
+        // Includes DashScope's "[InvalidParameter] url error, please check url"
+        // (https://help.aliyun.com/zh/model-studio/error-code#error-url) which despite
+        // the wording is the provider rejecting an unknown/unsupported model id on
+        // the native protocol. Splitting this out from CLIENT_ERROR lets us hand off
+        // to the fallback chain instead of terminating — a different provider may
+        // recognize the model name (or have an equivalent default).
+        if (msg.contains("Model not exist")
+                || msg.contains("model_not_found")
+                || msg.contains("Model not found")
+                || msg.contains("does not exist")
+                || msg.contains("[InvalidParameter]")
+                || msg.contains("InvalidParameter")
+                || msg.contains("url error")
+                // Volcano Ark: model exists but the user's account hasn't opened it,
+                // or the id isn't valid for this region. Both are hard failures —
+                // retrying won't help, and a different provider may serve the model.
+                || msg.contains("ModelNotOpen")
+                || msg.contains("InvalidEndpointOrModel")) {
+            return ErrorType.MODEL_NOT_FOUND;
+        }
         // Client errors (400 Bad Request — unsupported format, invalid params, etc.) — NOT retryable
         if (msg.contains("400") || msg.contains("Bad Request")
                 || msg.contains("invalid_request_error") || msg.contains("unsupported")) {
-            return ErrorType.CLIENT_ERROR;
-        }
-        // DashScope-specific "model name does not map to a valid endpoint" — reported as
-        // "[InvalidParameter] url error, please check url" (see
-        // https://help.aliyun.com/zh/model-studio/error-code#error-url). Despite the wording
-        // it's not a URL issue — it's the provider rejecting an unknown/unsupported model id
-        // on the native protocol. Treat as client error so we do NOT retry.
-        if (msg.contains("[InvalidParameter]")
-                || msg.contains("InvalidParameter")
-                || msg.contains("url error")
-                || msg.contains("Model not exist")
-                || msg.contains("model_not_found")
-                || msg.contains("Model not found")) {
             return ErrorType.CLIENT_ERROR;
         }
         // Server errors
@@ -185,6 +381,20 @@ public class NodeStreamingChatHelper {
                 sb.append(cur.getMessage()).append(" | ");
             }
             sb.append(cur.getClass().getSimpleName()).append(" | ");
+            // Include the HTTP response body for WebClient errors. Many providers
+            // (Volcano Ark, Ollama, …) put the actionable error code only in the
+            // body, while the surface message is just "404 Not Found from POST X".
+            // Without this, classifyError() can never see codes like ModelNotOpen.
+            if (cur instanceof WebClientResponseException wre) {
+                try {
+                    String body = wre.getResponseBodyAsString();
+                    if (body != null && !body.isEmpty()) {
+                        sb.append(body.length() > 1024 ? body.substring(0, 1024) : body)
+                          .append(" | ");
+                    }
+                } catch (Exception ignored) {
+                }
+            }
             cur = cur.getCause();
         }
         return sb.toString();
@@ -199,18 +409,65 @@ public class NodeStreamingChatHelper {
             throw new CancellationException("Stream stopped by user");
         }
 
+        // RFC-009 P3.1 + Phase 4: short-circuit the primary retry loop in two cases.
+        //   (a) primary is in cooldown (P3.3) — soft, transient
+        //   (b) primary was HARD-removed from the pool (Phase 4) — auth/billing/missing model
+        // Either way, retrying the same model wastes seconds; head straight to fallback.
+        boolean primaryInCooldown = primaryProviderId != null
+                && healthTracker != null
+                && healthTracker.isInCooldown(primaryProviderId);
+        boolean primaryOutOfPool = primaryProviderId != null && !inPool(primaryProviderId);
+        boolean primarySkipped = primaryInCooldown || primaryOutOfPool;
+        if (primarySkipped) {
+            String reason = primaryOutOfPool ? "removed from pool" : "in cooldown";
+            log.warn("[{}] Primary provider={} {} — skipping straight to fallback chain",
+                    phase, primaryProviderId, reason);
+            if (broadcast) {
+                broadcastDelta(conversationId, "warning",
+                        buildDeltaJson("主模型暂时不可用（" + (primaryOutOfPool ? "已下线" : "冷却中")
+                                + "），直接尝试备选模型..."));
+            }
+        }
+
+        // D-6: performance counters
+        int retryCount = 0;
+        long totalBackoffMs = 0;
+        int failoverCount = 0;
+        int llmCallCount = 0;
+        long callStartMs = System.currentTimeMillis();
+
         // 主模型重试循环
         StreamResult lastResult = null;
-        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        if (!primarySkipped) for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            llmCallCount++;
+            if (attempt > 0) retryCount++;
             lastResult = doStreamCall(chatModel, prompt, conversationId, phase, broadcast, attempt);
             if (lastResult != null) {
                 // PTL: 不重试，直接返回给上层 Node 处理
                 if (lastResult.errorType() == ErrorType.PROMPT_TOO_LONG) {
                     return lastResult;
                 }
-                // AUTH: 不重试
+                // AUTH: primary key 失效不会自愈，跳过同模型重试，交给 fallback chain
+                // — 其它 provider 的 key 可能仍然可用（与 BILLING / MODEL_NOT_FOUND 同策略）。
+                // recordPrimary(false) 仍记一次失败用于 healthTracker 冷却累计。
+                // 若 fallback chain 全部 401，walker 末尾会把最后一次 AUTH_ERROR 透出，
+                // 不会静默吞错。
                 if (lastResult.errorType() == ErrorType.AUTH_ERROR) {
-                    return lastResult;
+                    log.warn("[{}] Primary auth failed — skipping same-model retries, handing off to fallback chain", phase);
+                    recordPrimary(false);
+                    removeFromPool(primaryProviderId, ErrorType.AUTH_ERROR, lastResult.errorMessage());
+                    break;
+                }
+                // RFC-009 P3.2: BILLING / MODEL_NOT_FOUND — provider-side hard failures
+                // that won't change on retry. Skip to fallback chain (a different
+                // provider may have credits, or the model name may be valid there).
+                if (lastResult.errorType() == ErrorType.BILLING
+                        || lastResult.errorType() == ErrorType.MODEL_NOT_FOUND) {
+                    log.warn("[{}] Primary error={} — skipping same-model retries, handing off to fallback chain",
+                            phase, lastResult.errorType());
+                    recordPrimary(false);
+                    removeFromPool(primaryProviderId, lastResult.errorType(), lastResult.errorMessage());
+                    break;
                 }
                 // CLIENT_ERROR (400 Bad Request): 不重试（参数/格式错误重试也不会变）
                 if (lastResult.errorType() == ErrorType.CLIENT_ERROR) {
@@ -225,36 +482,103 @@ public class NodeStreamingChatHelper {
                 if (lastResult.errorType() == ErrorType.THINKING_BLOCK_ERROR) {
                     return lastResult; // 已经重试过了
                 }
+                // RFC-009: EMPTY_RESPONSE — break the primary-retry loop and fall through to
+                // the fallback chain. Retrying the same model that returned nothing is rarely
+                // productive; a different provider has a better chance of succeeding.
+                if (lastResult.errorType() == ErrorType.EMPTY_RESPONSE) {
+                    log.warn("[{}] Primary returned empty response — skipping same-model retries, handing off to fallback chain", phase);
+                    recordPrimary(false);
+                    break;
+                }
                 // 成功
                 if (lastResult.errorMessage() == null || lastResult.errorType() == ErrorType.NONE) {
+                    recordPrimary(true);
+                    addToPool(primaryProviderId);
+                    logPerfSummary(phase, conversationId, callStartMs, llmCallCount, retryCount, failoverCount);
                     return lastResult;
                 }
                 // Any other non-null errored result with a classified type that doStreamCall
                 // chose NOT to retry (i.e. UNKNOWN, or RATE_LIMIT/SERVER_ERROR past MAX_RETRIES)
                 // must exit — otherwise we silently spin through attempts and waste seconds
                 // per turn on unrecoverable errors like DashScope's "url error" / unknown model.
+                recordPrimary(false);
+                logPerfSummary(phase, conversationId, callStartMs, llmCallCount, retryCount, failoverCount);
                 return lastResult;
             }
             // lastResult == null 表示需要重试
         }
+        // If we exhausted the retry loop without a verdict, primary effectively failed.
+        if (!primarySkipped && lastResult != null && lastResult.errorType() != ErrorType.NONE) {
+            recordPrimary(false);
+        }
 
-        // 主模型耗尽重试 — 尝试 fallback model
-        if (fallbackModel != null && fallbackModel != chatModel) {
-            log.warn("[{}] Primary model exhausted retries, switching to fallback model for conversation {}",
-                    phase, conversationId);
+        // Primary exhausted retries — walk the fallback chain in priority order.
+        // Each fallback gets a single shot (no retry); first successful result wins.
+        // Same-instance entries (e.g., primary accidentally included in the chain)
+        // are skipped so we don't re-try the exact model that just failed.
+        // Providers in cooldown (RFC-009 P3.3) are also skipped so a known-bad
+        // provider doesn't add latency to every conversation turn.
+        for (int i = 0; i < fallbackChain.size(); i++) {
+            vip.mate.llm.failover.FallbackEntry entry = fallbackChain.get(i);
+            ChatModel fallback = entry.chatModel();
+            if (fallback == chatModel) continue;
+            // RFC-009 Phase 4 — pool gate (the real runtime fence). A provider
+            // HARD-removed earlier (or by another conversation) must not even
+            // be attempted here. Build-time filtering is best-effort; this is
+            // the one that matters when pool state changes mid-conversation.
+            if (!inPool(entry.providerId())) {
+                log.info("[{}] Skipping fallback {}/{} provider={} — not in pool",
+                        phase, i + 1, fallbackChain.size(), entry.providerId());
+                continue;
+            }
+            if (healthTracker != null && healthTracker.isInCooldown(entry.providerId())) {
+                log.info("[{}] Skipping fallback {}/{} provider={} — in cooldown",
+                        phase, i + 1, fallbackChain.size(), entry.providerId());
+                continue;
+            }
+            log.warn("[{}] Primary exhausted, trying fallback {}/{} provider={} ({}) for conversation {}",
+                    phase, i + 1, fallbackChain.size(), entry.providerId(),
+                    fallback.getClass().getSimpleName(), conversationId);
             if (broadcast) {
                 broadcastDelta(conversationId, "warning",
-                        buildDeltaJson("主模型不可用，正在切换到备选模型..."));
+                        buildDeltaJson("主模型不可用，正在切换到备选模型 (" + (i + 1) + "/" + fallbackChain.size() + ")..."));
             }
-            StreamResult fallbackResult = doStreamCall(fallbackModel, prompt, conversationId,
-                    phase + "_fallback", broadcast, 0);
-            if (fallbackResult != null) {
+            failoverCount++;
+            llmCallCount++;
+            StreamResult fallbackResult = doStreamCall(fallback, prompt, conversationId,
+                    phase + "_fallback_" + (i + 1), broadcast, 0);
+            // Accept only fully successful fallbacks. Non-successful results (auth
+            // error, client error, still-rate-limited) propagate to the next
+            // fallback instead of being surfaced as the final result.
+            if (fallbackResult != null
+                    && fallbackResult.errorType() == ErrorType.NONE
+                    && fallbackResult.errorMessage() == null) {
+                if (healthTracker != null) healthTracker.recordSuccess(entry.providerId());
+                addToPool(entry.providerId());
+                logPerfSummary(phase, conversationId, callStartMs, llmCallCount, retryCount, failoverCount);
                 return fallbackResult;
+            }
+            if (healthTracker != null) healthTracker.recordFailure(entry.providerId());
+            if (fallbackResult != null) {
+                // RFC-009 Phase 4: HARD errors evict from the pool so later
+                // walks skip this provider outright. SOFT errors keep it
+                // in-pool and let the tracker's cooldown absorb the blip.
+                removeFromPool(entry.providerId(), fallbackResult.errorType(), fallbackResult.errorMessage());
+                lastResult = fallbackResult; // remember most recent to report if the whole chain fails
             }
         }
 
+        logPerfSummary(phase, conversationId, callStartMs, llmCallCount, retryCount, failoverCount);
         return lastResult != null ? lastResult
                 : buildErrorResult("LLM 调用失败，已达最大重试次数", conversationId, phase);
+    }
+
+    /** D-6: log a structured performance summary for the LLM call phase. */
+    private void logPerfSummary(String phase, String conversationId, long startMs,
+                                int llmCallCount, int retryCount, int failoverCount) {
+        long totalMs = System.currentTimeMillis() - startMs;
+        log.info("[{}] perf_summary: conversationId={} total_ms={} llm_call_count={} retry_count={} failover_count={}",
+                phase, conversationId, totalMs, llmCallCount, retryCount, failoverCount);
     }
 
     /**
@@ -264,6 +588,77 @@ public class NodeStreamingChatHelper {
     private StreamResult doStreamCall(ChatModel chatModel, Prompt prompt,
                                        String conversationId, String phase,
                                        boolean broadcast, int attempt) {
+        // PR-2 L4 (RFC-049 §2.4.2): normalize as a pre-egress step (not only on retry).
+        // Strip reasoning_content from prior-turn AssistantMessages (i <= lastUserIdx),
+        // preserving in-turn thinking (i > lastUserIdx) so DeepSeek's contract holds.
+        // The returned Prompt shares `options` by reference with the input prompt.
+        Prompt outbound = stripThinkingFromPrompt(prompt);
+
+        // RFC-049 follow-up (2026-04-27): trim trailing AssistantMessage from the
+        // outbound prompt. Triggered in practice by the summarizing→reasoning
+        // graph transition: the summarizer emits an in-turn AssistantMessage,
+        // graph state ends with it, reasoning's next LLM call sends history
+        // ending with assistant. Anthropic Claude returns 400 "does not
+        // support assistant message prefill"; some DeepSeek model variants 400
+        // similarly. The dropped assistant is summarizer scaffolding, not
+        // user-relevant content, so removing it before egress is safe.
+        outbound = dropTrailingAssistant(outbound);
+
+        // PR-2 L3 (RFC-049 §2.3.2): producer-side relay stash. Extract per-assistant
+        // thinking from the normalized prompt (cross-turn positions are already "" due
+        // to strip), stash with the caller's original `user` field, and overwrite
+        // `options.user` with the relay token. The consumer in
+        // AgentGraphBuilder.patchReasoningContent restores the original user when
+        // rebuilding the outbound ChatCompletionRequest; the token never reaches the
+        // provider. We only activate relay on OpenAiChatOptions paths — Anthropic has
+        // its own thinking mechanism (extended thinking via AnthropicChatOptions.thinking).
+        String relayToken = null;
+        String originalUser = null;
+        org.springframework.ai.openai.OpenAiChatOptions oaiOptsForRelay = null;
+        if (outbound.getOptions() instanceof org.springframework.ai.openai.OpenAiChatOptions oaiOpts) {
+            List<String> thinkings = extractAssistantThinkings(outbound);
+            if (thinkings.stream().anyMatch(s -> !s.isEmpty())) {
+                originalUser = oaiOpts.getUser();
+                relayToken = AssistantThinkingRelay.stash(thinkings, originalUser);
+                oaiOpts.setUser(relayToken);
+                oaiOptsForRelay = oaiOpts;
+            }
+        }
+
+        try {
+            return doStreamCallInner(chatModel, outbound, conversationId, phase, broadcast, attempt);
+        } finally {
+            // Idempotent: if consumer already took the entry, discard is a no-op.
+            if (relayToken != null) {
+                AssistantThinkingRelay.discard(relayToken);
+                if (oaiOptsForRelay != null) {
+                    oaiOptsForRelay.setUser(originalUser);
+                }
+            }
+        }
+    }
+
+    /**
+     * PR-2: Extract per-assistant {@code reasoningContent} from a Prompt's messages in
+     * order. Non-assistant messages are skipped; assistants with no metadata or no
+     * reasoningContent yield {@code ""} so the returned list's positional index aligns
+     * with the assistant-message index as seen by the consumer.
+     */
+    private static List<String> extractAssistantThinkings(Prompt prompt) {
+        List<String> out = new ArrayList<>();
+        for (Message m : prompt.getInstructions()) {
+            if (m instanceof AssistantMessage am) {
+                Map<String, Object> meta = am.getMetadata();
+                Object rc = meta != null ? meta.get("reasoningContent") : null;
+                out.add(rc instanceof String s ? s : "");
+            }
+        }
+        return out;
+    }
+
+    private StreamResult doStreamCallInner(ChatModel chatModel, Prompt prompt,
+                                            String conversationId, String phase,
+                                            boolean broadcast, int attempt) {
         if (attempt > 0) {
             long delay = Math.min(BACKOFF_BASE_MS * (1L << (attempt - 1)), BACKOFF_CAP_MS);
             // 加入 jitter 防止雷群效应（Hermes 风格）
@@ -276,11 +671,22 @@ public class NodeStreamingChatHelper {
                 broadcastDelta(conversationId, "warning",
                         buildDeltaJson("⏱️ 请求频率受限，等待 " + (delay / 1000) + " 秒后重试（第 " + attempt + "/" + MAX_RETRIES + " 次）..."));
             }
-            try {
-                Thread.sleep(delay);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                return buildErrorResult("LLM 调用被中断", conversationId, phase);
+            // Poll stop flag every 100ms so user Stop is honored mid-backoff.
+            long remaining = delay;
+            while (remaining > 0) {
+                if (streamTracker != null && streamTracker.isStopRequested(conversationId)) {
+                    log.info("[{}] Stop requested during backoff — aborting retry: conversationId={}",
+                            phase, conversationId);
+                    throw new CancellationException("Stream stopped by user");
+                }
+                long slice = Math.min(100, remaining);
+                try {
+                    Thread.sleep(slice);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return buildErrorResult("LLM 调用被中断", conversationId, phase);
+                }
+                remaining -= slice;
             }
         }
 
@@ -467,11 +873,17 @@ public class NodeStreamingChatHelper {
                         conversationId, phase, errorType);
             }
 
-            // Rate limit / Server error: 重试
-            if (attempt < MAX_RETRIES && (errorType == ErrorType.RATE_LIMIT || errorType == ErrorType.SERVER_ERROR)) {
-                log.warn("[{}] Retryable error (attempt {}/{}, type={}): {}",
-                        phase, attempt, MAX_RETRIES, errorType, error.getMessage());
-                return null;  // 返回 null 触发重试
+            // Rate limit / Server error: retryable, but with different budgets.
+            // RATE_LIMIT: cap at 2 retries then failover (RFC 06 D-2).
+            // SERVER_ERROR: keep full MAX_RETRIES — upstream flaps often self-heal.
+            if (errorType == ErrorType.RATE_LIMIT || errorType == ErrorType.SERVER_ERROR) {
+                int effectiveMaxRetries = (errorType == ErrorType.RATE_LIMIT)
+                        ? MAX_RETRIES_RATE_LIMIT : MAX_RETRIES;
+                if (attempt < effectiveMaxRetries) {
+                    log.warn("[{}] Retryable error (attempt {}/{}, type={}): {}",
+                            phase, attempt, effectiveMaxRetries, errorType, error.getMessage());
+                    return null;  // 返回 null 触发重试
+                }
             }
 
             // 不可重试或已耗尽重试
@@ -488,6 +900,22 @@ public class NodeStreamingChatHelper {
                     phase, conversationId);
             // warning 已在 dispose 时广播，无需重复
         }
+
+        // RFC-009: guard against silent empty responses. Some providers return
+        // HTTP 200 with an empty body under soft-failure conditions (rate-limit
+        // capacity, context filter, upstream overload). Treat this as a failure
+        // signal so streamCallInternal can hand off to the fallback chain.
+        // Only fire when the primary wasn't truncated by our own repetition
+        // detector (which deliberately produces short content) and when there
+        // are no tool calls (tool-only responses are legitimately empty-text).
+        if (!truncatedByRepetition
+                && contentAccum.length() == 0
+                && thinkingAccum.length() == 0
+                && toolCallAccumulators.isEmpty()) {
+            log.warn("[{}] LLM returned empty response (no content, no thinking, no tool calls) — marking as EMPTY_RESPONSE for fallback", phase);
+            return buildErrorResultWithType("LLM 返回空响应", conversationId, phase, ErrorType.EMPTY_RESPONSE);
+        }
+
         return assembleResult(contentAccum, thinkingAccum, toolCallAccumulators,
                 promptTokens.get(), completionTokens.get(),
                 cacheReadTokens.get(), cacheWriteTokens.get(), phase,
@@ -512,10 +940,9 @@ public class NodeStreamingChatHelper {
             }
         }
 
-        AssistantMessage assembledMessage = !finalToolCalls.isEmpty()
-                ? AssistantMessage.builder().content(fullContent).toolCalls(finalToolCalls).build()
-                : new AssistantMessage(fullContent);
+        AssistantMessage assembledMessage = buildAssistantMessageWithThinking(fullContent, fullThinking, finalToolCalls);
 
+        recordCacheMetrics(phase, promptTok, completionTok, cacheReadTok, cacheWriteTok);
         return new StreamResult(fullContent, fullThinking, assembledMessage,
                 finalToolCalls, !finalToolCalls.isEmpty(), promptTok, completionTok,
                 true, null, ErrorType.NONE, true, cacheReadTok, cacheWriteTok);
@@ -542,43 +969,100 @@ public class NodeStreamingChatHelper {
             }
         }
 
-        AssistantMessage assembledMessage;
-        if (!finalToolCalls.isEmpty()) {
-            assembledMessage = AssistantMessage.builder()
-                    .content(fullContent)
-                    .toolCalls(finalToolCalls)
-                    .build();
-        } else {
-            assembledMessage = new AssistantMessage(fullContent);
-        }
+        AssistantMessage assembledMessage = buildAssistantMessageWithThinking(fullContent, fullThinking, finalToolCalls);
 
+        recordCacheMetrics(phase, promptTok, completionTok, cacheReadTok, cacheWriteTok);
         return new StreamResult(fullContent, fullThinking, assembledMessage,
                 finalToolCalls, !finalToolCalls.isEmpty(), promptTok, completionTok,
                 partial, errorMsg, ErrorType.NONE, false, cacheReadTok, cacheWriteTok);
     }
 
+    /**
+     * PR-2 L2 (RFC-049): Build an {@link AssistantMessage} that persists the per-turn
+     * {@code fullThinking} into the message's properties under key {@code "reasoningContent"}.
+     *
+     * <p>This is the linchpin of the structural fix: without writing thinking back into
+     * the AssistantMessage that enters the next ReAct round's state, the outbound
+     * request's {@code reasoning_content} is lost (Spring AI 1.1.4's
+     * {@code OpenAiChatModel.lambda$createRequest$20} hardcodes {@code null} on the
+     * outbound conversion, so the relay in {@code AssistantThinkingRelay} is the only
+     * way back — see RFC-049 §2.3 L3).
+     *
+     * <p>Note the Spring AI naming asymmetry: the builder method is
+     * {@code .properties(Map)} but the reader is {@code getMetadata()} (see
+     * {@link #stripThinkingFromPrompt} L937).
+     */
+    private static AssistantMessage buildAssistantMessageWithThinking(
+            String fullContent, String fullThinking, List<AssistantMessage.ToolCall> finalToolCalls) {
+        AssistantMessage.Builder builder = AssistantMessage.builder().content(fullContent);
+        if (finalToolCalls != null && !finalToolCalls.isEmpty()) {
+            builder.toolCalls(finalToolCalls);
+        }
+        if (fullThinking != null && !fullThinking.isEmpty()) {
+            builder.properties(Map.of("reasoningContent", fullThinking));
+        }
+        return builder.build();
+    }
+
+    /**
+     * Record token / cache usage to the optional metrics aggregator.
+     * Called only from successful assembly paths ({@link #assembleResult}
+     * and {@link #assembleStoppedResult}) — error paths are excluded because
+     * their token counts are typically zero and would skew the ratio.
+     */
+    private void recordCacheMetrics(String phase, int promptTok, int completionTok,
+                                    int cacheReadTok, int cacheWriteTok) {
+        if (cacheMetrics == null) return;
+        // Skip empty-usage records (pure error responses or broken chunks).
+        if (promptTok == 0 && completionTok == 0 && cacheReadTok == 0 && cacheWriteTok == 0) {
+            return;
+        }
+        cacheMetrics.record(phase, promptTok, completionTok, cacheReadTok, cacheWriteTok);
+    }
+
     /** 构建纯错误 StreamResult（无任何内容） */
     /**
-     * 从 Prompt 中剥离旧 AssistantMessage 的 thinking/reasoningContent metadata。
-     * 保留最新一条 AssistantMessage 的 thinking（可能是模型需要的签名）。
+     * Strip {@code reasoningContent} from AssistantMessages that belong to <em>prior</em>
+     * user turns, keeping thinking for messages within the <strong>current</strong> user
+     * turn intact.
+     *
+     * <p>PR-2 L4 (RFC-049 §2.4.1): The old semantics "keep only the last AssistantMessage's
+     * thinking" broke DeepSeek's contract for multi-round tool-calls within a single user
+     * turn (DeepSeek requires all in-turn assistant thinking to be passed back on subsequent
+     * rounds). Now the boundary is the most recent {@link UserMessage}: AssistantMessages at
+     * index {@code <= lastUserIdx} are prior-turn history (their thinking must be stripped
+     * per DeepSeek's "reset across user turns" rule); AssistantMessages at {@code > lastUserIdx}
+     * are in-turn (their thinking must be preserved).
+     *
+     * <p>PR-2 L4 (RFC-049 §2.4.2): This method is called as a normal pre-egress step from
+     * {@link #doStreamCall}, not only from the {@code THINKING_BLOCK_ERROR} retry path. The
+     * retry path still calls it too (idempotent), serving as defensive re-application.
+     *
+     * <p>Note: {@code Prompt.getOptions()} is preserved by reference into the returned
+     * {@code Prompt} (this is existing behavior). Callers rely on that — mutations to
+     * {@code options.user} via {@link AssistantThinkingRelay} must stay visible after
+     * normalize.
      */
-    private Prompt stripThinkingFromPrompt(Prompt prompt) {
+    static Prompt stripThinkingFromPrompt(Prompt prompt) {
         List<Message> messages = prompt.getInstructions();
-        // 找最后一个 AssistantMessage
-        int lastAssistantIdx = -1;
+
+        // Find most recent UserMessage — boundary of the current user turn
+        int lastUserIdx = -1;
         for (int i = messages.size() - 1; i >= 0; i--) {
-            if (messages.get(i) instanceof AssistantMessage) {
-                lastAssistantIdx = i;
+            if (messages.get(i) instanceof UserMessage) {
+                lastUserIdx = i;
                 break;
             }
         }
-        List<Message> cleaned = new ArrayList<>();
+
+        int strippedCount = 0;
+        List<Message> cleaned = new ArrayList<>(messages.size());
         for (int i = 0; i < messages.size(); i++) {
             Message msg = messages.get(i);
-            if (msg instanceof AssistantMessage am && i != lastAssistantIdx) {
+            // Only strip prior-turn assistant thinking (i <= lastUserIdx); in-turn (i > lastUserIdx) stays
+            if (msg instanceof AssistantMessage am && i <= lastUserIdx) {
                 Map<String, Object> meta = am.getMetadata();
                 if (meta != null && meta.containsKey("reasoningContent")) {
-                    // 用 builder 重建 AssistantMessage，去掉 reasoningContent
                     Map<String, Object> cleanMeta = new java.util.HashMap<>(meta);
                     cleanMeta.remove("reasoningContent");
                     AssistantMessage.Builder builder = AssistantMessage.builder()
@@ -591,14 +1075,49 @@ public class NodeStreamingChatHelper {
                         builder.media(am.getMedia());
                     }
                     cleaned.add(builder.build());
+                    strippedCount++;
                     continue;
                 }
             }
             cleaned.add(msg);
         }
-        log.info("[ThinkingRecovery] Stripped thinking blocks from {} messages, last assistant at index {}",
-                messages.size(), lastAssistantIdx);
+        if (strippedCount > 0) {
+            log.debug("[ThinkingRecovery] Stripped reasoningContent from {} prior-turn assistant messages "
+                            + "(lastUserIdx={}, total={})",
+                    strippedCount, lastUserIdx, messages.size());
+        }
         return new Prompt(cleaned, prompt.getOptions());
+    }
+
+    /**
+     * Drop trailing {@link AssistantMessage} entries from a Prompt's instructions.
+     * Most LLM providers reject prompts whose history ends with an assistant turn —
+     * Anthropic Claude with a 400 "does not support assistant message prefill",
+     * DeepSeek thinking-mode variants with reasoning_content errors. The
+     * trailing assistant is typically a summarizer-emitted scaffold message that
+     * shouldn't be sent as the final user-facing prompt anyway. Returns the
+     * input unchanged if there's nothing to drop.
+     */
+    static Prompt dropTrailingAssistant(Prompt prompt) {
+        List<Message> messages = prompt.getInstructions();
+        if (messages.isEmpty()) {
+            return prompt;
+        }
+        int end = messages.size();
+        while (end > 0 && messages.get(end - 1) instanceof AssistantMessage) {
+            end--;
+        }
+        if (end == messages.size()) {
+            return prompt;
+        }
+        if (end == 0) {
+            // Refuse to produce an empty prompt — caller's bug; let provider error surface.
+            log.warn("[dropTrailingAssistant] all messages were AssistantMessage; skipping trim to avoid empty prompt");
+            return prompt;
+        }
+        log.debug("[dropTrailingAssistant] trimmed {} trailing AssistantMessage(s) from prompt (size {} -> {})",
+                messages.size() - end, messages.size(), end);
+        return new Prompt(new ArrayList<>(messages.subList(0, end)), prompt.getOptions());
     }
 
     private StreamResult buildErrorResult(String errorMsg, String conversationId, String phase) {
@@ -655,6 +1174,19 @@ public class NodeStreamingChatHelper {
         }
     }
 
+    // Pulls the offending model id out of a Volcano Ark error body. Both
+    // ModelNotOpen and InvalidEndpointOrModel.NotFound mention it after a
+    // recognizable phrase ("activated the model X" / "model or endpoint X").
+    private static final java.util.regex.Pattern ARK_MODEL_NAME_PATTERN =
+            java.util.regex.Pattern.compile(
+                    "(?:activated the model|model or endpoint)\\s+([A-Za-z0-9._-]+)");
+
+    private static String extractArkModelName(String body) {
+        if (body == null) return null;
+        java.util.regex.Matcher m = ARK_MODEL_NAME_PATTERN.matcher(body);
+        return m.find() ? m.group(1) : null;
+    }
+
     /** 从异常链提取用户友好的错误信息 */
     private static String extractUserFriendlyError(Throwable error) {
         String msg = error.getMessage();
@@ -686,6 +1218,26 @@ public class NodeStreamingChatHelper {
         if (bodySample.contains("does not support tools") || msg.contains("does not support tools")) {
             return "当前模型不支持工具调用（function calling）。请在 设置 → 模型 里切换到支持 tools 的模型，"
                     + "例如 qwen3、qwen2.5:7b+、llama3.1:8b+、mistral-nemo、command-r 等。";
+        }
+
+        // Volcano Engine Ark — model exists but the user's account hasn't activated it.
+        // Body shape: {"error":{"code":"ModelNotOpen","message":"Your account ... has not activated the model X. Please activate the model service in the Ark Console..."}}
+        if (combined.contains("ModelNotOpen")) {
+            String modelId = extractArkModelName(combined);
+            String suffix = modelId != null ? "「" + modelId + "」" : "";
+            return "火山方舟（Volcano Ark）尚未为该账号开通模型" + suffix
+                    + "。请前往 Ark 控制台 → 模型广场，对该模型点击「开通服务」后重试。"
+                    + "（控制台：https://console.volcengine.com/ark）";
+        }
+
+        // Volcano Engine Ark — model id doesn't exist for the user's region/key.
+        // Body shape: {"error":{"code":"InvalidEndpointOrModel.NotFound","message":"The model or endpoint X does not exist or you do not have access to it..."}}
+        if (combined.contains("InvalidEndpointOrModel")) {
+            String modelId = extractArkModelName(combined);
+            String suffix = modelId != null ? "「" + modelId + "」" : "";
+            return "火山方舟（Volcano Ark）找不到模型" + suffix
+                    + "。原因可能是模型 ID 不在当前区域，或你的账号没有访问权限。"
+                    + "建议在 设置 → 模型 里点「刷新模型」重新发现，或在 Ark 控制台创建「推理接入点」(ep-XXX) 后使用该 ID。";
         }
 
         // DashScope "url error" is really "model name not mapped to any valid endpoint".
@@ -724,6 +1276,29 @@ public class NodeStreamingChatHelper {
         CLIENT_ERROR,
         /** Thinking 块错误（旧消息中的 thinking block 不可修改）— 可剥离后单次重试 */
         THINKING_BLOCK_ERROR,
+        /**
+         * RFC-009: LLM returned no content, no thinking, and no tool calls.
+         * Treated as a soft failure — skip same-model retries and hand off to
+         * the fallback chain directly. Typical cause: upstream rate-limit
+         * rejection that comes back as HTTP 200 with empty body.
+         */
+        EMPTY_RESPONSE,
+        /**
+         * RFC-009 P3.2: payment / billing failure (HTTP 402, "insufficient_quota",
+         * "credit balance is too low", etc.). Distinct from {@link #AUTH_ERROR}
+         * because the right response is to <i>switch provider</i> (a different
+         * provider may have credits) rather than just terminate. Skips same-model
+         * retries and falls through to the fallback chain.
+         */
+        BILLING,
+        /**
+         * RFC-009 P3.2: requested model id not recognized by the provider
+         * (HTTP 404, "Model not exist", "model_not_found", DashScope's
+         * "url error"). Same handling as {@link #BILLING} — heads straight
+         * to the fallback chain instead of looping retries against a model
+         * that does not exist.
+         */
+        MODEL_NOT_FOUND,
         /** 其他未知错误 */
         UNKNOWN
     }

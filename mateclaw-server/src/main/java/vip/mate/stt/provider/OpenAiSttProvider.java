@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import vip.mate.llm.service.ModelProviderService;
+import vip.mate.stt.AudioMimeTypes;
 import vip.mate.stt.SttProvider;
 import vip.mate.stt.SttRequest;
 import vip.mate.stt.SttResult;
@@ -33,10 +34,33 @@ public class OpenAiSttProvider implements SttProvider {
     @Override public boolean requiresCredential() { return true; }
     @Override public int autoDetectOrder() { return 100; }
 
+    /**
+     * Whisper is the canonical English STT and noticeably weaker on Chinese
+     * (it tends to produce simplified-character output even for traditional
+     * input, and short Chinese clips frequently transcribe to gibberish).
+     * Boost Whisper's priority for English/Japanese/Korean (where it leads),
+     * and de-prioritise it for Chinese so DashScope (Paraformer) wins the
+     * auto-pick.
+     */
+    @Override
+    public int autoDetectOrder(String language) {
+        if (language == null) return autoDetectOrder();
+        String lang = language.toLowerCase();
+        if (lang.startsWith("zh")) return 250;        // pushed below DashScope Paraformer
+        if (lang.startsWith("en")
+                || lang.startsWith("ja")
+                || lang.startsWith("ko")) return 80;  // pulled above DashScope
+        return autoDetectOrder();
+    }
+
     @Override
     public boolean isAvailable(SystemSettingsDTO config) {
-        try { return modelProviderService.isProviderConfigured("openai"); }
-        catch (Exception e) { return false; }
+        try {
+            return modelProviderService.isProviderConfigured("openai");
+        } catch (Exception e) {
+            log.warn("[OpenAI STT] availability check failed: {}", e.getMessage());
+            return false;
+        }
     }
 
     @Override
@@ -48,12 +72,18 @@ public class OpenAiSttProvider implements SttProvider {
 
             String url = (baseUrl != null ? baseUrl : "https://api.openai.com") + "/v1/audio/transcriptions";
             String model = request.getModel() != null ? request.getModel() : DEFAULT_MODEL;
-            String fileName = request.getFileName() != null ? request.getFileName() : "audio.ogg";
+            // AudioMimeTypes ensures the filename extension matches the
+            // actual bytes (audio.wav, audio.mp3, etc.), which Hutool then
+            // uses to infer the multipart Content-Type. Don't pass
+            // contentType to .form() explicitly — Hutool has no
+            // form(String,byte[],String,String) overload, and the wrong
+            // dispatch crashes with ClassCastException on byte[] → Object[].
+            String fileName = AudioMimeTypes.resolveFileName(request.getFileName(), request.getContentType());
 
             HttpResponse response = HttpRequest.post(url)
                     .header("Authorization", "Bearer " + apiKey)
                     .form("model", model)
-                    .form("file", request.getAudioData(), request.getContentType(), fileName)
+                    .form("file", request.getAudioData(), fileName)
                     .timeout(60_000)
                     .execute();
 

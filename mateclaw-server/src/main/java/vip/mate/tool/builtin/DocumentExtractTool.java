@@ -32,7 +32,7 @@ import java.util.zip.ZipInputStream;
 public class DocumentExtractTool {
 
     private static final int COMMAND_TIMEOUT_SECONDS = 30;
-    private static final int MAX_OUTPUT_LENGTH = 100000; // 100KB 限制
+    private static final int MAX_OUTPUT_LENGTH = 500000; // 500KB — CLOB column has no size limit
     private static final boolean IS_WINDOWS = System.getProperty("os.name", "")
             .toLowerCase(Locale.ROOT).contains("win");
 
@@ -45,20 +45,26 @@ public class DocumentExtractTool {
         - Excel (.xlsx, .xls) - 提取为文本表格
         - PowerPoint (.pptx, .ppt)
 
-        提取策略（自动选择最优方式）：
+        提取策略（默认自动选择最优方式）：
         1. 优先使用系统命令（pdftotext, textutil, pandoc 等）
         2. 系统命令不可用时使用纯 Java 实现
-        3. 返回详细的提取过程和元数据
+        3. PDF 扫描版进入 OCR
+        4. 全部失败前用 Apache Tika 兜底（覆盖 SmartArt、共享字符串表等盲区）
+        5. 返回详细的提取过程和元数据
 
         参数 options 可包含：
         - pages: 指定页码范围（如 "1-5" 或 "1,3,5"）
         - preserveLayout: 是否保留布局（默认 true）
+        - method: 强制指定提取器，跳过自动 fallback 链。当前支持：
+          * "auto"（默认）—— 走完整 fallback 链
+          * "tika"  —— 直接用 Apache Tika 抽取，适合 Windows 上没装
+                       Poppler/Python 的环境，或验证 Tika 单独是否能解开
 
         如果提取失败，会返回详细的尝试过程和错误信息
         """)
     public String extract_document_text(
             @ToolParam(description = "文件的绝对路径或相对路径") String filePath,
-            @ToolParam(description = "可选参数 JSON，如 {\"pages\": \"1-5\", \"preserveLayout\": true}", required = false) String options) {
+            @ToolParam(description = "可选参数 JSON，如 {\"pages\": \"1-5\", \"method\": \"tika\"}", required = false) String options) {
 
         JSONObject result = new JSONObject();
         result.set("filePath", filePath);
@@ -68,12 +74,54 @@ public class DocumentExtractTool {
             Path path = Paths.get(filePath).toAbsolutePath().normalize();
 
             if (!Files.exists(path)) {
-                return errorResult(filePath, "文件不存在: " + path, attempts);
+                // The user-uploaded chat attachment is rendered to the LLM as
+                // "[附件] foo.docx" without its stored path, and Chinese / non-ASCII
+                // filenames are sanitized at upload time (see ChatController#upload),
+                // so the LLM-supplied path won't match anything on disk. Fall back to
+                // basename matching inside the conversation's chat-upload directory.
+                Path attachment = ChatUploadResolver.resolve(filePath);
+                if (attachment == null) {
+                    return errorResult(filePath, "文件不存在: " + path, attempts);
+                }
+                log.info("[DocumentExtract] Resolved chat-upload attachment fallback: {} -> {}", filePath, attachment);
+                path = attachment;
             }
 
             // 解析文件类型
             String mimeType = detectMimeType(path);
             result.set("mimeType", mimeType);
+
+            // RFC-051: method=tika 短路 —— 跳过整条 fallback 链，直接调 Tika。
+            // 用于：1) 测试 Tika 集成是否健康；2) 用户明知系统命令不可用、想免去
+            // 那一长串失败日志的场景。结果里仍然带 attempts 数组，告知"应用户要求跳过自动链"。
+            String forcedMethod = extractOption(options, "method");
+            if ("tika".equalsIgnoreCase(forcedMethod)) {
+                long t = System.currentTimeMillis();
+                String text = TikaExtractor.extract(path);
+                attempts.add("user-forced method=tika: skipped automatic fallback chain");
+                if (text == null || text.isBlank()) {
+                    attempts.add("tika: 失败或不可用 (" + (System.currentTimeMillis() - t) + "ms)");
+                    return errorResult(filePath, "Tika 抽取无文本（可能格式不支持或文件损坏）", attempts);
+                }
+                attempts.add("tika: 成功 (" + (System.currentTimeMillis() - t) + "ms)");
+
+                String capped = text;
+                boolean trunc = false;
+                if (capped.length() > MAX_OUTPUT_LENGTH) {
+                    capped = capped.substring(0, MAX_OUTPUT_LENGTH)
+                            + "\n\n... [内容已截断，总长度: " + text.length() + " 字符]";
+                    trunc = true;
+                }
+                result.set("text", capped);
+                result.set("method", "tika");
+                result.set("pages", estimatePages(text));
+                result.set("attempts", attempts);
+                result.set("truncated", trunc);
+                result.set("success", true);
+                log.info("[DocumentExtract] {} 使用 method=tika 强制提取成功，{} 字符",
+                        filePath, text.length());
+                return JSONUtil.toJsonPrettyStr(result);
+            }
 
             // 根据类型选择提取器
             ExtractedContent content;
@@ -222,15 +270,26 @@ public class DocumentExtractTool {
         }
         // attempts 已由 tryOcrExtract 内部记录失败原因
 
+        // 5. Tika 兜底（RFC-051 §5.2）：所有命令行 / Python / PDFBox / OCR 都失败时
+        // 用 Java 内置的 Tika 再试一次。主要服务于 Windows 没装 Poppler / Python 的桌面用户。
+        long t4 = System.currentTimeMillis();
+        content = TikaExtractor.extract(path);
+        if (content != null && !content.isBlank()) {
+            attempts.add("tika: 成功 (" + (System.currentTimeMillis() - t4) + "ms)");
+            int pages = realPageCount > 0 ? realPageCount : estimatePages(content);
+            return new ExtractedContent(content, "tika", pages);
+        }
+        attempts.add("tika: 失败或不可用");
+
         // 返回之前级别的部分结果（如果有）
         if (bestContent != null) {
-            log.warn("[DocumentExtract] OCR 不可用，返回部分文本结果: method={}, length={}",
+            log.warn("[DocumentExtract] OCR/Tika 不可用，返回部分文本结果: method={}, length={}",
                     bestMethod, bestContent.strip().length());
             int pages = realPageCount > 0 ? realPageCount : estimatePages(bestContent);
             return new ExtractedContent(bestContent, bestMethod + "_partial", pages);
         }
 
-        throw new Exception("所有 PDF 提取方法都失败（包括 OCR）");
+        throw new Exception("所有 PDF 提取方法都失败（包括 OCR 与 Tika）");
     }
 
     /**
@@ -556,7 +615,17 @@ public class DocumentExtractTool {
         }
         attempts.add("java_zip_xml: 失败");
 
-        throw new Exception("所有 DOCX 提取方法都失败");
+        // 5. Tika 兜底（RFC-051 §5.2）—— 当 textutil/pandoc/libreoffice/ZIP-XML 全失败时。
+        // Tika 的 Microsoft 模块覆盖到 .docx 内嵌 SmartArt、批注、复杂表格等场景，正好填补
+        // 我们手写的 ZIP XML 解析器的盲区。
+        content = TikaExtractor.extract(path);
+        if (content != null && !content.isBlank()) {
+            attempts.add("tika: 成功");
+            return new ExtractedContent(content, "tika", 0);
+        }
+        attempts.add("tika: 失败或不可用");
+
+        throw new Exception("所有 DOCX 提取方法都失败（包括 Tika）");
     }
 
     private String tryTextutil(Path path) {
@@ -687,6 +756,17 @@ public class DocumentExtractTool {
             }
         }
 
+        // Our ZIP-XML extractor only reads <v> tags and skips the shared-strings table,
+        // so cells full of text labels look "empty". When that happens, fall through to
+        // Tika which knows how to resolve the shared-strings indirection.
+        if (text.toString().replaceAll("---.*?---", "").strip().isEmpty()) {
+            String fallback = TikaExtractor.extract(path);
+            if (fallback != null && !fallback.isBlank()) {
+                attempts.add("tika: 成功（ZIP-XML 仅有数字 / 共享字符串未解析）");
+                return new ExtractedContent(fallback, "tika", 0);
+            }
+        }
+
         attempts.add("java_zip_xml: 成功");
         return new ExtractedContent(text.toString(), "java_zip_xml", 0);
     }
@@ -718,6 +798,17 @@ public class DocumentExtractTool {
                     text.append("--- Slide ").append(slideNum++).append(" ---\n");
                     text.append(extractTextFromPptxXml(xml)).append("\n\n");
                 }
+            }
+        }
+
+        // Slide layouts with text inside SmartArt / charts / grouped shapes don't surface
+        // through the simple <a:t> grep — Tika walks the full DrawingML graph and pulls
+        // them out. Only invoke when our walker produced nothing useful.
+        if (text.toString().replaceAll("---.*?---", "").strip().isEmpty()) {
+            String fallback = TikaExtractor.extract(path);
+            if (fallback != null && !fallback.isBlank()) {
+                attempts.add("tika: 成功（ZIP-XML 未抓到正文，可能是 SmartArt / 图表）");
+                return new ExtractedContent(fallback, "tika", Math.max(0, slideNum - 1));
             }
         }
 

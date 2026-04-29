@@ -30,6 +30,8 @@ export interface WikiRawMaterial {
   progressPhase: string | null
   progressTotal: number
   progressDone: number
+  // Page count derived from sourceRawIds (injected by listRaw endpoint)
+  pageCount?: number
 }
 
 export interface WikiPage {
@@ -43,8 +45,21 @@ export interface WikiPage {
   sourceRawIds: string
   version: number
   lastUpdatedBy: string
+  pageType?: string | null
+  // RFC-051 PR-2: locked=1 blocks AI/tool/UI deletion (combined with pageType=system
+  // for the built-in overview/log pages, but users can lock any page).
+  locked?: number | null
+  // RFC-051 PR-7: archived=1 hides the page from default list/search/related.
+  archived?: number | null
   createTime: string
   updateTime: string
+}
+
+/** RFC-051 PR-8: shared protection check used by viewer + list to gate delete UI. */
+export function isProtectedPage(page: WikiPage | null | undefined): boolean {
+  if (!page) return false
+  if (page.pageType === 'system') return true
+  return page.locked === 1
 }
 
 export const useWikiStore = defineStore('wiki', () => {
@@ -54,6 +69,10 @@ export const useWikiStore = defineStore('wiki', () => {
   const pages = ref<WikiPage[]>([])
   const currentPage = ref<WikiPage | null>(null)
   const loading = ref(false)
+
+  // Raw material filter state
+  const selectedRawId = ref<number | null>(null)
+  const totalPageCount = ref(0)
 
   async function fetchKnowledgeBases() {
     loading.value = true
@@ -95,9 +114,20 @@ export const useWikiStore = defineStore('wiki', () => {
     rawMaterials.value = res.data || []
   }
 
-  async function fetchPages(kbId: number) {
-    const res: any = await wikiApi.listPages(kbId)
+  async function fetchPages(kbId: number, rawId?: number | null) {
+    const res: any = await wikiApi.listPages(kbId, rawId ?? undefined)
     pages.value = res.data || []
+    if (!rawId) totalPageCount.value = pages.value.length
+  }
+
+  async function filterPagesByRaw(kbId: number, rawId: number) {
+    selectedRawId.value = rawId
+    await fetchPages(kbId, rawId)
+  }
+
+  async function clearRawFilter(kbId: number) {
+    selectedRawId.value = null
+    await fetchPages(kbId)
   }
 
   async function loadPage(kbId: number, slug: string) {
@@ -108,16 +138,27 @@ export const useWikiStore = defineStore('wiki', () => {
   async function addRawText(kbId: number, title: string, content: string) {
     const res: any = await wikiApi.addRawText(kbId, { title, content })
     const raw = res.data || res
-    rawMaterials.value.unshift(raw)
+    const existingIdx = rawMaterials.value.findIndex(r => r.id === raw.id)
+    if (existingIdx >= 0) {
+      rawMaterials.value[existingIdx] = raw
+    } else {
+      rawMaterials.value.unshift(raw)
+    }
     return raw
   }
 
-  async function uploadRawFile(kbId: number, file: File) {
+  async function uploadRawFile(kbId: number, file: File, onProgress?: (pct: number) => void) {
     const formData = new FormData()
     formData.append('file', file)
-    const res: any = await wikiApi.uploadRaw(kbId, formData)
+    const res: any = await wikiApi.uploadRaw(kbId, formData, onProgress)
     const raw = res.data || res
-    rawMaterials.value.unshift(raw)
+    // Dedup: if backend returned an existing record, replace it in the list instead of adding a duplicate
+    const existingIdx = rawMaterials.value.findIndex(r => r.id === raw.id)
+    if (existingIdx >= 0) {
+      rawMaterials.value[existingIdx] = raw
+    } else {
+      rawMaterials.value.unshift(raw)
+    }
     return raw
   }
 
@@ -136,12 +177,16 @@ export const useWikiStore = defineStore('wiki', () => {
     pages,
     currentPage,
     loading,
+    selectedRawId,
+    totalPageCount,
     fetchKnowledgeBases,
     selectKB,
     createKB,
     deleteKB,
     fetchRawMaterials,
     fetchPages,
+    filterPagesByRaw,
+    clearRawFilter,
     loadPage,
     addRawText,
     uploadRawFile,

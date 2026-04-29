@@ -5,21 +5,24 @@ import com.alibaba.cloud.ai.graph.action.EdgeAction;
 import vip.mate.agent.graph.plan.state.PlanStateKeys;
 
 /**
- * 计划生成后的路由分发器
- * <p>
- * 根据 needs_planning 判断：
+ * Routes the graph after the triage node.
  * <ul>
- *   <li>false → 路由到 DIRECT_ANSWER_NODE（简单问答快速退出）</li>
- *   <li>true → 路由到 STEP_EXECUTION_NODE（开始步骤执行）</li>
+ *   <li>{@code needs_planning=false} → {@code DIRECT_ANSWER_NODE} (direct answer, no tools)</li>
+ *   <li>{@code needs_planning=true} → {@code STEP_EXECUTION_NODE} (single- or multi-step plan)</li>
  * </ul>
- *
- * @author MateClaw Team
+ * <p>
+ * If the triage key is absent, we default to {@code direct_answer} — an unset
+ * {@code needs_planning} means triage did not run to completion, and Occam's
+ * razor says treat it as "no planning" rather than auto-splitting a task the
+ * system never classified. The previous default ({@code true}) biased every
+ * unresolved request into a multi-step plan, which was the main source of the
+ * "every request splits into subtasks" behavior (see RFC-008).
  */
 public class PlanGenerationDispatcher implements EdgeAction {
 
     @Override
     public String apply(OverAllState state) {
-        boolean needsPlanning = state.value(PlanStateKeys.NEEDS_PLANNING, true);
+        boolean needsPlanning = state.value(PlanStateKeys.NEEDS_PLANNING, false);
         if (!needsPlanning) {
             return PlanStateKeys.DIRECT_ANSWER_NODE;
         }

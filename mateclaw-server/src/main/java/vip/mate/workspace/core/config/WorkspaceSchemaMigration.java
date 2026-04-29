@@ -9,11 +9,19 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+
 /**
- * 工作区 Schema 迁移
+ * Workspace schema bootstrap.
  * <p>
- * 确保默认工作区（id=1, slug='default'）存在。
- * 在 DatabaseBootstrapRunner (@Order(1)) 之后执行。
+ * Ensures the default workspace (id=1, slug='default') exists, and performs a
+ * <em>first-run-only</em> bootstrap of an admin owner. This is not a
+ * reconciliation loop: once the default workspace has any owner, subsequent
+ * startups make no membership changes — operators may legitimately remove an
+ * admin from the default workspace and that decision must persist across
+ * restarts (see issue #29).
+ * <p>
+ * Runs after {@code DatabaseBootstrapRunner} ({@code @Order(1)}).
  *
  * @author MateClaw Team
  */
@@ -60,26 +68,41 @@ public class WorkspaceSchemaMigration implements ApplicationRunner {
     }
 
     /**
-     * 确保所有现有用户都是默认工作区的成员
+     * First-run-only bootstrap: if the default workspace has no owner yet, pick
+     * the lowest-id active admin and add them as owner. If an owner already
+     * exists (or was deliberately removed and re-installed by an operator), do
+     * nothing. If no admin exists at all, log a warning and skip — failing
+     * startup here would be worse than the recoverable "no owner" state.
      */
     private void ensureDefaultWorkspaceMembership() {
         try {
-            // 查找不在默认工作区中的用户
-            int inserted = jdbcTemplate.update("""
-                    INSERT INTO mate_workspace_member (id, workspace_id, user_id, role, create_time, update_time, deleted)
-                    SELECT u.id, 1, u.id, CASE WHEN u.role = 'admin' THEN 'owner' ELSE u.role END, NOW(), NOW(), 0
-                    FROM mate_user u
-                    WHERE u.deleted = 0
-                      AND NOT EXISTS (
-                          SELECT 1 FROM mate_workspace_member wm
-                          WHERE wm.workspace_id = 1 AND wm.user_id = u.id AND wm.deleted = 0
-                      )
-                    """);
-            if (inserted > 0) {
-                log.info("Added {} existing user(s) to default workspace", inserted);
+            Integer ownerCount = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(1) FROM mate_workspace_member "
+                            + "WHERE workspace_id = 1 AND role = 'owner' AND deleted = 0",
+                    Integer.class);
+            if (ownerCount != null && ownerCount > 0) {
+                return;
             }
+            List<Long> adminIds = jdbcTemplate.queryForList(
+                    "SELECT id FROM mate_user WHERE deleted = 0 AND role = 'admin' "
+                            + "ORDER BY id ASC LIMIT 1",
+                    Long.class);
+            if (adminIds.isEmpty()) {
+                log.warn("Default workspace has no owner and no admin user exists; "
+                        + "skipping bootstrap. Operator must assign an owner manually.");
+                return;
+            }
+            Long adminId = adminIds.get(0);
+            jdbcTemplate.update(
+                    "INSERT INTO mate_workspace_member "
+                            + "(id, workspace_id, user_id, role, create_time, update_time, deleted) "
+                            + "VALUES (?, 1, ?, 'owner', NOW(), NOW(), 0)",
+                    adminId, adminId);
+            log.info("Bootstrapped admin user {} as owner of default workspace", adminId);
         } catch (DataAccessException e) {
-            log.debug("Skipping default workspace membership init: {}", e.getMessage());
+            // Defensive guard: tables may not exist yet during very early startup,
+            // or the insert may collide with a soft-deleted row's primary key.
+            log.debug("Skipping default workspace owner bootstrap: {}", e.getMessage());
         }
     }
 }

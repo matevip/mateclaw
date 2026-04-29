@@ -4,8 +4,10 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import vip.mate.channel.health.ChannelHealth;
 import vip.mate.channel.model.ChannelEntity;
 
+import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -222,6 +224,33 @@ public abstract class AbstractChannelAdapter implements ChannelAdapter {
     @Override
     public boolean isRunning() {
         return running.get();
+    }
+
+    /**
+     * Map the existing {@code ConnectionState} machine to a typed
+     * {@link ChannelHealth} snapshot. The "UP" status requires
+     * {@code running=true} AND {@code state==CONNECTED} — this is what
+     * makes the green dot honest: "stopped admins" and "started but
+     * disconnected" both report something other than UP.
+     */
+    @Override
+    public ChannelHealth health() {
+        Long id = channelEntity != null ? channelEntity.getId() : null;
+        String type = getChannelType();
+        if (!running.get()) {
+            return ChannelHealth.outOfService(type, id);
+        }
+        Instant lastEvent = Instant.ofEpochMilli(lastEventTimeMs.get());
+        ConnectionState s = connectionState.get();
+        return switch (s) {
+            case CONNECTED -> ChannelHealth.up(type, id, lastEvent);
+            case RECONNECTING -> ChannelHealth.reconnecting(type, id,
+                    lastError != null ? lastError : "reconnecting", lastEvent);
+            case ERROR -> ChannelHealth.down(type, id,
+                    lastError != null ? lastError : "channel error", lastEvent);
+            case DISCONNECTED -> ChannelHealth.down(type, id,
+                    "disconnected", lastEvent);
+        };
     }
 
     /**
@@ -455,6 +484,15 @@ public abstract class AbstractChannelAdapter implements ChannelAdapter {
         Object value = config.get(key);
         if (value instanceof Boolean b) return b;
         if (value instanceof String s) return Boolean.parseBoolean(s);
+        return defaultValue;
+    }
+
+    protected long getConfigLong(String key, long defaultValue) {
+        Object value = config.get(key);
+        if (value instanceof Number n) return n.longValue();
+        if (value instanceof String s && !s.isBlank()) {
+            try { return Long.parseLong(s.trim()); } catch (NumberFormatException ignored) {}
+        }
         return defaultValue;
     }
 

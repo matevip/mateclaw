@@ -29,4 +29,16 @@ public class ProviderInfoDTO {
     private String authType;
     private Boolean oauthConnected;
     private Long oauthExpiresAt;
+    /** RFC-009 P3.5: position in the failover chain (0 = excluded, 1..N = priority). */
+    private Integer fallbackPriority;
+    /** RFC-073: combined runtime state — UI source of truth for "is this provider usable right now". */
+    private Liveness liveness;
+    /** Human-readable reason populated only when liveness ∈ {REMOVED, COOLDOWN}. */
+    private String unavailableReason;
+    /** Epoch ms of the most recent removal, populated only when liveness == REMOVED. */
+    private Long lastProbedAtMs;
+    /** Remaining cooldown window in ms, populated only when liveness == COOLDOWN. */
+    private Long cooldownRemainingMs;
+    /** RFC-074: whether the user has explicitly enabled this provider. False = lives in the catalog drawer only. */
+    private Boolean enabled;
 }

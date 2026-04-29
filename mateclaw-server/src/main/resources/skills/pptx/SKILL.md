@@ -7,6 +7,7 @@ dependencies:
   tools:
     - skillScriptTool
     - skillFileTool
+    - delegateToAgent
 platforms:
   - macos
   - linux
@@ -199,6 +200,34 @@ pdftoppm -jpeg -r 150 output.pdf slide
 
 Look for: overlapping elements, text overflow, low-contrast text, uneven gaps, insufficient margins.
 
+### Subagent Visual QA (Fresh Eyes)
+
+For high-stakes presentations, delegate a visual inspection to a separate agent that has NOT seen the creation process. A fresh pair of eyes catches issues the author missed.
+
+```
+delegateToAgent(
+  agentName="strong-agent",
+  task="[Visual QA Request] Inspect the attached presentation slides as a fresh reviewer.
+You have no context about how these were made — treat it as if seeing them for the first time.
+
+Slides location: <path to slide images or pptx>
+
+Check for:
+1. Any slide where text is cut off or overflows the frame
+2. Low contrast (e.g., light text on light background)
+3. Repeated layouts — more than 2 slides with identical structure
+4. Text-only slides with no visual element
+5. Accent lines under slide titles (hallmark of AI-generated slides)
+6. Any leftover placeholder text (XXXX, lorem, [insert here])
+7. Font size below 14pt in body text
+
+For each issue, state: slide number, issue type, what you see.
+If everything looks clean, say so explicitly."
+)
+```
+
+Act on the subagent's findings before declaring the presentation complete.
+
 ### Verification Loop
 
 1. Generate slides -> Convert to images -> Inspect
@@ -206,6 +235,7 @@ Look for: overlapping elements, text overflow, low-contrast text, uneven gaps, i
 3. Fix issues
 4. Re-verify affected slides
 5. Repeat until clean
+6. (High-stakes) Run subagent visual QA for a fresh-eyes check
 
 ---
 

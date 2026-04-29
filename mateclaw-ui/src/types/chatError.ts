@@ -5,7 +5,8 @@
 
 export type ChatErrorCategory =
   | 'rate_limit'          // 429
-  | 'auth_expired'        // 401
+  | 'auth_expired'        // user-side session expired (our backend 401) — triggers /login redirect
+  | 'provider_auth_error' // LLM provider 401 (e.g. invalid Kimi/OpenAI API key) — unrelated to user login
   | 'forbidden'           // 403
   | 'bad_request'         // 400
   | 'server_error'        // 500
@@ -62,7 +63,11 @@ const BACKEND_ERROR_TYPE_MAP: Record<string, { category: ChatErrorCategory; retr
   RATE_LIMIT:           { category: 'rate_limit',          retryable: true },
   SERVER_ERROR:         { category: 'server_error',        retryable: true },
   PROMPT_TOO_LONG:      { category: 'bad_request',         retryable: false },
-  AUTH_ERROR:           { category: 'auth_expired',        retryable: false },
+  // RFC fix: backend AUTH_ERROR comes from the LLM provider (e.g. Kimi 401),
+  // NOT from the user's own session expiring. Map to provider_auth_error so
+  // the UI shows "model authentication failed" instead of "session expired /
+  // redirecting to login".
+  AUTH_ERROR:           { category: 'provider_auth_error',  retryable: false },
   // 后端 ErrorType.CLIENT_ERROR 对应 HTTP 400 类错误（比如模型不支持 tools、参数格式错误）。
   // 归类到 bad_request，配合 MessageBubble 优先展示 rawMessage，
   // 让后端 extractUserFriendlyError 返回的具体中文提示能真正显示出来。
@@ -94,9 +99,18 @@ export function classifyBackendError(data: {
  * 后端将错误存为 "[错误] LLM 调用失败: 请求频率过高，请稍后重试" 格式的文本。
  * 页面刷新后从数据库加载时 errorInfo 丢失，需要根据文本模式重建。
  */
+// Order matters: the narrow auth_expired pattern MUST come before the broader
+// provider_auth_error pattern, otherwise legitimate session-expiry messages
+// would be misclassified as a model auth issue.
+//
+// auth_expired = our own backend's session expired (token invalid, will redirect to /login)
+// provider_auth_error = LLM provider returned 401 (e.g. Kimi API key invalid; user stays logged in)
 const ERROR_TEXT_PATTERNS: Array<{ pattern: RegExp; category: ChatErrorCategory; retryable: boolean }> = [
   { pattern: /频率|rate.?limit|too.?many|quota|429/i,       category: 'rate_limit',          retryable: true },
-  { pattern: /认证|auth|unauthorized|401/i,                  category: 'auth_expired',        retryable: false },
+  // Narrow: only fire on explicit signals that the user's own session is gone.
+  { pattern: /HTTP 401|登录已过期|session.?expired|凭证.*失效/i, category: 'auth_expired',  retryable: false },
+  // Broad: any other 401-ish wording is treated as a model-side auth failure.
+  { pattern: /unauthorized|401|invalid.?api.?key|api.?key.*expired|认证失败/i, category: 'provider_auth_error', retryable: false },
   { pattern: /权限|forbidden|403/i,                          category: 'forbidden',           retryable: false },
   { pattern: /过长|too.?long|context.?length|prompt/i,       category: 'bad_request',         retryable: false },
   { pattern: /超时|timeout/i,                                category: 'timeout',             retryable: true },

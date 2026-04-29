@@ -4,20 +4,27 @@ import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
-import com.microsoft.playwright.*;
+import com.microsoft.playwright.Browser;
+import com.microsoft.playwright.BrowserContext;
+import com.microsoft.playwright.Page;
+import com.microsoft.playwright.Playwright;
+import com.microsoft.playwright.PlaywrightException;
 import com.microsoft.playwright.options.LoadState;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
+import vip.mate.tool.browser.BrowserDiagnosticsService;
+import vip.mate.tool.browser.BrowserLauncher;
+import vip.mate.tool.browser.UrlSafetyChecker;
 
 import java.net.Socket;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.*;
 
 /**
@@ -34,14 +41,17 @@ public class BrowserUseTool {
     private static final int CDP_SCAN_PORT_MIN = 9000;
     private static final int CDP_SCAN_PORT_MAX = 10000;
 
-    private static final boolean IS_WINDOWS = System.getProperty("os.name", "")
-            .toLowerCase(Locale.ROOT).contains("win");
-
-    /** SSE 推送器（用于将浏览器操作实时推送到前端） */
+    /** SSE broadcaster for pushing browser actions to the frontend in real time. */
     private final vip.mate.channel.web.ChatStreamTracker streamTracker;
+    private final BrowserLauncher launcher;
+    private final BrowserDiagnosticsService diagnostics;
 
-    public BrowserUseTool(vip.mate.channel.web.ChatStreamTracker streamTracker) {
+    public BrowserUseTool(vip.mate.channel.web.ChatStreamTracker streamTracker,
+                          BrowserLauncher launcher,
+                          BrowserDiagnosticsService diagnostics) {
         this.streamTracker = streamTracker;
+        this.launcher = launcher;
+        this.diagnostics = diagnostics;
     }
 
     /**
@@ -53,6 +63,15 @@ public class BrowserUseTool {
     private final Object playwrightLock = new Object();
 
     private final ConcurrentHashMap<String, BrowserSession> sessions = new ConcurrentHashMap<>();
+
+    /**
+     * RFC-063r §2.5 transition: ToolContext for the current invocation, set
+     * at the @Tool entry point and read by {@link #broadcastBrowserEvent}.
+     * Tool calls are serialized per ToolExecutionExecutor instance so this
+     * volatile field is safe; the field is read-only inside the action
+     * handlers.
+     */
+    private volatile ToolContext currentToolContext;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "browser-idle-watchdog");
         t.setDaemon(true);
@@ -60,12 +79,15 @@ public class BrowserUseTool {
     });
 
     @Tool(description = """
-        Control a browser (Playwright). Default is headless. Use headed=true with action=start for a visible window.
+        Control a browser (Playwright with multi-strategy launch: system Chrome/Edge channel, explicit path, bundled, or external CDP).
+        Default is headless. Use headed=true with action=start for a visible window.
         Typical flow: start → open(url) → snapshot → click/type → stop.
-        For CDP: connect_cdp(url="http://localhost:9222") to attach to an existing Chrome, or list_cdp_targets to scan.
+        If start fails, run action=diagnose for a full report of what's missing and how to fix it.
+        When web_search is unavailable (no Serper/Tavily API key), use this tool to fetch content directly:
+        e.g. action=open url=https://news.google.com/search?q=... then action=snapshot to read the page.
 
         Supported actions:
-        - start: Launch a new browser. Optional headed=true for visible window.
+        - start: Launch a new browser (tries system Chrome, system Edge, then Playwright bundled). Optional headed=true.
         - stop: Close browser. If connected via CDP, only disconnects (Chrome keeps running).
         - open: Navigate to a URL. Requires url parameter. Auto-starts browser if not running.
         - snapshot: Get page text content, interactive elements, and title.
@@ -76,17 +98,25 @@ public class BrowserUseTool {
         - connect_cdp: Connect to an existing Chrome via CDP. Requires url (e.g. "http://localhost:9222").
         - list_cdp_targets: Scan local ports (9000-10000) for CDP endpoints. Optional cdpPort for single port.
         - navigate_back: Go back in browser history.
+        - diagnose: Run a self-check — reports which launch strategies are available and what to install if none are.
         """)
     public String browser_use(
-            @ToolParam(description = "Action: start|stop|open|snapshot|screenshot|click|type|eval|connect_cdp|list_cdp_targets|navigate_back") String action,
+            @ToolParam(description = "Action: start|stop|open|snapshot|screenshot|click|type|eval|connect_cdp|list_cdp_targets|navigate_back|diagnose") String action,
             @ToolParam(description = "URL to navigate to (for open), or CDP base URL (for connect_cdp, e.g. http://localhost:9222)", required = false) String url,
             @ToolParam(description = "CSS selector for target element (for click/type)", required = false) String selector,
             @ToolParam(description = "Text to type (for action=type)", required = false) String text,
             @ToolParam(description = "JavaScript code to execute (for action=eval)", required = false) String code,
             @ToolParam(description = "File path to save screenshot (for action=screenshot)", required = false) String path,
             @ToolParam(description = "Launch visible browser window (for action=start, default false)", required = false) Boolean headed,
-            @ToolParam(description = "Single CDP port to scan (for action=list_cdp_targets)", required = false) Integer cdpPort
+            @ToolParam(description = "Single CDP port to scan (for action=list_cdp_targets)", required = false) Integer cdpPort,
+            // RFC-063r §2.5: hidden from LLM by JsonSchemaGenerator.
+            @Nullable ToolContext ctx
     ) {
+        // The conversationId resolution lives in broadcastBrowserEvent below;
+        // capture the ctx into a field so the helper can read it without
+        // passing it down every action handler. Race-free because tool calls
+        // are serialized per executor.
+        this.currentToolContext = ctx;
         if (action == null || action.isBlank()) {
             return error("action is required");
         }
@@ -107,7 +137,8 @@ public class BrowserUseTool {
                 case "connect_cdp" -> doConnectCdp(sessionKey, url);
                 case "list_cdp_targets" -> doListCdpTargets(cdpPort);
                 case "navigate_back" -> doNavigateBack(sessionKey);
-                default -> error("Unknown action: " + action + ". Supported: start, stop, open, snapshot, screenshot, click, type, eval, connect_cdp, list_cdp_targets, navigate_back");
+                case "diagnose" -> doDiagnose();
+                default -> error("Unknown action: " + action + ". Supported: start, stop, open, snapshot, screenshot, click, type, eval, connect_cdp, list_cdp_targets, navigate_back, diagnose");
             };
         } catch (PlaywrightException e) {
             log.error("[BrowserUse] Playwright error: {}", e.getMessage());
@@ -150,7 +181,7 @@ public class BrowserUseTool {
      */
     private void broadcastBrowserEvent(String action, boolean success, String url, String title,
                                         String screenshot, long durationMs) {
-        String conversationId = ToolExecutionContext.conversationId();
+        String conversationId = ToolExecutionContext.conversationId(currentToolContext);
         if (conversationId == null || streamTracker == null) {
             return;
         }
@@ -181,34 +212,40 @@ public class BrowserUseTool {
             doStop(sessionKey);
         }
 
-        log.info("[BrowserUse] Starting browser (headed={})", headed);
+        int max = launcher.properties().getMaxSessions();
+        if (max > 0 && sessions.size() >= max) {
+            return error("Maximum browser sessions reached (" + max
+                    + "). Stop an existing session first or raise mateclaw.browser.max-sessions.");
+        }
+
+        log.info("[BrowserUse] Starting browser via launcher (headed={})", headed);
         long startTime = System.currentTimeMillis();
 
         Playwright pw = getOrCreatePlaywright();
-        BrowserType.LaunchOptions launchOptions = new BrowserType.LaunchOptions()
-                .setHeadless(!headed);
+        BrowserLauncher.Result r = launcher.launch(pw, headed);
 
-        // 平台特定启动参数
-        List<String> extraArgs = chromiumLaunchArgs();
-        if (!extraArgs.isEmpty()) {
-            launchOptions.setArgs(extraArgs);
-            log.debug("[BrowserUse] Chromium extra args: {}", extraArgs);
+        if (!r.isSuccess()) {
+            log.warn("[BrowserUse] All launch strategies failed:\n{}",
+                    BrowserLauncher.formatTrace(r.getAttempts()));
+            broadcastBrowserEvent("start", false, null, null, null,
+                    System.currentTimeMillis() - startTime);
+            JSONObject result = new JSONObject();
+            result.set("ok", false);
+            result.set("error", r.getFailureSummary());
+            result.set("hint", "Run action=diagnose for a detailed report and fix suggestions.");
+            return JSONUtil.toJsonPrettyStr(result);
         }
 
-        Browser browser = pw.chromium().launch(launchOptions);
-        BrowserContext context = browser.newContext(new Browser.NewContextOptions()
-                .setViewportSize(1280, 800)
-                .setLocale("zh-CN"));
-        Page page = context.newPage();
-
-        BrowserSession session = new BrowserSession(browser, context, page, headed, false, null);
+        BrowserSession session = new BrowserSession(r.getBrowser(), r.getContext(), r.getPage(),
+                headed, r.isConnectedViaCdp(), r.getCdpUrl());
         sessions.put(sessionKey, session);
         scheduleIdleCheck(sessionKey);
 
         long elapsed = System.currentTimeMillis() - startTime;
-        log.info("[BrowserUse] Browser started successfully (headed={}) in {}ms", headed, elapsed);
+        log.info("[BrowserUse] Browser started via {} in {}ms", r.getStrategy(), elapsed);
         broadcastBrowserEvent("start", true, null, null, null, elapsed);
-        return ok("Browser started (headed=" + headed + ") in " + elapsed + "ms. Use action=open with url to navigate.");
+        return ok("Browser started via " + r.getStrategy() + " (headed=" + headed + ") in "
+                + elapsed + "ms. Use action=open with url to navigate.");
     }
 
     private String doConnectCdp(String sessionKey, String cdpUrl) {
@@ -216,60 +253,78 @@ public class BrowserUseTool {
             return error("url is required for action=connect_cdp (e.g. http://127.0.0.1:9222)");
         }
 
-        // Stop existing session if any
         BrowserSession existing = sessions.get(sessionKey);
         if (existing != null) {
             doStop(sessionKey);
         }
 
-        // Normalize CDP URL and force IPv4 to avoid ECONNREFUSED ::1 on macOS
-        String normalizedCdpUrl = cdpUrl.trim();
-        if (!normalizedCdpUrl.startsWith("http")) {
-            normalizedCdpUrl = "http://" + normalizedCdpUrl;
-        }
-        normalizedCdpUrl = normalizedCdpUrl.replace("://localhost:", "://127.0.0.1:");
-        normalizedCdpUrl = normalizedCdpUrl.replace("://localhost/", "://127.0.0.1/");
-        if (normalizedCdpUrl.endsWith("://localhost")) {
-            normalizedCdpUrl = normalizedCdpUrl.replace("://localhost", "://127.0.0.1");
-        }
-
-        log.info("[BrowserUse] Connecting to CDP at: {}", normalizedCdpUrl);
+        // Delegate to the launcher with the user-provided URL injected as a one-shot override.
+        // The launcher handles URL normalisation (localhost → 127.0.0.1, protocol prefix).
         long startTime = System.currentTimeMillis();
-
         Playwright pw = getOrCreatePlaywright();
-        Browser browser = pw.chromium().connectOverCDP(normalizedCdpUrl);
-
-        // Get existing contexts and pages
-        List<BrowserContext> contexts = browser.contexts();
-        BrowserContext context;
-        Page page;
-
-        if (!contexts.isEmpty()) {
-            context = contexts.get(0);
-            List<Page> pages = context.pages();
-            page = pages.isEmpty() ? context.newPage() : pages.get(0);
-        } else {
-            context = browser.newContext();
-            page = context.newPage();
+        String priorCdp = launcher.properties().getCdpUrl();
+        launcher.properties().setCdpUrl(cdpUrl);
+        BrowserLauncher.Result r;
+        try {
+            r = launcher.launch(pw, true);
+        } finally {
+            launcher.properties().setCdpUrl(priorCdp);
         }
 
-        BrowserSession session = new BrowserSession(browser, context, page, true, true, normalizedCdpUrl);
+        if (!r.isSuccess() || !r.isConnectedViaCdp()) {
+            log.warn("[BrowserUse] CDP connect failed. Trace:\n{}",
+                    BrowserLauncher.formatTrace(r.getAttempts()));
+            return error("Failed to connect to CDP at " + cdpUrl + ": " + r.getFailureSummary());
+        }
+
+        BrowserSession session = new BrowserSession(r.getBrowser(), r.getContext(), r.getPage(),
+                true, true, r.getCdpUrl());
         sessions.put(sessionKey, session);
         scheduleIdleCheck(sessionKey);
 
-        String title = page.title();
-        String currentUrl = page.url();
         long elapsed = System.currentTimeMillis() - startTime;
-
-        log.info("[BrowserUse] Connected to CDP at {} in {}ms (page: {} - {})", normalizedCdpUrl, elapsed, currentUrl, title);
+        String title = r.getPage().title();
+        String currentUrl = r.getPage().url();
+        log.info("[BrowserUse] Connected to CDP at {} in {}ms (page: {} - {})",
+                r.getCdpUrl(), elapsed, currentUrl, title);
 
         JSONObject result = new JSONObject();
         result.set("ok", true);
-        result.set("cdpUrl", normalizedCdpUrl);
+        result.set("cdpUrl", r.getCdpUrl());
         result.set("currentUrl", currentUrl);
         result.set("currentTitle", title);
-        result.set("pagesCount", context.pages().size());
-        result.set("message", "Connected to Chrome via CDP at " + normalizedCdpUrl + ". Current page: " + title);
+        result.set("pagesCount", r.getContext().pages().size());
+        result.set("message", "Connected to Chrome via CDP at " + r.getCdpUrl() + ". Current page: " + title);
+        return JSONUtil.toJsonPrettyStr(result);
+    }
+
+    private String doDiagnose() {
+        BrowserDiagnosticsService.Report report = diagnostics.run();
+        JSONObject result = new JSONObject();
+        result.set("ok", "healthy".equals(report.overall()) || "warning".equals(report.overall()));
+        result.set("overall", report.overall());
+
+        // Hutool's JSONUtil reflects on JavaBean-style getters and does not recognise
+        // Java record accessors (r.id() vs r.getId()), so toJsonStr(record) yields {}.
+        // Build the array by hand to keep the payload useful to the LLM.
+        JSONArray findingsArr = new JSONArray();
+        for (BrowserDiagnosticsService.Finding f : report.findings()) {
+            JSONObject fo = new JSONObject();
+            fo.set("id", f.id());
+            fo.set("status", f.status() != null ? f.status().name() : null);
+            fo.set("message", f.message());
+            if (f.data() != null && !f.data().isEmpty()) {
+                fo.set("data", f.data());
+            }
+            if (f.advice() != null) {
+                fo.set("advice", f.advice());
+            }
+            findingsArr.add(fo);
+        }
+        result.set("findings", findingsArr);
+
+        result.set("advice", report.advice());
+        result.set("summary", BrowserDiagnosticsService.summarise(report));
         return JSONUtil.toJsonPrettyStr(result);
     }
 
@@ -342,19 +397,31 @@ public class BrowserUseTool {
             return error("url is required for action=open");
         }
 
-        BrowserSession session = getSession(sessionKey);
-        if (session == null) {
-            doStart(sessionKey, false);
-            session = getSession(sessionKey);
-        }
-
-        session.touch();
-        Page page = session.page;
-
         String normalizedUrl = url.trim();
         if (!normalizedUrl.matches("^https?://.*")) {
             normalizedUrl = "https://" + normalizedUrl;
         }
+
+        if (launcher.properties().isSsrfCheckEnabled()) {
+            try {
+                UrlSafetyChecker.check(normalizedUrl);
+            } catch (SecurityException se) {
+                log.warn("[BrowserUse] SSRF check rejected url={}: {}", normalizedUrl, se.getMessage());
+                return error(se.getMessage());
+            }
+        }
+
+        BrowserSession session = getSession(sessionKey);
+        if (session == null) {
+            String startResp = doStart(sessionKey, false);
+            session = getSession(sessionKey);
+            if (session == null) {
+                return startResp;
+            }
+        }
+
+        session.touch();
+        Page page = session.page;
 
         page.navigate(normalizedUrl);
         page.waitForLoadState(LoadState.DOMCONTENTLOADED);
@@ -578,49 +645,6 @@ public class BrowserUseTool {
         result.set("ok", true);
         result.set("result", resultStr);
         return JSONUtil.toJsonPrettyStr(result);
-    }
-
-    // ==================== Platform Helpers ====================
-
-    /**
-     * 返回 Chromium 在当前平台下需要的额外启动参数。
-     * <p>
-     * Windows: --no-sandbox（沙箱兼容性）+ --disable-gpu（GPU 硬件加速问题）
-     * 容器环境: --no-sandbox + --disable-dev-shm-usage（共享内存不足）
-     */
-    private static List<String> chromiumLaunchArgs() {
-        List<String> args = new ArrayList<>();
-        boolean inContainer = isRunningInContainer();
-
-        if (IS_WINDOWS || inContainer) {
-            args.add("--no-sandbox");
-        }
-        if (inContainer) {
-            args.add("--disable-dev-shm-usage");
-        }
-        if (IS_WINDOWS) {
-            args.add("--disable-gpu");
-        }
-        return args;
-    }
-
-    /**
-     * 检测是否运行在 Docker/容器环境中。
-     */
-    private static boolean isRunningInContainer() {
-        try {
-            // Docker 容器中通常存在 /.dockerenv 文件
-            if (java.nio.file.Files.exists(java.nio.file.Path.of("/.dockerenv"))) {
-                return true;
-            }
-            // 或者 /proc/1/cgroup 包含 docker/kubepods
-            java.nio.file.Path cgroup = java.nio.file.Path.of("/proc/1/cgroup");
-            if (java.nio.file.Files.exists(cgroup)) {
-                String content = java.nio.file.Files.readString(cgroup);
-                return content.contains("docker") || content.contains("kubepods") || content.contains("containerd");
-            }
-        } catch (Exception ignored) {}
-        return false;
     }
 
     // ==================== CDP Helpers ====================

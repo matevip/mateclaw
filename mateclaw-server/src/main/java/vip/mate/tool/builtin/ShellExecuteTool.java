@@ -43,6 +43,7 @@ public class ShellExecuteTool {
     private static final boolean IS_WINDOWS = System.getProperty("os.name", "")
             .toLowerCase(Locale.ROOT).contains("win");
 
+    @vip.mate.tool.ConcurrencyUnsafe("shell command execution can mutate global state in ways the executor can't reason about")
     @Tool(description = "Execute a shell command on the local server. For running system commands, viewing files, running scripts. "
             + "Uses cmd.exe on Windows, /bin/sh on Linux/macOS. "
             + "Dangerous operations trigger security approval. Returns structured result with exitCode, stdout, stderr, timedOut.")
@@ -151,12 +152,30 @@ public class ShellExecuteTool {
     }
 
     /**
-     * 将命令中的嵌入换行符替换为空格。
-     * LLM 在 JSON tool_call 中产生的 \n 解码后变成真实换行，
-     * 在 Windows cmd.exe 中会导致命令被截断，在 Unix sh 中可能被误解为命令分隔符。
+     * Collapse embedded newlines for Windows cmd.exe (where they break parsing),
+     * but **leave them alone on Unix**.
+     * <p>
+     * The original implementation collapsed on every platform under the worry
+     * that a stray newline could be misread as a command separator on POSIX
+     * shells. In practice that worry is wrong for two common idioms the LLM
+     * actually uses to write files: heredocs (`cat &lt;&lt;EOF\nbody\nEOF`) and
+     * `python &lt;&lt;EOF` invocations. Both depend on real line breaks to
+     * delimit the body from the closing tag — collapsing newlines turns
+     * `cat &lt;&lt;EOF\nbody\nEOF` into `cat &lt;&lt;EOF body EOF`, which the
+     * shell reads as "open heredoc, immediately close, write 0 bytes." The
+     * symptom: every chapter file produced by the agent ends up 0-byte.
+     * <p>
+     * Unix shell already separates commands with `;` or `&amp;&amp;`, not
+     * unquoted newlines, so leaving newlines in is actually safer — and
+     * heredocs / multi-line commands now behave as the LLM expects. Windows
+     * cmd.exe still gets the collapse because there it really does break.
      */
     private static String collapseEmbeddedNewlines(String command) {
         if (command == null || !command.contains("\n")) {
+            return command;
+        }
+        if (!IS_WINDOWS) {
+            // POSIX shell handles newlines correctly within heredocs / scripts
             return command;
         }
         return command.replace("\r\n", " ").replace("\n", " ");

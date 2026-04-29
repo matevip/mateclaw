@@ -124,7 +124,14 @@ export interface PendingApprovalMeta {
   toolName: string
   arguments: string
   reason: string
-  status: 'pending_approval' | 'approved' | 'denied'
+  /**
+   * pending_approval / approved / denied are server-authoritative terminal states.
+   * 'expired' is a frontend-only local synthesis used by hydrate reverse-convergence
+   * (RFC-067 §4.9): when a message's metadata still says pending_approval but the
+   * server's getPendingApprovals no longer lists that pendingId, the UI flips to
+   * 'expired' so the banner clears without waiting for a fresh stream event.
+   */
+  status: 'pending_approval' | 'approved' | 'denied' | 'expired'
   // 增强字段（Phase 6: 结构化风险信息）
   findings?: GuardFinding[]
   maxSeverity?: GuardSeverity
@@ -143,6 +150,8 @@ export interface MessageSegment {
   toolArgs?: string
   toolResult?: string
   toolSuccess?: boolean
+  /** LLM-provided tool call id, used to pair tool_call_started ↔ tool_call_completed */
+  toolCallId?: string
   /** type=content */
   text?: string
   /** type=phase */
@@ -179,7 +188,7 @@ export interface MessageMetadata {
 }
 
 export interface MessageContentPart {
-  type: 'text' | 'thinking' | 'image' | 'file' | 'audio' | 'video' | 'tool_call'
+  type: 'text' | 'thinking' | 'image' | 'file' | 'audio' | 'video' | 'tool_call' | 'parse_error'
   text?: string
   fileUrl?: string
   fileName?: string
@@ -194,7 +203,11 @@ export interface MessageContentPart {
 // ==================== 技能 ====================
 export interface Skill {
   id: string | number
+  /** Slug / immutable identifier */
   name: string
+  /** RFC-042 §2.2 — locale display names; null = fall back to `name` */
+  nameZh?: string
+  nameEn?: string
   description?: string
   skillType: string
   icon?: string
@@ -212,6 +225,10 @@ export interface Skill {
   sourceConversationId?: string
   /** RFC-023: 安全扫描状态 (PASSED / FAILED / null) */
   securityScanStatus?: string
+  /** RFC-042 §2.3 — JSON-serialised SkillSecurityFinding[] from last scan */
+  securityScanResult?: string
+  /** RFC-042 §2.3 — wall-clock time of the last scan */
+  securityScanTime?: string
 }
 
 /** 运行时解析状态（来自 /runtime/status） */
@@ -351,17 +368,18 @@ export const CHANNEL_FIELD_DEFS: Record<string, ChannelFieldDef[]> = {
     { key: 'connection_mode', label: '接入模式', placeholder: '', type: 'select', defaultValue: 'stream', tooltip: 'Stream 长连接无需公网 IP（推荐）；Webhook 需要公网回调地址', options: [{ label: 'Stream（长连接，推荐）', value: 'stream' }, { label: 'Webhook（HTTP 回调）', value: 'webhook' }] },
     { key: 'message_type', label: '消息格式', placeholder: '', type: 'select', defaultValue: 'markdown', tooltip: 'markdown: 普通消息；card: AI 流式卡片（需配置模板 ID）', options: [{ label: 'Markdown', value: 'markdown' }, { label: 'AI Card（流式卡片）', value: 'card' }] },
     { key: 'card_template_id', label: '卡片模板 ID', placeholder: 'dt_card_1234', required: true, type: 'text', tooltip: '钉钉 AI Card 模板 ID', showIf: { field: 'message_type', value: 'card' } },
-    { key: 'robot_code', label: '机器人编码', placeholder: 'dingxxxxxxxx', type: 'text', tooltip: '机器人 robot_code，群聊场景建议配置', showIf: { field: 'message_type', value: 'card' } },
+    { key: 'robot_code', label: '机器人编码', placeholder: '留空将自动使用 AppKey（适用于自建应用机器人）', type: 'text', tooltip: '钉钉机器人 robotCode，用于发送附件（图片 / DOCX）和 AI Card。绝大多数自建应用机器人 robotCode == AppKey，不填会自动 fallback；只有第三方应用 / 单独申请的机器人才必须显式填' },
   ],
   feishu: [
     { key: 'app_id', label: 'App ID', placeholder: 'cli_xxxxxxxx', required: true, type: 'text', tooltip: '飞书开放平台应用的 App ID' },
     { key: 'app_secret', label: 'App Secret', placeholder: 'xxxxxxxxxxxxxxxx', required: true, sensitive: true, type: 'password', tooltip: '飞书开放平台应用的 App Secret' },
-    { key: 'connection_mode', label: '接入模式', placeholder: '', type: 'select', defaultValue: 'webhook', tooltip: 'Webhook 需要公网回调地址；WebSocket 长连接无需公网 IP，适合本地开发和内网部署', options: [{ label: 'Webhook（HTTP 回调）', value: 'webhook' }, { label: 'WebSocket（长连接）', value: 'websocket' }] },
+    { key: 'connection_mode', label: '接入模式', placeholder: '', type: 'select', defaultValue: 'websocket', tooltip: 'WebSocket 长连接无需公网 IP（推荐，本地开发和内网部署都能直接用）；Webhook 需要公网回调地址', options: [{ label: 'WebSocket（长连接，推荐）', value: 'websocket' }, { label: 'Webhook（HTTP 回调）', value: 'webhook' }] },
     { key: 'domain', label: '服务区域', placeholder: '', type: 'select', defaultValue: 'feishu', tooltip: '国内版使用 feishu（open.feishu.cn），国际版使用 lark（open.larksuite.com）', options: [{ label: '飞书（国内版）', value: 'feishu' }, { label: 'Lark（国际版）', value: 'lark' }] },
-    { key: 'verification_token', label: '验证 Token', placeholder: 'xxxxxxxx', type: 'text', tooltip: '事件订阅的 Verification Token（Webhook 模式需要）' },
-    { key: 'encrypt_key', label: '加密密钥', placeholder: '可选，事件加密密钥', sensitive: true, type: 'password', tooltip: 'Encrypt Key，用于事件回调的消息解密（可选）' },
+    { key: 'verification_token', label: '验证 Token', placeholder: 'xxxxxxxx', type: 'text', tooltip: '事件订阅的 Verification Token', showIf: { field: 'connection_mode', value: 'webhook' } },
+    { key: 'encrypt_key', label: '加密密钥', placeholder: '事件加密密钥（webhook 模式必填）', sensitive: true, type: 'password', tooltip: 'Encrypt Key，用于 webhook 事件回调的消息解密（webhook 模式下必填，否则启动时会拒绝）', showIf: { field: 'connection_mode', value: 'webhook' } },
     { key: 'enable_reaction', label: '消息反应', placeholder: '', type: 'switch', defaultValue: true, tooltip: '收到消息后自动添加 👍 表情反应，让用户知道消息已收到' },
     { key: 'enable_nickname_cache', label: '昵称获取', placeholder: '', type: 'switch', defaultValue: true, tooltip: '通过联系人 API 获取用户真实昵称（需要 contact:user.base:readonly 权限）' },
+    { key: 'enable_quoted_context', label: '引用消息上下文', placeholder: '', type: 'switch', defaultValue: true, tooltip: '用户引用某条消息回复时，自动拉取被引用消息内容注入到 prompt，agent 才能理解"解释一下"这种缺主语的引用' },
     { key: 'media_download_enabled', label: '媒体下载', placeholder: '', type: 'switch', defaultValue: false, tooltip: '下载消息中的图片和文件到本地（保存至 ~/.mateclaw/media/feishu/）' },
   ],
   telegram: [
@@ -578,7 +596,29 @@ export interface ProviderModelInfo {
   probeOk?: boolean
   /** Short error message when probeOk=false */
   probeError?: string
+  /**
+   * RFC-049 PR-1-UI (narrow): whether the model accepts the OpenAI
+   * `reasoning_effort` parameter. True only for OpenAI reasoning family.
+   */
+  supportsReasoningEffort?: boolean
+  /**
+   * RFC-049 PR-1-UI (broad): whether the model supports any form of deep
+   * thinking (OpenAI reasoning_effort, Kimi/DeepSeek native thinking,
+   * Anthropic extended thinking). This is the field the UI "thinking depth"
+   * toggle should gate on.
+   */
+  supportsThinking?: boolean
 }
+
+/**
+ * RFC-073: combined runtime state of a provider.
+ * - LIVE         pool member, not in cooldown — usable
+ * - COOLDOWN     pool member, transient backoff after consecutive failures
+ * - REMOVED      probed and HARD-removed (auth/billing/init-probe failure)
+ * - UNPROBED     startup window, decision not made yet
+ * - UNCONFIGURED user hasn't supplied required credentials
+ */
+export type Liveness = 'LIVE' | 'COOLDOWN' | 'REMOVED' | 'UNPROBED' | 'UNCONFIGURED'
 
 export interface ProviderInfo {
   id: string
@@ -602,6 +642,28 @@ export interface ProviderInfo {
   authType?: string
   oauthConnected?: boolean
   oauthExpiresAt?: number
+  /** RFC-009 P3.5: position in the multi-model failover chain (0 = excluded). */
+  fallbackPriority?: number
+  /** RFC-073: runtime state — UI source of truth for whether this provider is usable now. */
+  liveness?: Liveness
+  /** Populated only when liveness ∈ {REMOVED, COOLDOWN}. */
+  unavailableReason?: string
+  /** Epoch ms of the most recent removal, populated only when liveness == REMOVED. */
+  lastProbedAtMs?: number
+  /** Remaining cooldown window in ms, populated only when liveness == COOLDOWN. */
+  cooldownRemainingMs?: number
+  /** RFC-074: whether the user has explicitly opted this provider into the dropdown. */
+  enabled?: boolean
+}
+
+/**
+ * RFC-074: response payload from POST /models/{id}/enable | disable.
+ * Frontend reads this to decide whether to fire a "switched default to X" toast.
+ */
+export interface EnableResult {
+  defaultSwitched: boolean
+  newDefaultProviderId?: string | null
+  newDefaultModel?: string | null
 }
 
 export interface ActiveModelsInfo {
@@ -724,4 +786,13 @@ export interface CronJob {
   lastRunTime?: string
   createTime?: string
   updateTime?: string
+  // RFC-063r §2.9 / §2.14: channel binding + most-recent delivery snapshot.
+  // channelId / deliveryConfig: round-trippable on create/update.
+  // lastDeliveryStatus / lastDeliveryError: read-only, populated by
+  // selectListWithDeliveryStatus / selectByIdWithDeliveryStatus on the backend.
+  channelId?: number | null
+  channelName?: string | null
+  deliveryConfig?: { targetId?: string | null; threadId?: string | null; accountId?: string | null } | null
+  lastDeliveryStatus?: 'NONE' | 'PENDING' | 'DELIVERED' | 'NOT_DELIVERED'
+  lastDeliveryError?: string | null
 }

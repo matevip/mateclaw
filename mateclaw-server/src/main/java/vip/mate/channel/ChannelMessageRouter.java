@@ -4,14 +4,15 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import vip.mate.agent.AgentService;
-import vip.mate.approval.ApprovalService;
+import vip.mate.agent.context.ChatOrigin;
+import vip.mate.approval.ApprovalWorkflowService;
+import vip.mate.approval.ResolveOutcome;
 import vip.mate.approval.PendingApproval;
 import vip.mate.channel.model.ChannelEntity;
 import vip.mate.channel.notification.ApprovalNotificationService;
 import vip.mate.channel.service.ChannelService;
 import vip.mate.channel.web.ChatStreamTracker;
-import org.springframework.context.ApplicationEventPublisher;
-import vip.mate.memory.event.ConversationCompletedEvent;
+import vip.mate.memory.event.ConversationCompletionPublisher;
 import vip.mate.tts.TtsService;
 import vip.mate.workspace.conversation.ConversationService;
 import vip.mate.workspace.conversation.model.MessageContentPart;
@@ -48,12 +49,14 @@ public class ChannelMessageRouter {
     private final ConversationService conversationService;
     private final ChannelService channelService;
     private final ChannelSessionStore channelSessionStore;
-    private final ApprovalService approvalService;
+    private final ApprovalWorkflowService approvalService;
     private final ApprovalNotificationService approvalNotificationService;
-    private final ApplicationEventPublisher eventPublisher;
+    private final ConversationCompletionPublisher completionPublisher;
     private final TtsService ttsService;
     private final ObjectMapper objectMapper;
     private final ChatStreamTracker streamTracker;
+    private final ChannelChatOriginFactory chatOriginFactory;
+    private final ChannelErrorClassifier errorClassifier;
 
     /** 队列条目：封装消息及其路由上下文 */
     private record QueueEntry(ChannelMessage message, ChannelAdapter adapter, ChannelEntity channelEntity) {}
@@ -93,22 +96,26 @@ public class ChannelMessageRouter {
                                 ConversationService conversationService,
                                 ChannelService channelService,
                                 ChannelSessionStore channelSessionStore,
-                                ApprovalService approvalService,
+                                ApprovalWorkflowService approvalService,
                                 ApprovalNotificationService approvalNotificationService,
-                                ApplicationEventPublisher eventPublisher,
+                                ConversationCompletionPublisher completionPublisher,
                                 TtsService ttsService,
                                 ObjectMapper objectMapper,
-                                ChatStreamTracker streamTracker) {
+                                ChatStreamTracker streamTracker,
+                                ChannelChatOriginFactory chatOriginFactory,
+                                ChannelErrorClassifier errorClassifier) {
         this.agentService = agentService;
         this.conversationService = conversationService;
         this.channelService = channelService;
         this.channelSessionStore = channelSessionStore;
         this.approvalService = approvalService;
         this.approvalNotificationService = approvalNotificationService;
-        this.eventPublisher = eventPublisher;
+        this.completionPublisher = completionPublisher;
         this.ttsService = ttsService;
         this.objectMapper = objectMapper;
         this.streamTracker = streamTracker;
+        this.chatOriginFactory = chatOriginFactory;
+        this.errorClassifier = errorClassifier;
     }
 
     // ==================== 防抖辅助类 ====================
@@ -363,36 +370,40 @@ public class ChannelMessageRouter {
                                 adapter.getChannelType(), message.getSenderId(), originalRequester);
                         return;
                     }
-                    // 批准：原子解决+消费审批记录（消除 resolve/consume race condition）
-                    PendingApproval consumed = approvalService.resolveAndConsume(
+                    // Approve via IM: workflow.resolveAndConsume runs DB + metadata + memory atomically.
+                    ResolveOutcome consumeOutcome = approvalService.resolveAndConsume(
                             pending.getPendingId(), message.getSenderId());
-                    if (consumed == null) {
+                    if (consumeOutcome.isAlreadyResolved()) {
                         adapter.sendMessage(replyTarget, "⚠️ 审批记录已过期或已被处理。");
                         return;
                     }
-                    log.info("[{}] Approval APPROVED via IM command: pendingId={}, tool={}",
-                            adapter.getChannelType(), consumed.getPendingId(), consumed.getToolName());
+                    PendingApproval consumed = consumeOutcome.consumedSnapshot();
+                    log.info("[{}] Approval APPROVED via IM command: pendingId={}, tool={}, msgRewritten={}",
+                            adapter.getChannelType(), consumed.getPendingId(), consumed.getToolName(),
+                            consumeOutcome.messagesRewritten());
 
                     replayApprovedToolCall(consumed, conversationId, adapter, message, channelEntity);
                     return;
 
                 } else if (isDenyCommand(userText)) {
-                    // 拒绝 + 清理 DB 残留审批占位消息
-                    approvalService.resolve(pending.getPendingId(), message.getSenderId(), "denied");
+                    // Deny via IM: workflow.resolve owns the full state-machine transition.
+                    ResolveOutcome denyOutcome = approvalService.resolve(
+                            pending.getPendingId(), message.getSenderId(), "denied");
                     conversationService.removeApprovalPlaceholders(conversationId);
                     adapter.sendMessage(replyTarget, "⛔ 已拒绝执行工具: " + pending.getToolName());
-                    log.info("[{}] Approval DENIED via IM command: pendingId={}, tool={}",
-                            adapter.getChannelType(), pending.getPendingId(), pending.getToolName());
+                    log.info("[{}] Approval DENIED via IM command: pendingId={}, tool={}, msgRewritten={}",
+                            adapter.getChannelType(), pending.getPendingId(), pending.getToolName(),
+                            denyOutcome.messagesRewritten());
                     return;
 
                 } else {
-                    // 非审批命令但有 pending → 视为隐式拒绝 + 清理残留
+                    // Non-approval message while a pending exists → treat as implicit deny.
                     approvalService.resolve(pending.getPendingId(), message.getSenderId(), "denied");
                     conversationService.removeApprovalPlaceholders(conversationId);
                     adapter.sendMessage(replyTarget, "⛔ 审批已取消。将继续处理您的新消息。");
                     log.info("[{}] Approval auto-cancelled (non-approval message): pendingId={}",
                             adapter.getChannelType(), pending.getPendingId());
-                    // 继续正常流程处理当前消息
+                    // Fall through to process the new message normally.
                 }
             }
             // ======= 审批拦截层结束 =======
@@ -436,11 +447,17 @@ public class ChannelMessageRouter {
             Long savedAssistantId = null;
             try {
                 // 流式路径：渠道实现了 StreamingChannelAdapter 则委托渠道渲染流式事件
+                // RFC-063r §2.5: build the ChatOrigin once per channel-message
+                // so cron jobs created during this conversation inherit the
+                // channel binding (Issue #25 root path).
+                ChatOrigin chatOrigin = chatOriginFactory.from(
+                        channelEntity, message, conversationId, /* workspaceBasePath */ null);
+
                 if (adapter instanceof StreamingChannelAdapter streamingAdapter) {
-                    savedAssistantId = processWithStreaming(message, streamingAdapter, conversationId, agentId, promptText, channelEntity);
+                    savedAssistantId = processWithStreaming(message, streamingAdapter, conversationId, agentId, promptText, channelEntity, chatOrigin);
                 } else {
                     // 同步路径：直接获取完整回复
-                    String reply = agentService.chat(agentId, promptText, conversationId);
+                    String reply = agentService.chat(agentId, promptText, conversationId, chatOrigin);
 
                     // 检查 chat 过程中是否产生了审批 pending
                     PendingApproval newPending = approvalService.findPendingByConversation(conversationId);
@@ -451,10 +468,20 @@ public class ChannelMessageRouter {
                         log.info("[{}] Approval triggered during chat, sent notice (NOT saved to DB): tool={}",
                                 adapter.getChannelType(), newPending.getToolName());
                     } else {
-                        // 正常回复：保存并发送
-                        MessageEntity saved = conversationService.saveMessage(conversationId, "assistant", reply);
+                        // Tag error replies (matched by ChannelErrorClassifier — the
+                        // "[错误]" content prefix / Bad request: / LLM error templates)
+                        // with status='error' so BaseAgent.sanitizeForLlm drops them
+                        // from the next turn's LLM history, breaking the self-replicating
+                        // 400 loop. Only successful replies fire the ConversationCompletedEvent —
+                        // error turns must not pollute memory extraction.
+                        boolean isError = errorClassifier.isErrorReply(reply);
+                        String status = isError ? "error" : "completed";
+                        MessageEntity saved = conversationService.saveMessage(
+                                conversationId, "assistant", reply, null, status);
                         savedAssistantId = saved != null ? saved.getId() : null;
-                        publishConversationCompletedEvent(agentId, conversationId, message.getContent(), reply);
+                        if (!isError) {
+                            publishConversationCompletedEvent(agentId, conversationId, message.getContent(), reply);
+                        }
                         adapter.renderAndSend(replyTarget, reply);
                         log.info("[{}] Reply sent to {}: {}chars",
                                 adapter.getChannelType(), replyTarget, reply.length());
@@ -517,14 +544,14 @@ public class ChannelMessageRouter {
      */
     private Long processWithStreaming(ChannelMessage message, StreamingChannelAdapter streamingAdapter,
                                       String conversationId, Long agentId, String promptText,
-                                      ChannelEntity channelEntity) {
+                                      ChannelEntity channelEntity, ChatOrigin chatOrigin) {
         String channelType = streamingAdapter.getChannelType();
         log.info("[{}] Streaming processing started: conversationId={}", channelType, conversationId);
 
         try {
-            // Step 1: 产生事件流
+            // Step 1: 产生事件流（RFC-063r §2.5: forward ChatOrigin so tools see channelId）
             Flux<AgentService.StreamDelta> stream = agentService.chatStructuredStream(
-                    agentId, promptText, conversationId, message.getSenderId());
+                    agentId, promptText, conversationId, message.getSenderId(), chatOrigin);
 
             // Step 2: 委托渠道渲染（渠道内部消费 Flux 并处理 UI 更新）
             String finalContent = streamingAdapter.processStream(stream, message, conversationId);
@@ -537,9 +564,15 @@ public class ChannelMessageRouter {
                 log.info("[{}] Approval triggered during streaming (NOT saved to DB): tool={}",
                         channelType, newPending.getToolName());
             } else if (finalContent != null && !finalContent.isBlank()) {
-                MessageEntity saved = conversationService.saveMessage(conversationId, "assistant", finalContent);
-                publishConversationCompletedEvent(agentId, conversationId, promptText, finalContent);
-                log.info("[{}] Streaming completed: contentLen={}", channelType, finalContent.length());
+                boolean isError = errorClassifier.isErrorReply(finalContent);
+                String status = isError ? "error" : "completed";
+                MessageEntity saved = conversationService.saveMessage(
+                        conversationId, "assistant", finalContent, null, status);
+                if (!isError) {
+                    publishConversationCompletedEvent(agentId, conversationId, promptText, finalContent);
+                }
+                log.info("[{}] Streaming completed: contentLen={}, isError={}",
+                        channelType, finalContent.length(), isError);
 
                 // 流式回复完成后也触发语音回复
                 String replyTarget = resolveReplyTarget(message);
@@ -552,7 +585,17 @@ public class ChannelMessageRouter {
 
         } catch (Exception e) {
             log.error("[{}] Streaming processing failed: {}", channelType, e.getMessage(), e);
-            // 尝试发送错误提示
+            // Persist an error placeholder (status='error') so that the next
+            // turn's history does not show a user → user sequence (which some
+            // providers reject with 400). sanitizeForLlm filters this row out
+            // before the LLM sees it, so it costs nothing at the prompt layer.
+            try {
+                conversationService.saveMessage(conversationId, "assistant",
+                        "[错误] " + e.getMessage(), null, "error");
+            } catch (Exception persistErr) {
+                log.warn("[{}] Failed to persist error placeholder: {}",
+                        channelType, persistErr.getMessage());
+            }
             try {
                 String errorTarget = resolveReplyTarget(message);
                 streamingAdapter.sendMessage(errorTarget, "抱歉，流式处理失败：" + e.getMessage());
@@ -562,6 +605,7 @@ public class ChannelMessageRouter {
         }
         return null;
     }
+
 
     // ==================== 审批重放 ====================
 
@@ -587,11 +631,25 @@ public class ChannelMessageRouter {
         String replayPrompt = "继续执行已批准的工具调用。";
 
         try {
+            // RFC-063r §2.12: prefer the persisted Memento (covers
+            // cross-restart approval where the channel session changed) and
+            // only fall back to rebuilding from the current inbound message
+            // when no snapshot was captured (legacy rows from before this PR).
+            ChatOrigin replayOrigin = approvalService.restoreChatOrigin(consumed.getChatOrigin());
+            if (replayOrigin == ChatOrigin.EMPTY) {
+                replayOrigin = chatOriginFactory.from(
+                        channelEntity, triggerMessage, conversationId, /* workspaceBasePath */ null);
+            }
             String reply = agentService.chatWithReplay(
-                    agentId, replayPrompt, conversationId, consumed.getToolCallPayload());
+                    agentId, replayPrompt, conversationId, consumed.getToolCallPayload(), replayOrigin);
 
-            // 保存 replay 结果（这是正常结果，入库）
-            conversationService.saveMessage(conversationId, "assistant", reply);
+            // Persist the replay result. If the LLM 400'd during replay,
+            // the error reply must also get status='error' — otherwise the
+            // next turn's history would re-feed the error placeholder back
+            // into the prompt and re-trigger the same failure.
+            boolean isError = errorClassifier.isErrorReply(reply);
+            conversationService.saveMessage(conversationId, "assistant", reply, null,
+                    isError ? "error" : "completed");
 
             // 发送回复
             adapter.renderAndSend(replyTarget, reply);
@@ -612,17 +670,13 @@ public class ChannelMessageRouter {
     }
 
     /**
-     * 发布对话完成事件（触发异步记忆提取），失败不影响正常流程
+     * Publish the conversation-completed event (triggers async memory extraction).
+     * Delegates to {@link ConversationCompletionPublisher} so the try/catch and
+     * messageCount lookup no longer live here.
      */
     private void publishConversationCompletedEvent(Long agentId, String conversationId,
                                                     String userMessage, String assistantReply) {
-        try {
-            int msgCount = conversationService.getMessageCount(conversationId);
-            eventPublisher.publishEvent(new ConversationCompletedEvent(
-                    agentId, conversationId, userMessage, assistantReply, msgCount, "channel"));
-        } catch (Exception e) {
-            log.debug("[Memory] Failed to publish ConversationCompletedEvent: {}", e.getMessage());
-        }
+        completionPublisher.publish(agentId, conversationId, userMessage, assistantReply, "channel");
     }
 
     // ==================== 流式处理（Web 渠道专用，不走队列） ====================
@@ -644,7 +698,11 @@ public class ChannelMessageRouter {
         conversationService.saveMessage(conversationId, "user", message.getContent(), parts);
 
         String promptText = buildPromptFromParts(message.getContent(), parts, message.getInputMode());
-        return agentService.chatStream(agentId, promptText, conversationId);
+        // RFC-063r §2.5: forward ChatOrigin so tools created during this
+        // streaming conversation inherit channel binding.
+        ChatOrigin origin = chatOriginFactory.from(
+                channelEntity, message, conversationId, /* workspaceBasePath */ null);
+        return agentService.chatStream(agentId, promptText, conversationId, origin);
     }
 
     // ==================== 优雅关闭 ====================

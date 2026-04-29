@@ -61,6 +61,5 @@ public class ModelConfigEntity {
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updateTime;
 
-    @TableLogic
     private Integer deleted;
 }

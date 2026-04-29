@@ -13,6 +13,9 @@ spring:
     multipart:
       max-file-size: 100MB
       max-request-size: 200MB
+  threads:
+    virtual:
+      enabled: true
   profiles:
     active: dev
 
@@ -54,6 +57,9 @@ spring:
           max-tokens: 4096
     # Spring AI 1.1.x 会话记忆配置（使用内嵌 H2 时无需额外配置）
     chat:
+      observations:
+        log-prompt: false
+        log-completion: false
       memory:
         repository:
           jdbc:
@@ -78,11 +84,6 @@ mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
     log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
-  global-config:
-    db-config:
-      logic-delete-field: deleted
-      logic-delete-value: 1
-      logic-not-delete-value: 0
 
 # SpringDoc OpenAPI
 springdoc:
@@ -138,16 +139,26 @@ mateclaw:
         enabled: true              # 自适应降级（连续 miss 后短路到 NoOp，冷却后恢复）
         miss-threshold: 5
         cool-down-ms: 60000
+    # RFC-009 P3.3: per-provider health tracker for the multi-model failover chain.
+    # When a provider hits failure-threshold consecutive failures it enters a cooldown
+    # window during which the chain walker skips it, avoiding repeated 5-retry stalls
+    # against a known-broken provider on every conversation turn.
+    failover:
+      health:
+        enabled: true
+        failure-threshold: 3
+        cooldown-ms: 300000
 
 # MateClaw Agent 配置
 mate:
   agent:
     graph:
       observation:
-        max-single-observation-chars: 8000
-        max-total-observation-chars: 24000
-        large-result-threshold: 6000
-        min-rounds-for-summarize: 3
+        # 与 GraphObservationProperties.java 默认值对齐，参考 openclaw token-budget 设计
+        max-single-observation-chars: 16000
+        max-total-observation-chars: 200000
+        large-result-threshold: 32000
+        min-rounds-for-summarize: 25
         head-ratio: 0.4
         truncation-marker: "\n\n... [内容已截断，共 %d 字符，保留前后关键片段] ...\n\n"
     tool:
@@ -156,6 +167,25 @@ mate:
         per-category:
           shell: 120
           web: 30
+    # RFC-008 Phase 3: tool-result three-layer budget (per-result spill + per-turn aggregate budget).
+    # Layer 1 (per-tool cap) lives inside individual tools; Layer 2 spills oversized
+    # single results to disk; Layer 3 enforces an aggregate cap on the combined
+    # response size of one tool turn. The full output is preserved on disk and
+    # the in-context preview points the agent at the spill file (read_file tool).
+    tool-result:
+      enabled: true
+      per-result-threshold-chars: 16000   # was 4000 — prevents WebSearch spill-to-disk
+      per-turn-budget-chars: 32000        # was 16000 — headroom for multi-tool turns
+      preview-head-chars: 800
+      storage-base-dir: ""
+      # Retrieval-style tools that must NEVER be spilled. Spilling read_file's
+      # output causes a recursion: the agent reads the spill path, that read also
+      # exceeds the threshold, gets spilled to a new path, agent reads that one,
+      # ad infinitum until MAX_TOOL_CALLS_PER_STEP is hit. Add MCP-provided
+      # readers here if they have the same role.
+      excluded-tools:
+        - read_file
+        - read_workspace_memory_file
     conversation:
       window:
         # 测试时临时调低：2000 token ≈ 2000 中文字，3 轮对话即可触发压缩
@@ -175,3 +205,24 @@ mate:
     upload-dir: ./data/wiki-uploads     # 上传文件存储目录
     max-scan-files: 500                 # 目录扫描最大文件数
     max-scan-file-size: 52428800        # 扫描时跳过大于此大小的文件（字节，默认 50MB）
+  # Dream v2 feature flags — production defaults after GA validation
+  memory:
+    # Phase 1: lifecycle mediator wiring
+    lifecycle-mediator-enabled: true
+    dream:
+      focused-enabled: true
+      archive-enabled: true
+      archive-keep-days: 30
+      max-candidates-per-dream: 100
+    # Phase 2: SOUL auto-evolution and provider decorators
+    soul-update-interval: 20                   # 20 writes trigger one SOUL.md LLM update (0 = off)
+    provider-retry-attempts: 1                 # 1 = no retry (enable when external providers added)
+    provider-metrics-enabled: false            # actuator dependency now present; enable when external providers added
+    # Phase 3: fact projection
+    fact:
+      projection-enabled: true
+      projection-rebuild-cron: "0 */30 * * * ?"
+      llm-extraction-enabled: false            # placeholder impl, enable after Phase 3 L4+
+      contradiction-check-enabled: false       # experimental simple detection, enable after LLM batch impl
+      trust-half-life-days: 60
+      forget-enabled: true

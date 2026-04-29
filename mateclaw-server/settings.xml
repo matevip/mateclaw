@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Minimal Maven settings for the Docker build.
+
+  Repository URLs (US Maven Central, Google CDN, Aliyun) are declared directly
+  in mateclaw-server/pom.xml so a single pom covers both continents — Maven
+  tries each repository in order and falls over on 404 / unreachable.
+
+  Historically this file also contained <mirrors> that redirected Maven Central
+  to Aliyun. That broke US/EU builds because <mirror> intercepts transparently
+  and offers no fail-over when the mirror is slow. Keeping this file empty
+  means pom.xml's repository list is authoritative.
+
+  If you need to force a mirror (e.g. behind a corporate proxy), add your own
+  mirror entries here — they will override the pom repositories.
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                              http://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <mirrors/>
+</settings>

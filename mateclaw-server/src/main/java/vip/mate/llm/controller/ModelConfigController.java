@@ -35,10 +35,28 @@ public class ModelConfigController {
 
     private static final String SYSTEM_SETTING_DEFAULT_EMBEDDING_ID = "embedding.default.model.id";
 
-    @Operation(summary = "获取 Provider 列表")
+    @Operation(summary = "获取 Provider 列表（仅 enabled）")
     @GetMapping
     public R<List<ProviderInfoDTO>> list() {
         return R.ok(modelProviderService.listProviders());
+    }
+
+    @Operation(summary = "RFC-074: 获取 Provider 全量目录（含未启用），供 Add Provider 抽屉使用")
+    @GetMapping("/catalog")
+    public R<List<ProviderInfoDTO>> catalog() {
+        return R.ok(modelProviderService.listCatalog());
+    }
+
+    @Operation(summary = "RFC-074: 启用 Provider")
+    @PostMapping("/{providerId}/enable")
+    public R<EnableResult> enableProvider(@PathVariable String providerId) {
+        return R.ok(modelProviderService.setEnabled(providerId, true));
+    }
+
+    @Operation(summary = "RFC-074: 禁用 Provider（如其下模型为当前默认会自动切换）")
+    @PostMapping("/{providerId}/disable")
+    public R<EnableResult> disableProvider(@PathVariable String providerId) {
+        return R.ok(modelProviderService.setEnabled(providerId, false));
     }
 
     @Operation(summary = "获取启用模型列表")

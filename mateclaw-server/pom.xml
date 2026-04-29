@@ -6,7 +6,7 @@
 
     <groupId>vip.mate</groupId>
     <artifactId>mateclaw-server</artifactId>
-    <version>1.1.0</version>
+    <version>1.1.137</version>
     <packaging>jar</packaging>
 
     <name>MateClaw Server</name>
@@ -65,6 +65,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- ===== Actuator — exposes Spring AI observation metrics (gen_ai.*) ===== -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
         <!-- ===== Spring AI Alibaba DashScope ===== -->
@@ -189,14 +195,14 @@
         <dependency>
             <groupId>com.dingtalk.open</groupId>
             <artifactId>dingtalk-stream</artifactId>
-            <version>1.3.5</version>
+            <version>1.3.12</version>
         </dependency>
 
         <!-- ===== 飞书 / Lark Open API SDK（WebSocket 长连接 + 事件分发） ===== -->
         <dependency>
             <groupId>com.larksuite.oapi</groupId>
             <artifactId>oapi-sdk</artifactId>
-            <version>2.5.3</version>
+            <version>2.6.1</version>
         </dependency>
 
         <!-- ===== Caffeine Cache（用于 skill runtime 缓存） ===== -->
@@ -274,6 +280,77 @@
             <version>2.2.0</version>
         </dependency>
 
+        <!-- ===== Apache POI (in-process .docx generation) ===== -->
+        <!--
+            Used by DocxRenderTool to render Markdown into a .docx in-JVM,
+            replacing the Node.js docx-js subprocess (3-5 min cold install).
+        -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.4.1</version>
+        </dependency>
+
+        <!-- ===== Apache Batik (SVG rasterization for docx image embedding) ===== -->
+        <!--
+            Used by MarkdownDocxRenderer to convert ![alt](*.svg) image references
+            into PNG bytes that POI can embed via XWPFRun.addPicture(). Without this,
+            agents that produce architecture diagrams as inline SVG cannot get them
+            into the final .docx. Rasterization runs in-JVM (no rsvg-convert / cairo
+            dependency on the host).
+        -->
+        <dependency>
+            <groupId>org.apache.xmlgraphics</groupId>
+            <artifactId>batik-transcoder</artifactId>
+            <version>1.18</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.xmlgraphics</groupId>
+            <artifactId>batik-codec</artifactId>
+            <version>1.18</version>
+        </dependency>
+
+        <!-- ===== jsoup (HTML cleanup for Wiki ingest, RFC-051 PR-1c) ===== -->
+        <!--
+            Used by WikiContentNormalizer to strip nav/footer/script/style/aside
+            and ad-class nodes from URL/HTML uploads before chunking. Small
+            (~430KB), no transitive deps, JVM-only — safe for the desktop bundle.
+        -->
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>1.18.3</version>
+        </dependency>
+
+        <!-- ===== Apache Tika (RFC-051 PR-?: Java-side last-resort extractor) ===== -->
+        <!--
+            Wired as the FINAL fallback in DocumentExtractTool's PDF/DOCX/XLSX/PPTX
+            chains, after every system command + Python + POI-based path has failed.
+            Used in production primarily by Windows users without Python or poppler
+            installed; otherwise idle.
+
+            Pinned to the precise format modules called out in RFC-051 §5.2 — we
+            deliberately avoid `tika-parsers-standard-package`, which pulls in mail,
+            audio, archive, RTF / ODT, scientific, etc. (~80MB). Current footprint:
+            tika-core (~700KB) + tika-parser-pdf-module (PDFBox ~5MB) +
+            tika-parser-microsoft-module (POI-scratchpad ~10MB) ≈ 16MB.
+        -->
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-core</artifactId>
+            <version>3.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-parser-pdf-module</artifactId>
+            <version>3.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-parser-microsoft-module</artifactId>
+            <version>3.0.0</version>
+        </dependency>
+
         <!-- ===== Database Migration (Flyway) ===== -->
         <dependency>
             <groupId>org.flywaydb</groupId>
@@ -288,6 +365,20 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- ===== ArchUnit (RFC-063r §2.3 / §5.2 architecture invariants) =====
+             test-scope only — guards:
+             - every ToolCallback implementation overrides call(String, ToolContext)
+               so decorators (LocaleAwareToolCallback) cannot silently drop ChatOrigin
+             - CronJobRunner (introduced in PR-3) must not carry @Transactional
+               (would silently fail under self-invocation; see RFC §5.2)
+        -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>1.3.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -306,6 +397,143 @@
                     </excludes>
                 </configuration>
             </plugin>
+            <!-- Populate ${net.bytebuddy:byte-buddy-agent:jar} from the test
+                 classpath so maven-surefire-plugin can attach it statically
+                 (Mockito inline mock maker on JDK 21+ can no longer self-attach). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>resolve-test-classpath-properties</id>
+                        <goals>
+                            <goal>properties</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- Static agent attach for Mockito on JDK 21+. Without this, dynamic
+                         agent loading raises ByteBuddyAgent.AttachmentTypeEvaluator errors
+                         depending on the JVM's startup hardening, making tests pass on one
+                         machine and fail on another. byte-buddy-agent rides in transitively
+                         via mockito-core. -->
+                    <argLine>-javaagent:${net.bytebuddy:byte-buddy-agent:jar}</argLine>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
+
+    <!--
+      Dependency repositories, with US + CN mirrors listed side by side so builds
+      are reasonable on either continent. Maven tries repositories in the order
+      they are declared — the first one that resolves an artifact wins.
+
+      IDs are deliberately distinct from the super-POM's `central` id so that
+      mirror rules in settings.xml (if any) don't silently redirect them. Keep
+      the fastest-by-default first; switch order via a local ~/.m2/settings.xml
+      or pass `-Paliyun-first` when building from inside China.
+    -->
+    <repositories>
+        <!-- Primary: Maven Central direct — fast from US/EU backbones. -->
+        <repository>
+            <id>maven-central</id>
+            <name>Maven Central</name>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+        <!-- Fallback 1: Google Cloud's Maven Central mirror (global CDN edge). -->
+        <repository>
+            <id>google-maven-central</id>
+            <name>Google Maven Central Mirror</name>
+            <url>https://maven-central.storage-download.googleapis.com/maven2</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+        <!-- Fallback 2: Aliyun public — fast from China, full Central mirror. -->
+        <repository>
+            <id>aliyun-public</id>
+            <name>Aliyun Public</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+        <!-- Spring milestones / snapshots — direct from Spring (US). -->
+        <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+        <!-- Aliyun Spring mirror — fallback for CN builds. -->
+        <repository>
+            <id>aliyun-spring</id>
+            <name>Aliyun Spring Mirror</name>
+            <url>https://maven.aliyun.com/repository/spring</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+    </repositories>
+
+    <!-- Plugin lookups follow the same multi-region fallback. -->
+    <pluginRepositories>
+        <pluginRepository>
+            <id>maven-central</id>
+            <name>Maven Central</name>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </pluginRepository>
+        <pluginRepository>
+            <id>google-maven-central</id>
+            <name>Google Maven Central Mirror</name>
+            <url>https://maven-central.storage-download.googleapis.com/maven2</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </pluginRepository>
+        <pluginRepository>
+            <id>aliyun-public</id>
+            <name>Aliyun Public</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </pluginRepository>
+    </pluginRepositories>
+
+    <!--
+      Profile: swap the primary repo order when building from China so Aliyun
+      is tried first. Activate with `mvn -Paliyun-first ...`.
+    -->
+    <profiles>
+        <profile>
+            <id>aliyun-first</id>
+            <repositories>
+                <repository>
+                    <id>aliyun-public-first</id>
+                    <url>https://maven.aliyun.com/repository/public</url>
+                    <releases><enabled>true</enabled></releases>
+                    <snapshots><enabled>false</enabled></snapshots>
+                </repository>
+                <repository>
+                    <id>aliyun-spring-first</id>
+                    <url>https://maven.aliyun.com/repository/spring</url>
+                    <releases><enabled>true</enabled></releases>
+                    <snapshots><enabled>false</enabled></snapshots>
+                </repository>
+            </repositories>
+            <pluginRepositories>
+                <pluginRepository>
+                    <id>aliyun-public-first</id>
+                    <url>https://maven.aliyun.com/repository/public</url>
+                    <releases><enabled>true</enabled></releases>
+                    <snapshots><enabled>false</enabled></snapshots>
+                </pluginRepository>
+            </pluginRepositories>
+        </profile>
+    </profiles>
 </project>

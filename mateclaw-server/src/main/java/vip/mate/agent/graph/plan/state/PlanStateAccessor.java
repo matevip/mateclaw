@@ -48,7 +48,10 @@ public final class PlanStateAccessor {
     }
 
     public boolean needsPlanning() {
-        return state.value(NEEDS_PLANNING, true);
+        // Default to false: an unset triage flag means the request was not
+        // classified as requiring a plan. See PlanGenerationDispatcher for the
+        // rationale and RFC-008 for the full discussion.
+        return state.value(NEEDS_PLANNING, false);
     }
 
     // ===== 步骤控制 =====

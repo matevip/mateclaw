@@ -320,6 +320,11 @@ async function fetchPromptFiles() {
 function handlePreviewClick(e: MouseEvent) {
   const btn = (e.target as HTMLElement).closest('.code-block__copy') as HTMLElement | null
   if (!btn) return
+  // Same as ChatConsole: the copy button now lives inside <details><summary>
+  // for collapsible blocks. Without preventDefault the click toggles the
+  // details open state in addition to copying.
+  e.preventDefault()
+  e.stopPropagation()
   const encoded = btn.getAttribute('data-code')
   if (!encoded) return
   const code = decodeURIComponent(encoded)

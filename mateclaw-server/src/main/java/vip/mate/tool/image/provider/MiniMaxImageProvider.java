@@ -20,9 +20,9 @@ import java.util.Set;
  * MiniMax 图片生成 Provider — image-01 模型
  * <p>
  * 同步模式：返回 Base64 图片。
- * 复用视频生成中的 MiniMax API Key。
+ * 复用视频生成中的 MiniMax API Key + region 设置（{@code minimaxRegion}）。
  * <p>
- * API: POST https://api.minimax.io/v1/image_generation
+ * API: POST {@code <baseUrl>/v1/image_generation} —— host 由 region 决定。
  *
  * @author MateClaw Team
  */
@@ -33,8 +33,29 @@ public class MiniMaxImageProvider implements ImageGenerationProvider {
 
     private final ObjectMapper objectMapper;
 
-    private static final String BASE_URL = "https://api.minimax.io";
+    /** Global endpoint. */
+    static final String BASE_URL_GLOBAL = "https://api.minimax.io";
+
+    /** China endpoint (mainland-CN low-latency host; same JSON shape). */
+    static final String BASE_URL_CN = "https://api.minimaxi.com";
+
+    /** Region value selecting the CN endpoint. Anything else → global. */
+    static final String REGION_CN = "cn";
+
     private static final String DEFAULT_MODEL = "image-01";
+
+    /**
+     * Resolve MiniMax base URL from system settings region. Shared semantics
+     * with {@code MiniMaxVideoProvider.resolveBaseUrl} (single field controls
+     * both image + video routing because the API key is the same).
+     * Package-private for unit tests.
+     */
+    static String resolveBaseUrl(SystemSettingsDTO config) {
+        if (config != null && REGION_CN.equalsIgnoreCase(config.getMinimaxRegion())) {
+            return BASE_URL_CN;
+        }
+        return BASE_URL_GLOBAL;
+    }
 
     @Override
     public String id() {
@@ -96,7 +117,8 @@ public class MiniMaxImageProvider implements ImageGenerationProvider {
                 body.put("aspect_ratio", request.getAspectRatio());
             }
 
-            HttpResponse response = HttpRequest.post(BASE_URL + "/v1/image_generation")
+            String baseUrl = resolveBaseUrl(config);
+            HttpResponse response = HttpRequest.post(baseUrl + "/v1/image_generation")
                     .header("Authorization", "Bearer " + apiKey)
                     .header("Content-Type", "application/json")
                     .body(body.toString())

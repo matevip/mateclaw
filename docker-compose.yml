@@ -21,8 +21,9 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./mateclaw-server/src/main/resources/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
-      - ./mateclaw-server/src/main/resources/db/data.sql:/docker-entrypoint-initdb.d/02-data.sql
+    # Schema and seed data are managed by Flyway on application startup.
+    # Do NOT mount legacy schema.sql / data.sql here — Flyway creates all
+    # tables from V1 baseline and applies incremental migrations automatically.
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
@@ -30,18 +31,26 @@ services:
       timeout: 5s
       retries: 5
 
-  # SearXNG 搜索引擎（keyless 搜索 provider，零配置可用）
+  # SearXNG 搜索引擎（keyless 搜索 provider）
+  #
+  # The custom image at docker/searxng/ bakes in settings.yml so the sidecar
+  # works out of the box (upstream image ships JSON disabled + Limiter enabled,
+  # both of which silently break mateclaw's SearXNGSearchProvider).
+  # No host bind-mount — edit docker/searxng/settings.yml and rebuild.
   searxng:
-    image: searxng/searxng:latest
+    build:
+      context: ./docker/searxng
     container_name: mateclaw-searxng
     restart: unless-stopped
     environment:
       - SEARXNG_BASE_URL=http://searxng:8080
-    volumes:
-      - searxng_data:/etc/searxng
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-mateclaw-dev-searxng-secret-change-me}
+      - UWSGI_WORKERS=2
+      - UWSGI_THREADS=4
     ports:
       - "8088:8080"
     healthcheck:
+      # Healthz needs json format, so this also doubles as an integration check.
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
       interval: 30s
       timeout: 5s
@@ -50,8 +59,10 @@ services:
   # MateClaw 后端服务
   mateclaw-server:
     build:
-      context: ./mateclaw-server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: mateclaw-server/Dockerfile
+      args:
+        MAVEN_FLAGS: ${MAVEN_FLAGS:-}
     container_name: mateclaw-server
     restart: unless-stopped
     depends_on:
@@ -66,16 +77,27 @@ services:
       DB_NAME: ${DB_NAME:-mateclaw}
       DB_USERNAME: ${DB_USERNAME:-mateclaw}
       DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required in .env}
-      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:?DASHSCOPE_API_KEY is required in .env}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       SERPER_API_KEY: ${SERPER_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-}
       MATECLAW_CORS_ALLOWED_ORIGINS: ${MATECLAW_CORS_ALLOWED_ORIGINS:-}
+      # SearXNG: tell the app where to reach the sidecar container
+      SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://searxng:8080}
+      # Browser automation: the runtime image (mcr.microsoft.com/playwright:*)
+      # bakes Chromium + system libs + fonts in, so the tool works out of the box.
+      # Override these if you want to attach to an external Chrome (CDP sidecar):
+      MATECLAW_BROWSER_CDP_URL: ${MATECLAW_BROWSER_CDP_URL:-}
+      MATECLAW_BROWSER_CHROME_PATH: ${MATECLAW_BROWSER_CHROME_PATH:-}
+      MATECLAW_BROWSER_CHANNEL: ${MATECLAW_BROWSER_CHANNEL:-}
+    # Chromium needs a real /dev/shm. Docker defaults to 64MB which causes
+    # SIGBUS / "Target page closed" errors under load. 2GB is the usual
+    # recommendation for Playwright / headless chrome.
+    shm_size: 2gb
     ports:
-      - "18080:18080"
+      - "18080:18088"   # host:container — app listens on 18088 inside the container
     volumes:
       - server_data:/app/data
 
 volumes:
   mysql_data:
   server_data:
-  searxng_data:

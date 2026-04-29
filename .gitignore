@@ -92,5 +92,9 @@ deploy/nginx/ssl/*.pem
 deploy/.env
 
 # Claude Code local settings
+CLAUDE.md
 .claude/settings.local.json
 .claude/plans/
+
+# Codex CLI local artifacts
+.codex/

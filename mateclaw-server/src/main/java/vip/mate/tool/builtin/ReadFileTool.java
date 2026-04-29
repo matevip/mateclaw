@@ -3,16 +3,16 @@ package vip.mate.tool.builtin;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -54,7 +54,9 @@ public class ReadFileTool {
     public String read_file(
             @ToolParam(description = "Absolute or relative file path") String filePath,
             @ToolParam(description = "Start line number (1-based, inclusive). Omit to start from line 1", required = false) Integer startLine,
-            @ToolParam(description = "End line number (1-based, inclusive). Omit to read to EOF or truncation limit", required = false) Integer endLine) {
+            @ToolParam(description = "End line number (1-based, inclusive). Omit to read to EOF or truncation limit", required = false) Integer endLine,
+            // RFC-063r §2.5: hidden from LLM by JsonSchemaGenerator.
+            @Nullable ToolContext ctx) {
 
         JSONObject result = new JSONObject();
         result.set("filePath", filePath);
@@ -62,14 +64,34 @@ public class ReadFileTool {
         try {
             Path path;
             try {
-                path = vip.mate.tool.guard.WorkspacePathGuard.validatePath(filePath);
+                // RFC-063r §2.5: forward ToolContext so workspace boundary
+                // honors ChatOrigin.workspaceBasePath when available.
+                path = vip.mate.tool.guard.WorkspacePathGuard.validatePath(filePath, ctx);
             } catch (IllegalArgumentException e) {
-                return errorResult(filePath, e.getMessage());
+                // Sandbox rejected the literal path. The LLM may have hallucinated
+                // a Linux-style path (e.g. /app/Dockerfile) for a chat-upload that
+                // actually lives under data/chat-uploads/{conversationId}/. Retry
+                // by basename before surfacing the boundary error.
+                Path attachment = ChatUploadResolver.resolve(filePath);
+                if (attachment == null) {
+                    return errorResult(filePath, e.getMessage());
+                }
+                path = attachment;
             }
 
             // 文件存在性和类型校验
             if (!Files.exists(path)) {
-                return errorResult(filePath, i18n.msg("tool.read_file.error.not_found", path));
+                // The user-uploaded chat attachment is rendered to the LLM as
+                // "[附件] foo.txt" without its stored path, so LLMs often pass
+                // just the basename or a guessed absolute path. Fall back to
+                // looking up the basename inside the current conversation's
+                // chat-upload directory before reporting not-found.
+                Path attachment = ChatUploadResolver.resolve(filePath);
+                if (attachment == null) {
+                    return errorResult(filePath, i18n.msg("tool.read_file.error.not_found", path));
+                }
+                log.info("[ReadFile] Resolved chat-upload attachment fallback: {} -> {}", filePath, attachment);
+                path = attachment;
             }
             if (Files.isDirectory(path)) {
                 return errorResult(filePath, i18n.msg("tool.read_file.error.is_directory", path));

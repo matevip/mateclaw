@@ -28,6 +28,7 @@ public class SkillScriptTool {
     private final SkillFileAccessPolicy accessPolicy;
     private final SkillScriptExecutionService executionService;
 
+    @vip.mate.tool.ConcurrencyUnsafe("script execution can have arbitrary side effects on the host process and filesystem")
     @Tool(description = """
         Execute a script from a skill's scripts/ directory.
         Use this when you need to run skill-provided automation or utilities.

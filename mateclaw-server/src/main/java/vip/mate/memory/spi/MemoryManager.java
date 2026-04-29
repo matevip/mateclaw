@@ -1,8 +1,11 @@
 package vip.mate.memory.spi;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import vip.mate.memory.MemoryProperties;
+import vip.mate.memory.spi.decorator.MetricsMemoryProvider;
+import vip.mate.memory.spi.decorator.RetryableMemoryProvider;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -32,20 +35,43 @@ public class MemoryManager {
     /** External plugin memory provider (single-select constraint) */
     private volatile MemoryProvider externalPluginProvider = null;
 
-    public MemoryManager(List<MemoryProvider> allProviders, MemoryProperties properties) {
+    public MemoryManager(List<MemoryProvider> allProviders, MemoryProperties properties,
+                         org.springframework.beans.factory.ObjectProvider<MeterRegistry> meterRegistryProvider) {
+        MeterRegistry meterRegistry = meterRegistryProvider.getIfAvailable();
         Set<String> disabled = properties.getDisabledProviders();
-        this.providers = allProviders.stream()
+        List<MemoryProvider> filtered = allProviders.stream()
                 .filter(MemoryProvider::isAvailable)
                 .filter(p -> !disabled.contains(p.id()))
                 .sorted(Comparator.comparingInt(MemoryProvider::order))
                 .collect(Collectors.toList());
 
+        // Assemble decorator chain based on flags
+        this.providers = filtered.stream()
+                .map(p -> wrapWithDecorators(p, properties, meterRegistry))
+                .collect(Collectors.toList());
+
         if (!disabled.isEmpty()) {
             log.info("[MemoryManager] Disabled providers: {}", disabled);
         }
-        log.info("[MemoryManager] Active providers ({}): {}",
+        String decorators = "";
+        if (properties.getProviderRetryAttempts() > 1) decorators += "+retry(" + properties.getProviderRetryAttempts() + ")";
+        if (properties.isProviderMetricsEnabled()) decorators += "+metrics";
+        log.info("[MemoryManager] Active providers ({}): {} {}",
                 this.providers.size(),
-                this.providers.stream().map(MemoryProvider::id).collect(Collectors.joining(", ")));
+                filtered.stream().map(MemoryProvider::id).collect(Collectors.joining(", ")),
+                decorators);
+    }
+
+    private MemoryProvider wrapWithDecorators(MemoryProvider provider, MemoryProperties properties,
+                                              MeterRegistry meterRegistry) {
+        MemoryProvider result = provider;
+        if (properties.getProviderRetryAttempts() > 1) {
+            result = new RetryableMemoryProvider(result, properties.getProviderRetryAttempts());
+        }
+        if (properties.isProviderMetricsEnabled() && meterRegistry != null) {
+            result = new MetricsMemoryProvider(result, meterRegistry);
+        }
+        return result;
     }
 
     // ==================== System Prompt ====================

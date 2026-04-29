@@ -9,6 +9,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import vip.mate.channel.web.Utf8SseEmitter;
 import vip.mate.common.result.R;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
@@ -186,12 +187,33 @@ public class WikiController {
     // ==================== Raw Materials ====================
 
     @RequireWorkspaceRole("viewer")
-    @Operation(summary = "获取原始材料列表")
+    @Operation(summary = "获取原始材料列表（含每条材料生成的页面数）")
     @GetMapping("/knowledge-bases/{kbId}/raw")
-    public R<List<WikiRawMaterialEntity>> listRaw(@PathVariable Long kbId,
-                                                    @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+    public R<List<Map<String, Object>>> listRaw(@PathVariable Long kbId,
+                                                 @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyKBWorkspace(kbId, workspaceId);
-        return R.ok(rawService.listByKbId(kbId));
+        List<WikiRawMaterialEntity> raws = rawService.listByKbId(kbId);
+        List<Map<String, Object>> result = new java.util.ArrayList<>(raws.size());
+        for (WikiRawMaterialEntity raw : raws) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            // Serialize all entity fields via Jackson-friendly approach
+            item.put("id", raw.getId());
+            item.put("kbId", raw.getKbId());
+            item.put("title", raw.getTitle());
+            item.put("sourceType", raw.getSourceType());
+            item.put("processingStatus", raw.getProcessingStatus());
+            item.put("errorMessage", raw.getErrorMessage());
+            item.put("progressPhase", raw.getProgressPhase());
+            item.put("progressDone", raw.getProgressDone());
+            item.put("progressTotal", raw.getProgressTotal());
+            item.put("contentHash", raw.getContentHash());
+            item.put("createTime", raw.getCreateTime());
+            item.put("updateTime", raw.getUpdateTime());
+            // Enriched field: page count derived from this raw material
+            item.put("pageCount", pageService.countBySourceRawId(kbId, raw.getId()));
+            result.add(item);
+        }
+        return R.ok(result);
     }
 
     @RequireWorkspaceRole("member")
@@ -274,14 +296,90 @@ public class WikiController {
         return R.ok();
     }
 
+    @RequireWorkspaceRole("viewer")
+    @Operation(summary = "下载原始材料")
+    @GetMapping("/knowledge-bases/{kbId}/raw/{rawId}/download")
+    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> downloadRaw(
+            @PathVariable Long kbId,
+            @PathVariable Long rawId,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) throws IOException {
+        verifyKBWorkspace(kbId, workspaceId);
+        WikiRawMaterialEntity raw = rawService.getById(rawId);
+        if (raw == null || !kbId.equals(raw.getKbId())) {
+            return org.springframework.http.ResponseEntity.notFound().build();
+        }
+
+        String rawTitle = raw.getTitle();
+        String filename = (rawTitle != null && !rawTitle.isBlank())
+                ? rawTitle : ("source-" + rawId);
+
+        org.springframework.core.io.Resource resource;
+        long contentLength;
+        org.springframework.http.MediaType mediaType;
+        String sourceType = raw.getSourceType();
+
+        if ("text".equals(sourceType)) {
+            // Text materials live in the DB column — re-encode the stored content as bytes.
+            String content = raw.getOriginalContent();
+            if (content == null) {
+                return org.springframework.http.ResponseEntity.notFound().build();
+            }
+            byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+            resource = new org.springframework.core.io.ByteArrayResource(bytes);
+            contentLength = bytes.length;
+            mediaType = org.springframework.http.MediaType.parseMediaType("text/plain;charset=UTF-8");
+            // Manually-pasted text rows often have no extension on the title — give the
+            // download a sane suffix so the OS knows what to do with it.
+            if (!filename.contains(".")) filename = filename + ".txt";
+        } else {
+            // Binary materials live on disk — sandbox to the configured upload dir so
+            // a tampered source_path can't escape and serve arbitrary files.
+            String sourcePath = raw.getSourcePath();
+            if (sourcePath == null || sourcePath.isBlank()) {
+                return org.springframework.http.ResponseEntity.notFound().build();
+            }
+            Path path = Paths.get(sourcePath).toAbsolutePath().normalize();
+            Path uploadDir = Paths.get(properties.getUploadDir()).toAbsolutePath().normalize();
+            if (!path.startsWith(uploadDir)) {
+                log.warn("[Wiki] Download rejected: rawId={} path={} outside uploadDir={}",
+                        rawId, path, uploadDir);
+                return org.springframework.http.ResponseEntity
+                        .status(org.springframework.http.HttpStatus.FORBIDDEN).build();
+            }
+            if (!Files.isRegularFile(path)) {
+                return org.springframework.http.ResponseEntity.notFound().build();
+            }
+            resource = new org.springframework.core.io.FileSystemResource(path);
+            contentLength = Files.size(path);
+            mediaType = org.springframework.http.MediaType.APPLICATION_OCTET_STREAM;
+        }
+
+        // RFC 5987 — provide both ASCII-safe filename= (for old browsers) and
+        // UTF-8 filename*= so non-ASCII titles (e.g. 中医诊断学.docx) survive intact.
+        String asciiFallback = filename.replaceAll("[^\\x20-\\x7E]", "_")
+                .replace("\"", "_").replace("\\", "_");
+        String encoded = java.net.URLEncoder.encode(filename, StandardCharsets.UTF_8)
+                .replace("+", "%20");
+        String contentDisposition = "attachment; filename=\"" + asciiFallback
+                + "\"; filename*=UTF-8''" + encoded;
+
+        return org.springframework.http.ResponseEntity.ok()
+                .contentType(mediaType)
+                .contentLength(contentLength)
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
+                .body(resource);
+    }
+
     // ==================== Wiki Pages ====================
 
     @RequireWorkspaceRole("viewer")
-    @Operation(summary = "获取 Wiki 页面列表")
+    @Operation(summary = "获取 Wiki 页面列表（可按原始材料过滤）")
     @GetMapping("/knowledge-bases/{kbId}/pages")
     public R<List<WikiPageEntity>> listPages(@PathVariable Long kbId,
+                                              @RequestParam(required = false) Long rawId,
                                               @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyKBWorkspace(kbId, workspaceId);
+        if (rawId != null) return R.ok(pageService.listBySourceRawId(kbId, rawId));
         return R.ok(pageService.listByKbId(kbId));
     }
 
@@ -336,6 +434,40 @@ public class WikiController {
                                                  @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyKBWorkspace(kbId, workspaceId);
         return R.ok(pageService.getBacklinks(kbId, slug));
+    }
+
+    // RFC-051 PR-7 follow-up: archive surfaces. Default-list is filtered, so the UI
+    // needs a dedicated endpoint to enumerate archived pages and a way to flip the
+    // flag via REST (the agent tools wiki_archive_page / wiki_unarchive_page already
+    // exist, but the admin UI shouldn't have to go through agent plumbing).
+
+    @RequireWorkspaceRole("viewer")
+    @Operation(summary = "列出知识库中所有 archived=1 的页面（不含 content）")
+    @GetMapping("/knowledge-bases/{kbId}/pages/archived")
+    public R<List<WikiPageEntity>> listArchivedPages(@PathVariable Long kbId,
+                                                      @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyKBWorkspace(kbId, workspaceId);
+        return R.ok(pageService.listArchivedByKbId(kbId));
+    }
+
+    @RequireWorkspaceRole("admin")
+    @Operation(summary = "归档单个页面（软归档；可恢复）")
+    @PostMapping("/knowledge-bases/{kbId}/pages/{slug}/archive")
+    public R<Map<String, Object>> archivePage(@PathVariable Long kbId, @PathVariable String slug,
+                                               @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyKBWorkspace(kbId, workspaceId);
+        boolean changed = pageService.setArchived(kbId, slug, true);
+        return R.ok(Map.of("slug", slug, "archived", true, "changed", changed));
+    }
+
+    @RequireWorkspaceRole("admin")
+    @Operation(summary = "取消归档")
+    @PostMapping("/knowledge-bases/{kbId}/pages/{slug}/unarchive")
+    public R<Map<String, Object>> unarchivePage(@PathVariable Long kbId, @PathVariable String slug,
+                                                 @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyKBWorkspace(kbId, workspaceId);
+        boolean changed = pageService.setArchived(kbId, slug, false);
+        return R.ok(Map.of("slug", slug, "archived", false, "changed", changed));
     }
 
     // ==================== Processing ====================
@@ -415,7 +547,8 @@ public class WikiController {
     public SseEmitter subscribeProgress(@PathVariable Long kbId,
                                          @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         verifyKBWorkspace(kbId, workspaceId);
-        SseEmitter emitter = new SseEmitter(30L * 60 * 1000); // 30min
+        // RFC-058 PR-1: Utf8SseEmitter 显式 charset=UTF-8，防止中文 SSE 乱码
+        SseEmitter emitter = new Utf8SseEmitter(30L * 60 * 1000); // 30min
         progressBus.subscribe(kbId, emitter);
 
         emitter.onCompletion(() -> {

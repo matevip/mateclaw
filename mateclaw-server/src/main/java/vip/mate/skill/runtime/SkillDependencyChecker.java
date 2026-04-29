@@ -5,8 +5,10 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import vip.mate.skill.runtime.SkillFrontmatterParser.SkillDependencies;
+import vip.mate.tool.ToolRegistry;
 import vip.mate.tool.model.ToolEntity;
 import vip.mate.tool.repository.ToolMapper;
 
@@ -15,6 +17,7 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -23,10 +26,20 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SkillDependencyChecker {
 
     private final ToolMapper toolMapper;
+    private final ToolRegistry toolRegistry;
+
+    /**
+     * {@code @Lazy} on {@link ToolRegistry}: this bean is constructed during startup,
+     * and ToolRegistry transitively depends on MCP / plugin infrastructure that also
+     * runs early — the lazy proxy breaks that cycle.
+     */
+    public SkillDependencyChecker(ToolMapper toolMapper, @Lazy ToolRegistry toolRegistry) {
+        this.toolMapper = toolMapper;
+        this.toolRegistry = toolRegistry;
+    }
 
     private static final String CURRENT_OS = detectOS();
 
@@ -75,9 +88,13 @@ public class SkillDependencyChecker {
             }
         }
 
-        // 4. 内部工具检查
+        // 4. 内部工具检查 — fetch the runtime function-name set once per skill
+        //    so we don't hit reflection N times when a skill lists many tools.
+        Set<String> runtimeFunctionNames = dependencies.getTools().isEmpty()
+                ? Set.of()
+                : fetchRuntimeFunctionNames();
         for (String toolName : dependencies.getTools()) {
-            if (!isToolAvailable(toolName)) {
+            if (!isToolAvailable(toolName, runtimeFunctionNames)) {
                 missing.add("tool:" + toolName);
                 allSatisfied = false;
             }
@@ -118,22 +135,39 @@ public class SkillDependencyChecker {
         }
     }
 
-    private boolean isToolAvailable(String toolName) {
+    /**
+     * The runtime registry (ToolRegistry) is authoritative: it knows the exact
+     * function names LLMs and skills call by ({@code @Tool} method name / MCP
+     * tool id / plugin tool name). The {@code mate_tool} DB overlay stores
+     * class names + bean names and does NOT match that vocabulary, so checking
+     * the DB alone mis-reports every real skill dependency as "missing".
+     *
+     * <p>We keep the DB lookup as a secondary fallback for the edge case where
+     * someone has inserted a custom row whose {@code name} happens to equal the
+     * function name.
+     */
+    private boolean isToolAvailable(String toolName, Set<String> runtimeFunctionNames) {
+        if (runtimeFunctionNames.contains(toolName)) {
+            return true;
+        }
         try {
-            // 先按 name 精确匹配
             Long count = toolMapper.selectCount(new LambdaQueryWrapper<ToolEntity>()
                 .eq(ToolEntity::getName, toolName)
-                .eq(ToolEntity::getEnabled, true));
-            if (count > 0) return true;
-
-            // 再按 beanName 匹配（兼容 Spring Bean 名称）
-            count = toolMapper.selectCount(new LambdaQueryWrapper<ToolEntity>()
-                .eq(ToolEntity::getBeanName, toolName)
                 .eq(ToolEntity::getEnabled, true));
             return count > 0;
         } catch (Exception e) {
             log.debug("Tool check failed for '{}': {}", toolName, e.getMessage());
             return false;
+        }
+    }
+
+    private Set<String> fetchRuntimeFunctionNames() {
+        try {
+            return toolRegistry.availableFunctionNames();
+        } catch (Exception e) {
+            log.warn("Failed to fetch runtime tool function names, falling back to DB check only: {}",
+                    e.getMessage());
+            return Set.of();
         }
     }
 

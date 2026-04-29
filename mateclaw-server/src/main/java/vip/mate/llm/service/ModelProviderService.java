@@ -4,11 +4,16 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import vip.mate.exception.MateClawException;
+import vip.mate.llm.anthropic.oauth.ClaudeCodeOAuthService;
 import vip.mate.llm.event.ModelConfigChangedEvent;
+import vip.mate.llm.failover.AvailableProviderPool;
+import vip.mate.llm.failover.ProviderHealthTracker;
+import vip.mate.llm.failover.ProviderInitProbe;
 import vip.mate.llm.model.*;
 import vip.mate.llm.repository.ModelProviderMapper;
 
@@ -22,9 +27,23 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ModelProviderService {
 
+    /** Provider id whose OAuth token lives on local disk (Keychain / ~/.claude/.credentials.json) instead of the database. */
+    private static final String CLAUDE_CODE_PROVIDER_ID = "anthropic-claude-code";
+
     private final ModelProviderMapper modelProviderMapper;
     private final ModelConfigService modelConfigService;
     private final ApplicationEventPublisher eventPublisher;
+    /** Lazy provider — avoids forcing the bean to exist in test contexts that don't load the anthropic package. */
+    private final ObjectProvider<ClaudeCodeOAuthService> claudeCodeOAuthServiceProvider;
+    /** RFC-073: pool / cooldown / probe-completion signals that drive {@link Liveness}. */
+    private final AvailableProviderPool providerPool;
+    private final ProviderHealthTracker providerHealthTracker;
+    /**
+     * Lazy provider — {@link ProviderInitProbe} depends on this service, so direct injection
+     * would create a startup cycle. The probe always exists at runtime; the indirection only
+     * defers Spring's wiring decision past construction.
+     */
+    private final ObjectProvider<ProviderInitProbe> providerInitProbeProvider;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** Plugin-registered ChatModel instances: providerId -> ChatModel */
@@ -53,15 +72,37 @@ public class ModelProviderService {
         return pluginChatModels.get(providerId);
     }
 
+    /** RFC-074: visible providers — only the rows the user has explicitly enabled.
+     *  This is what powers the chat dropdown, the failover walker, and the
+     *  Settings/Models main grid. Disabled rows live in {@link #listCatalog()}. */
     public List<ProviderInfoDTO> listProviders() {
-        List<ModelProviderEntity> providers = modelProviderMapper.selectList(new LambdaQueryWrapper<ModelProviderEntity>()
-                .orderByDesc(ModelProviderEntity::getIsLocal)
-                .orderByAsc(ModelProviderEntity::getIsCustom)
-                .orderByAsc(ModelProviderEntity::getName));
+        return listProvidersInternal(true);
+    }
+
+    /** RFC-074: full catalog — enabled and disabled rows alike. Drives the
+     *  "Add Provider" drawer where the user opts into a hidden built-in. */
+    public List<ProviderInfoDTO> listCatalog() {
+        return listProvidersInternal(false);
+    }
+
+    private List<ProviderInfoDTO> listProvidersInternal(boolean enabledOnly) {
+        LambdaQueryWrapper<ModelProviderEntity> qw = new LambdaQueryWrapper<>();
+        if (enabledOnly) {
+            qw.eq(ModelProviderEntity::getEnabled, true);
+        }
+        qw.orderByDesc(ModelProviderEntity::getIsLocal)
+          .orderByAsc(ModelProviderEntity::getIsCustom)
+          .orderByAsc(ModelProviderEntity::getName);
+        List<ModelProviderEntity> providers = modelProviderMapper.selectList(qw);
         Map<String, List<ModelConfigEntity>> modelsByProvider = modelConfigService.listModels().stream()
                 .collect(Collectors.groupingBy(ModelConfigEntity::getProvider));
+        // RFC-073: batch the runtime snapshots once so each toProviderInfo call is O(1)
+        // instead of N pool/tracker round-trips per render.
+        LivenessContext liveness = livenessContext();
 
-        return providers.stream().map(provider -> toProviderInfo(provider, modelsByProvider.get(provider.getProviderId()))).toList();
+        return providers.stream()
+                .map(provider -> toProviderInfo(provider, modelsByProvider.get(provider.getProviderId()), liveness))
+                .toList();
     }
 
     public ProviderInfoDTO updateProviderConfig(String providerId, ProviderConfigRequest request) {
@@ -72,6 +113,12 @@ public class ModelProviderService {
         provider.setBaseUrl(request.getBaseUrl());
         provider.setChatModel(ModelProtocol.resolveChatModel(request.getProtocol(), request.getChatModel()));
         provider.setGenerateKwargs(writeJson(request.getGenerateKwargs()));
+        // RFC-009 P3.5: only update fallback priority when the caller explicitly
+        // sends a value. null leaves it untouched (existing chain unchanged).
+        if (request.getFallbackPriority() != null) {
+            int p = Math.max(0, request.getFallbackPriority());
+            provider.setFallbackPriority(p);
+        }
         modelProviderMapper.updateById(provider);
         tryAutoActivateModel(providerId, provider);
         eventPublisher.publishEvent(new ModelConfigChangedEvent("provider-config-updated"));
@@ -94,6 +141,9 @@ public class ModelProviderService {
         provider.setGenerateKwargs("{}");
         provider.setIsCustom(true);
         provider.setIsLocal(false);
+        // RFC-074: custom providers are user-created, so opt them in by default
+        // — the user just made the row, no need to make them flip a second toggle.
+        provider.setEnabled(true);
         provider.setSupportModelDiscovery(false);
         provider.setSupportConnectionCheck(false);
         provider.setFreezeUrl(false);
@@ -143,6 +193,20 @@ public class ModelProviderService {
         return getProvider(providerId);
     }
 
+    /**
+     * RFC-009: ordered list of providers that participate in the multi-model
+     * failover chain. Filters by {@code fallback_priority > 0} and sorts
+     * ascending, so priority 1 is tried first after the primary model
+     * exhausts retries. An empty list disables fallover entirely.
+     */
+    public List<ModelProviderEntity> listFallbackChain() {
+        com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<ModelProviderEntity> qw =
+                new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<>();
+        qw.gt("fallback_priority", 0);
+        qw.orderByAsc("fallback_priority");
+        return modelProviderMapper.selectList(qw);
+    }
+
     public boolean isProviderConfigured(String providerId) {
         return isProviderConfigured(getProvider(providerId));
     }
@@ -167,6 +231,67 @@ public class ModelProviderService {
             return "Provider 下没有可用模型";
         }
         return null;
+    }
+
+    /**
+     * RFC-074: flip the {@code enabled} flag for a provider. Enabling republishes
+     * {@link ModelConfigChangedEvent} so {@code ProviderInitProbe} re-probes the
+     * fresh row; disabling that owns the current default model auto-promotes
+     * a replacement so chat doesn't break on the next request.
+     *
+     * @return an {@link EnableResult} describing whether the default model was
+     *         switched and to what — the frontend uses it to fire a toast.
+     */
+    public EnableResult setEnabled(String providerId, boolean enabled) {
+        ModelProviderEntity provider = getProvider(providerId);
+        boolean current = Boolean.TRUE.equals(provider.getEnabled());
+        if (current == enabled) {
+            return EnableResult.unchanged();
+        }
+        provider.setEnabled(enabled);
+        modelProviderMapper.updateById(provider);
+        EnableResult result = enabled
+                ? EnableResult.unchanged()
+                : pickReplacementDefaultIfNeeded(providerId);
+        eventPublisher.publishEvent(new ModelConfigChangedEvent(
+                enabled ? "provider-enabled" : "provider-disabled"));
+        return result;
+    }
+
+    /**
+     * If the current default model belongs to {@code disabledProviderId}, find
+     * the first enabled + configured provider that has at least one model and
+     * promote its first model to default. Returns {@link EnableResult#unchanged()}
+     * when no swap was needed (or no replacement exists — in that case the
+     * default stays broken and the empty-state UI will catch it).
+     */
+    private EnableResult pickReplacementDefaultIfNeeded(String disabledProviderId) {
+        ModelConfigEntity currentDefault;
+        try {
+            currentDefault = modelConfigService.getDefaultModel();
+        } catch (MateClawException e) {
+            // No default at all → nothing to switch.
+            return EnableResult.unchanged();
+        }
+        if (!disabledProviderId.equals(currentDefault.getProvider())) {
+            return EnableResult.unchanged();
+        }
+        // Walk enabled providers in DB order, take the first one with a model.
+        List<ModelProviderEntity> candidates = modelProviderMapper.selectList(
+                new LambdaQueryWrapper<ModelProviderEntity>()
+                        .eq(ModelProviderEntity::getEnabled, true)
+                        .ne(ModelProviderEntity::getProviderId, disabledProviderId)
+                        .orderByDesc(ModelProviderEntity::getIsLocal)
+                        .orderByAsc(ModelProviderEntity::getName));
+        for (ModelProviderEntity candidate : candidates) {
+            if (!isProviderConfigured(candidate)) continue;
+            List<ModelConfigEntity> models = modelConfigService.listModelsByProvider(candidate.getProviderId());
+            if (models.isEmpty()) continue;
+            ModelConfigEntity first = models.get(0);
+            modelConfigService.setDefaultModel(candidate.getProviderId(), first.getModelName());
+            return EnableResult.switched(candidate.getProviderId(), first.getModelName());
+        }
+        return EnableResult.unchanged();
     }
 
     private void tryAutoActivateModel(String providerId, ModelProviderEntity provider) {
@@ -202,6 +327,12 @@ public class ModelProviderService {
     }
 
     private ProviderInfoDTO toProviderInfo(ModelProviderEntity provider, List<ModelConfigEntity> models) {
+        return toProviderInfo(provider, models, livenessContext());
+    }
+
+    private ProviderInfoDTO toProviderInfo(ModelProviderEntity provider,
+                                           List<ModelConfigEntity> models,
+                                           LivenessContext liveness) {
         ProviderInfoDTO dto = new ProviderInfoDTO();
         dto.setId(provider.getProviderId());
         dto.setName(provider.getName());
@@ -215,19 +346,45 @@ public class ModelProviderService {
         dto.setFreezeUrl(Boolean.TRUE.equals(provider.getFreezeUrl()));
         dto.setRequireApiKey(Boolean.TRUE.equals(provider.getRequireApiKey()));
         boolean configured = isProviderConfigured(provider);
-        boolean available = configured && models != null && !models.isEmpty();
+        // RFC-073: `available` retains its boolean meaning ("usable right now") but is now
+        // gated on Liveness.LIVE rather than just configuration completeness, so the chat
+        // path and the dropdown stop disagreeing about local providers.
+        Liveness providerLiveness = computeLiveness(provider, configured, liveness);
+        boolean available = providerLiveness == Liveness.LIVE && models != null && !models.isEmpty();
         dto.setConfigured(configured);
         dto.setAvailable(available);
+        dto.setLiveness(providerLiveness);
+        dto.setEnabled(Boolean.TRUE.equals(provider.getEnabled()));
+        applyLivenessDetails(dto, provider.getProviderId(), providerLiveness, liveness);
         dto.setApiKey(maskApiKey(provider.getApiKey()));
         dto.setBaseUrl(provider.getBaseUrl());
         dto.setGenerateKwargs(readJson(provider.getGenerateKwargs()));
         dto.setAuthType(provider.getAuthType() != null ? provider.getAuthType() : "api_key");
-        dto.setOauthConnected(StringUtils.hasText(provider.getOauthAccessToken()));
-        dto.setOauthExpiresAt(provider.getOauthExpiresAt());
+        if (CLAUDE_CODE_PROVIDER_ID.equals(provider.getProviderId())) {
+            // Claude Code OAuth credentials live on disk (RFC-062), not in the
+            // mate_model_provider row. Bypass the column lookup and ask the
+            // service directly. Falls back to false if the bean isn't present
+            // (e.g. minimal test contexts).
+            ClaudeCodeOAuthService svc = claudeCodeOAuthServiceProvider.getIfAvailable();
+            if (svc != null) {
+                ClaudeCodeOAuthService.OAuthStatus status = svc.getStatus();
+                dto.setOauthConnected(status.connected() && !status.expired());
+                dto.setOauthExpiresAt(status.expiresAtMs() > 0L ? status.expiresAtMs() : null);
+            } else {
+                dto.setOauthConnected(false);
+                dto.setOauthExpiresAt(null);
+            }
+        } else {
+            dto.setOauthConnected(StringUtils.hasText(provider.getOauthAccessToken()));
+            dto.setOauthExpiresAt(provider.getOauthExpiresAt());
+        }
+        dto.setFallbackPriority(provider.getFallbackPriority() != null ? provider.getFallbackPriority() : 0);
         List<ModelInfoDTO> builtinModels = new ArrayList<>();
         List<ModelInfoDTO> extraModels = new ArrayList<>();
         if (models != null) {
             for (ModelConfigEntity model : models) {
+                // RFC-049 PR-1-UI: ModelInfoDTO(id, name) derives supportsReasoningEffort
+                // from id via ModelFamily — no extra wiring needed here.
                 ModelInfoDTO info = new ModelInfoDTO(model.getModelName(), model.getName());
                 if (Boolean.TRUE.equals(model.getBuiltin())) {
                     builtinModels.add(info);
@@ -255,6 +412,11 @@ public class ModelProviderService {
 
         // OAuth 认证的 provider：检查 OAuth token 是否存在
         if ("oauth".equals(provider.getAuthType())) {
+            // Claude Code OAuth (RFC-062) — token lives on disk, not in DB.
+            if (CLAUDE_CODE_PROVIDER_ID.equals(provider.getProviderId())) {
+                ClaudeCodeOAuthService svc = claudeCodeOAuthServiceProvider.getIfAvailable();
+                return svc != null && svc.isLoggedIn();
+            }
             return StringUtils.hasText(provider.getOauthAccessToken());
         }
 
@@ -312,4 +474,56 @@ public class ModelProviderService {
             return "{}";
         }
     }
+
+    // ============================================================
+    // RFC-073: Liveness computation
+    // ============================================================
+
+    /** Take one snapshot per render-batch so {@link #toProviderInfo} stays O(1) per provider. */
+    private LivenessContext livenessContext() {
+        return new LivenessContext(providerPool.snapshot(), providerHealthTracker.snapshot(),
+                providerInitProbeProvider.getIfAvailable());
+    }
+
+    private Liveness computeLiveness(ModelProviderEntity provider, boolean configured, LivenessContext ctx) {
+        if (!configured) return Liveness.UNCONFIGURED;
+        String id = provider.getProviderId();
+        // Probe absent in test contexts → fail-open to LIVE so test fixtures don't trip on UNPROBED.
+        if (ctx.initProbe() != null && !ctx.initProbe().hasBeenProbed(id)) {
+            return Liveness.UNPROBED;
+        }
+        AvailableProviderPool.RemovalReason reason = ctx.poolSnapshot().get(id);
+        boolean inPool = ctx.poolSnapshot().containsKey(id) && reason == null;
+        if (!inPool) return Liveness.REMOVED;
+        ProviderHealthTracker.ProviderHealthSnapshot health = ctx.healthSnapshot().get(id);
+        if (health != null && health.cooldownRemainingMs() > 0) return Liveness.COOLDOWN;
+        return Liveness.LIVE;
+    }
+
+    private void applyLivenessDetails(ProviderInfoDTO dto, String providerId,
+                                       Liveness liveness, LivenessContext ctx) {
+        switch (liveness) {
+            case REMOVED -> {
+                AvailableProviderPool.RemovalReason reason = ctx.poolSnapshot().get(providerId);
+                if (reason != null) {
+                    dto.setUnavailableReason(reason.message());
+                    dto.setLastProbedAtMs(reason.removedAtMs());
+                }
+            }
+            case COOLDOWN -> {
+                ProviderHealthTracker.ProviderHealthSnapshot health = ctx.healthSnapshot().get(providerId);
+                if (health != null) {
+                    dto.setCooldownRemainingMs(health.cooldownRemainingMs());
+                }
+                dto.setUnavailableReason("provider in cooldown after consecutive failures");
+            }
+            default -> { /* LIVE / UNPROBED / UNCONFIGURED — no extra fields */ }
+        }
+    }
+
+    /** Per-render snapshot of pool / cooldown / probe-completion state. */
+    private record LivenessContext(
+            Map<String, AvailableProviderPool.RemovalReason> poolSnapshot,
+            Map<String, ProviderHealthTracker.ProviderHealthSnapshot> healthSnapshot,
+            ProviderInitProbe initProbe) {}
 }

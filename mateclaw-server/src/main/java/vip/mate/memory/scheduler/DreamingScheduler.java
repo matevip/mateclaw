@@ -52,7 +52,7 @@ public class DreamingScheduler {
                 continue;
             }
             try {
-                emergenceService.consolidate(agent.getId());
+                emergenceService.consolidate(agent.getId(), vip.mate.memory.service.DreamMode.NIGHTLY, null);
                 success++;
             } catch (Exception e) {
                 failed++;

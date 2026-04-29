@@ -5,6 +5,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.agent.AgentService;
+import vip.mate.agent.binding.model.AgentProviderPreference;
 import vip.mate.agent.binding.model.AgentSkillBinding;
 import vip.mate.agent.binding.model.AgentToolBinding;
 import vip.mate.agent.binding.service.AgentBindingService;
@@ -99,6 +100,33 @@ public class AgentBindingController {
         agentService.invalidateAgentCache(agentId);
         auditEventService.record("UPDATE", "AGENT_TOOL", String.valueOf(agentId),
                 "tools=" + toolNames.size(), null);
+        return R.ok();
+    }
+
+    // ==================== Provider Preferences (RFC-009 PR-3) ====================
+
+    @Operation(summary = "获取 Agent 的偏好 Provider 顺序")
+    @GetMapping("/provider-preferences")
+    @RequireWorkspaceRole("viewer")
+    public R<List<AgentProviderPreference>> listProviderPreferences(
+            @PathVariable Long agentId,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyAgentWorkspace(agentId, workspaceId);
+        return R.ok(bindingService.listProviderPreferences(agentId));
+    }
+
+    @Operation(summary = "批量设置 Agent 的偏好 Provider 顺序（替换模式）")
+    @PutMapping("/provider-preferences")
+    @RequireWorkspaceRole("member")
+    public R<Void> setProviderPreferences(
+            @PathVariable Long agentId,
+            @RequestBody List<String> providerIds,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyAgentWorkspace(agentId, workspaceId);
+        bindingService.setProviderPreferences(agentId, providerIds);
+        agentService.invalidateAgentCache(agentId);
+        auditEventService.record("UPDATE", "AGENT_PROVIDER_PREF", String.valueOf(agentId),
+                "providers=" + providerIds.size(), null);
         return R.ok();
     }
 

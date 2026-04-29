@@ -43,6 +43,7 @@ public class SkillManageTool {
     /** Skill 内容最大长度（~25K tokens） */
     private static final int MAX_CONTENT_CHARS = 100_000;
 
+    @vip.mate.tool.ConcurrencyUnsafe("create/edit/patch/delete on the shared skill registry; concurrent ops on the same skill name race")
     @Tool(description = """
         Manage reusable skills: create, edit, patch, or delete skill procedures (SKILL.md format).
 

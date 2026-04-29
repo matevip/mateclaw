@@ -1,5 +1,6 @@
 package vip.mate.skill.controller;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -34,10 +35,28 @@ public class SkillController {
     private final SkillWorkspaceManager workspaceManager;
     private final SkillSynthesisService synthesisService;
 
-    @Operation(summary = "获取技能列表")
+    @Operation(summary = "获取技能分页列表（RFC-042 §2.1）")
     @GetMapping
-    public R<List<SkillEntity>> list() {
-        return R.ok(skillService.listSkills());
+    public R<IPage<SkillEntity>> list(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String skillType,
+            @RequestParam(required = false) Boolean enabled,
+            @RequestParam(required = false) String scanStatus) {
+        return R.ok(skillService.pageSkills(page, size, keyword, skillType, enabled, scanStatus));
+    }
+
+    @Operation(summary = "获取各类型技能计数（tab 徽章用）")
+    @GetMapping("/counts")
+    public R<Map<String, Long>> counts() {
+        return R.ok(skillService.countByType());
+    }
+
+    @Operation(summary = "重新扫描单个技能（RFC-042 §2.3.4）")
+    @PostMapping("/{id}/rescan")
+    public R<SkillEntity> rescan(@PathVariable Long id) {
+        return R.ok(skillService.rescanSecurity(id));
     }
 
     @Operation(summary = "获取已启用技能列表")

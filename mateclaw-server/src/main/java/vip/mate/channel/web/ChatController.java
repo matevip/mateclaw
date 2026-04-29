@@ -14,13 +14,14 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import org.springframework.context.ApplicationEventPublisher;
 import vip.mate.common.result.R;
 import vip.mate.agent.AgentService;
 import vip.mate.agent.model.AgentEntity;
-import vip.mate.approval.ApprovalService;
+import vip.mate.approval.ApprovalWorkflowService;
+import vip.mate.approval.MetadataDecision;
 import vip.mate.approval.PendingApproval;
-import vip.mate.memory.event.ConversationCompletedEvent;
+import vip.mate.approval.ResolveOutcome;
+import vip.mate.memory.event.ConversationCompletionPublisher;
 import vip.mate.workspace.conversation.ConversationService;
 import vip.mate.workspace.conversation.model.MessageContentPart;
 import vip.mate.workspace.conversation.model.MessageEntity;
@@ -56,10 +57,10 @@ public class ChatController {
 
     private final AgentService agentService;
     private final ConversationService conversationService;
-    private final ApprovalService approvalService;
+    private final ApprovalWorkflowService approvalService;
     private final ChatStreamTracker streamTracker;
     private final ObjectMapper objectMapper;
-    private final ApplicationEventPublisher eventPublisher;
+    private final ConversationCompletionPublisher completionPublisher;
     private final Path uploadRoot = Paths.get("data", "chat-uploads");
 
     // 使用虚拟线程池处理 SSE（Java 17+ 兼容，Java 21 可用 Executors.newVirtualThreadPerTaskExecutor()）
@@ -80,7 +81,8 @@ public class ChatController {
 
         String conversationId = request.getConversationId() != null ? request.getConversationId() : "default";
         // SSE 超时设为 10 分钟，覆盖 servlet 默认的 30s，避免长回答被中断
-        SseEmitter emitter = new SseEmitter(10 * 60 * 1000L);
+        // RFC-058 PR-1: Utf8SseEmitter 显式声明 charset=UTF-8，防止中文在 Windows 中文 Chrome / 部分代理处乱码
+        SseEmitter emitter = new Utf8SseEmitter(10 * 60 * 1000L);
 
         // ---- 分支 A：断线重连 ----
         if (Boolean.TRUE.equals(request.getReconnect())) {
@@ -100,11 +102,37 @@ public class ChatController {
 
             registerEmitterCallbacks(emitter, conversationId);
 
+            // Issue #17 — distinguish "stream truly completed on this node"
+            // from "stream is running on another node (multi-node deployment
+            // without sticky session)". They look identical from attach()'s
+            // boolean return, but the user-facing remediation is different.
+            boolean existsLocally = streamTracker.streamExistsOnThisNode(conversationId);
             boolean attached = streamTracker.attach(conversationId, emitter);
             if (!attached) {
-                // 没有活跃的流（已完成或服务器重启后丢失），通知前端直接结束
                 try {
-                    sendEvent(emitter, "done", Map.of("status", "completed"));
+                    if (existsLocally) {
+                        // RunState exists here but is done — stream finished normally
+                        sendEvent(emitter, "done", Map.of("status", "completed"));
+                    } else {
+                        // No RunState on this node. Either:
+                        //  (a) The stream finished long ago and was cleaned up, OR
+                        //  (b) Multi-node deployment routed this reconnect to a
+                        //      DIFFERENT node than the originating one. The CE
+                        //      build assumes single-instance (see ChatStreamTracker
+                        //      class javadoc and rfc-054 §0); LB must be configured
+                        //      for sticky session by conversationId.
+                        // We can't tell (a) from (b) at this layer, so emit an
+                        // explicit code the front-end can surface to operators.
+                        log.info("SSE reconnect: no RunState locally for conversationId={} — " +
+                                "either completed-and-cleaned or running on another node", conversationId);
+                        sendEvent(emitter, "done", Map.of(
+                                "status", "stream_not_local",
+                                "message", "Stream is not active on this node. " +
+                                        "If you're running a multi-node deployment, " +
+                                        "verify the load balancer is configured for sticky " +
+                                        "session by conversationId. See deploy/multi-node-deployment.md."
+                        ));
+                    }
                 } catch (IOException e) {
                     log.warn("SSE reconnect done send error: {}", e.getMessage());
                 }
@@ -164,19 +192,20 @@ public class ChatController {
                 return emitter;
             }
 
-            // deny: 解决并清理 DB 残留
+            // deny: workflow.resolve handles DB + metadata + memory atomically.
             if (isDenyCommand) {
-                approvalService.resolve(pending.getPendingId(), username, "denied");
+                ResolveOutcome denyOutcome = approvalService.resolve(pending.getPendingId(), username, "denied");
                 conversationService.removeApprovalPlaceholders(conversationId);
-                log.info("[Approval-Stream] User {} denied pending {} for conversation {}",
-                        username, pending.getPendingId(), conversationId);
+                log.info("[Approval-Stream] User {} denied pending {} for conversation {} (dbSynced={}, msgRewritten={})",
+                        username, pending.getPendingId(), conversationId,
+                        denyOutcome.dbSynced(), denyOutcome.messagesRewritten());
             }
 
-            // approve: 原子 resolveAndConsume（消除 resolve/consume race condition）
+            // approve: atomic resolveAndConsume; workflow handles DB + metadata + memory.
             PendingApproval consumed = null;
             if (isApprovalCommand) {
-                consumed = approvalService.resolveAndConsume(pending.getPendingId(), username);
-                if (consumed == null) {
+                ResolveOutcome consumeOutcome = approvalService.resolveAndConsume(pending.getPendingId(), username);
+                if (consumeOutcome.isAlreadyResolved()) {
                     try {
                         sendEvent(emitter, "error", Map.of("message", "审批记录已过期或已被处理"));
                         sendEvent(emitter, "done", Map.of("status", "completed"));
@@ -184,10 +213,12 @@ public class ChatController {
                     emitter.complete();
                     return emitter;
                 }
-                // 清理 DB 中残留的审批占位消息（对齐 IM 渠道 replayApprovedToolCall）
+                consumed = consumeOutcome.consumedSnapshot();
+                // Clear residual approval placeholder messages so the LLM context for
+                // replay doesn't include "[Awaiting approval]" text artifacts.
                 conversationService.removeApprovalPlaceholders(conversationId);
-                log.info("[Approval-Stream] User {} approved pending {} for conversation {}",
-                        username, consumed.getPendingId(), conversationId);
+                log.info("[Approval-Stream] User {} approved pending {} for conversation {} (msgRewritten={})",
+                        username, consumed.getPendingId(), conversationId, consumeOutcome.messagesRewritten());
             }
 
             final PendingApproval finalConsumed = consumed;
@@ -252,8 +283,18 @@ public class ChatController {
                     String replayPrompt = "继续执行已批准的工具调用。";
 
                     streamTracker.incrementFlux(conversationId);
+                    // RFC-063r §2.12: prefer the persisted Memento snapshot
+                    // (covers cross-restart approval where the original channel
+                    // is gone) and fall back to a fresh web-origin
+                    // ChatOrigin when none was captured.
+                    vip.mate.agent.context.ChatOrigin replayOrigin =
+                            approvalService.restoreChatOrigin(finalConsumed.getChatOrigin());
+                    if (replayOrigin == vip.mate.agent.context.ChatOrigin.EMPTY) {
+                        replayOrigin = vip.mate.agent.context.ChatOrigin.web(
+                                conversationId, username, workspaceId, null);
+                    }
                     Disposable disposable = agentService.chatWithReplayStream(
-                            replayAgentId, replayPrompt, conversationId, finalConsumed.getToolCallPayload(), username)
+                            replayAgentId, replayPrompt, conversationId, finalConsumed.getToolCallPayload(), username, replayOrigin)
                             .doOnNext(delta -> {
                                 if (approvalEmitterDone.get()) return;
                                 try {
@@ -264,27 +305,38 @@ public class ChatController {
                             })
                             .doOnComplete(() -> {
                                 if (!finalized.compareAndSet(false, true)) return;
+                                // RFC-067 §4.6: replay can re-trigger an approval (the approved tool
+                                // call may chain into another guarded tool). Derive status the same
+                                // way as the normal stream so awaiting_approval doesn't get masked
+                                // as completed.
+                                boolean replayWasStopped = streamTracker.isStopRequested(conversationId);
+                                ChatStreamTracker.InterruptType replayInterrupt = streamTracker.getInterruptType(conversationId);
+                                boolean replayIsError = accumulator.getContent() != null
+                                        && accumulator.getContent().startsWith("[错误] ");
+                                String persistStatus = derivePersistStatus(
+                                        accumulator.isAwaitingApproval(), replayIsError,
+                                        replayWasStopped, replayInterrupt);
                                 try {
                                     MessageEntity savedAssistant = null;
                                     List<MessageContentPart> parts = accumulator.toAssistantParts();
                                     String text = accumulator.getContent();
                                     if (!text.isBlank() || !parts.isEmpty()) {
                                         savedAssistant = conversationService.saveMessage(conversationId, "assistant", text, parts,
-                                                "completed",
+                                                persistStatus,
                                                 accumulator.getPromptTokens(),
                                                 accumulator.getCompletionTokens(),
                                                 accumulator.getRuntimeModelName(),
                                                 accumulator.getRuntimeProviderId(),
-                                                accumulator.toMetadataJson());  // 包含 toolCalls 元数据
+                                                accumulator.toMetadataJson());  // includes toolCalls metadata
                                     }
                                     broadcastEvent(conversationId, "message_complete", Map.of(
-                                            "status", "completed",
+                                            "status", persistStatus,
                                             "hasThinking", !accumulator.getThinking().isBlank(),
                                             "hasContent", !text.isBlank()
                                     ));
                                     int msgCount = conversationService.getMessageCount(conversationId);
                                     broadcastEvent(conversationId, "done", buildDonePayload(
-                                            conversationId, "completed", savedAssistant, 0, 0, true, msgCount));
+                                            conversationId, persistStatus, savedAssistant, 0, 0, true, msgCount));
                                 } catch (Exception e) {
                                     log.warn("SSE replay complete error: {}", e.getMessage());
                                 } finally {
@@ -418,7 +470,12 @@ public class ChatController {
                 ));
 
                 streamTracker.incrementFlux(conversationId);
-                Disposable disposable = agentService.chatStructuredStream(agentId, promptText, conversationId, username, request.getThinkingLevel())
+                // RFC-063r §2.5: web entry — null channelId / no ChannelTarget;
+                // tools that need a workspace path read it from the agent (origin
+                // is enriched with workspaceBasePath in StateGraph buildInitialState).
+                vip.mate.agent.context.ChatOrigin webOrigin =
+                        vip.mate.agent.context.ChatOrigin.web(conversationId, username, workspaceId, null);
+                Disposable disposable = agentService.chatStructuredStream(agentId, promptText, conversationId, username, request.getThinkingLevel(), webOrigin)
                         .doOnNext(delta -> {
                             if (emitterDone.get()) return;
                             try {
@@ -429,21 +486,25 @@ public class ChatController {
                         })
                         .doOnComplete(() -> {
                             if (!finalized.compareAndSet(false, true)) return;
-                            // 区分三种完成语义：
+                            // 区分四种完成语义：
                             // 1. 正常完成（stopRequested=false）→ completed
                             // 2. 用户主动停止 → stopped
                             // 3. 用户中断后续跑（interrupt-with-followup）→ interrupted
+                            // 4. LLM 客户端错误 / typed error → error
+                            //    （NodeStreamingChatHelper 把 typed error 序列化为 "[错误] "
+                            //     前缀的文本作为 content_delta 注入，accumulator 不区分，
+                            //     这里靠前缀识别。打标 status='error' 后，BaseAgent
+                            //     的 history sanitization 阶段会跳过这类消息，避免下次
+                            //     prompt 被污染——DeepSeek thinking mode 缺
+                            //     reasoning_content 立即 400，Claude 不接受 assistant
+                            //     prefill 也 400，二者循环复制错误。）
                             boolean wasStopped = streamTracker.isStopRequested(conversationId);
                             ChatStreamTracker.InterruptType interruptType = streamTracker.getInterruptType(conversationId);
                             boolean isInterruptFollowup = interruptType == ChatStreamTracker.InterruptType.USER_INTERRUPT_WITH_FOLLOWUP;
-                            String persistStatus;
-                            if (accumulator.isAwaitingApproval()) {
-                                persistStatus = "awaiting_approval";
-                            } else if (!wasStopped) {
-                                persistStatus = "completed";
-                            } else {
-                                persistStatus = isInterruptFollowup ? "interrupted" : "stopped";
-                            }
+                            boolean isError = accumulator.getContent() != null
+                                    && accumulator.getContent().startsWith("[错误] ");
+                            String persistStatus = derivePersistStatus(
+                                    accumulator.isAwaitingApproval(), isError, wasStopped, interruptType);
                             try {
                                 MessageEntity savedAssistant = null;
                                 List<MessageContentPart> assistantParts = accumulator.toAssistantParts();
@@ -462,15 +523,12 @@ public class ChatController {
                                     savedAssistant = conversationService.saveMessage(conversationId, "assistant",
                                             isInterruptFollowup ? "[已中断]" : "[已停止生成]", null, persistStatus);
                                 }
-                                // 发布对话完成事件（仅正常完成时，停止/中断不触发记忆提取）
-                                if (!wasStopped) {
-                                    try {
-                                        int msgCount = conversationService.getMessageCount(conversationId);
-                                        eventPublisher.publishEvent(new ConversationCompletedEvent(
-                                                agentId, conversationId, message, assistantText, msgCount, "web"));
-                                    } catch (Exception ex) {
-                                        log.debug("[Memory] Failed to publish ConversationCompletedEvent: {}", ex.getMessage());
-                                    }
+                                // 发布对话完成事件（仅正常完成时；停止/中断/错误均不触发记忆提取）
+                                // RFC-049 follow-up: also skip on isError — error turns persist
+                                // garbage like "[错误] Bad request..." as the assistant reply,
+                                // which would pollute the memory extraction pipeline if propagated.
+                                if (!wasStopped && !isError) {
+                                    completionPublisher.publish(agentId, conversationId, message, assistantText, "web");
                                 }
 
                                 if (isInterruptFollowup) {
@@ -500,7 +558,19 @@ public class ChatController {
                                 streamTracker.clearInterruptState(conversationId);
                                 ChatStreamTracker.CompletionResult cr = streamTracker.completeAndConsumeIfLast(conversationId);
                                 if (cr.allDone()) {
-                                    if (cr.queuedInput() != null && (isInterruptFollowup || !wasStopped)) {
+                                    // RFC follow-up (2026-04-27): the previous guard
+                                    //   cr.queuedInput() != null && (isInterruptFollowup || !wasStopped)
+                                    // dropped legitimate queued messages when the user stopped
+                                    // the running turn and then sent a new message via the
+                                    // enqueue path (not the interrupt-with-followup path) —
+                                    // wasStopped=true + isInterruptFollowup=false made the
+                                    // guard false, the consumed queuedInput was discarded,
+                                    // and the user's new message vanished. The other 4 sites
+                                    // in this controller already use the simpler "if queued,
+                                    // run it" condition; align with them. If the user
+                                    // genuinely doesn't want continuation, no message would
+                                    // have been in messageQueue to begin with.
+                                    if (cr.queuedInput() != null) {
                                         startQueuedMessage(conversationId, emitter, emitterDone, cr.queuedInput(), username);
                                     } else {
                                         conversationService.updateStreamStatus(conversationId, "idle");
@@ -664,17 +734,21 @@ public class ChatController {
                             log.info("SSE doOnError cleanup: conversationId={}, allDone={}, isInterruptFollowup={}, hasQueued={}",
                                     conversationId, cr.allDone(), isInterruptFollowup, cr.queuedInput() != null);
                             if (cr.allDone()) {
-                                // 修复：非用户主动停止时也消费排队消息
-                                // isUserStop && !isInterruptFollowup = 用户点了 Stop，不应续跑
-                                boolean userExplicitStop = isUserStop && !isInterruptFollowup;
-                                if (cr.queuedInput() != null && !userExplicitStop) {
+                                // RFC follow-up (2026-04-27): the previous guard
+                                //   cr.queuedInput()!=null && !(isUserStop && !isInterruptFollowup)
+                                // tried to suppress continuation when the user "explicitly
+                                // stopped" without an interrupt-with-followup. But the
+                                // frontend's enqueue path doesn't set interruptType — it
+                                // just calls requestStop + offers to messageQueue. From the
+                                // server's POV that's "isUserStop=true, isInterruptFollowup=
+                                // false, queue has content", which the guard mis-classified
+                                // as "abort" and silently dropped the user's freshly-typed
+                                // follow-up. Whoever puts a message in messageQueue means it
+                                // — just run it. Aligns with doOnComplete and the 4 other
+                                // queue-launch sites in this controller.
+                                if (cr.queuedInput() != null) {
                                     startQueuedMessage(conversationId, emitter, emitterDone, cr.queuedInput(), username);
                                 } else {
-                                    // 即使不续跑，如果有排队消息也要持久化用户消息（防丢失，幂等）
-                                    if (cr.queuedInput() != null && !cr.queuedInput().persisted()) {
-                                        conversationService.saveMessage(conversationId, "user",
-                                                cr.queuedInput().message(), null, "queued");
-                                    }
                                     conversationService.updateStreamStatus(conversationId, "idle");
                                     completeEmitterQuietly(emitter, emitterDone);
                                 }
@@ -687,6 +761,10 @@ public class ChatController {
 
                 // 将 Disposable 注册到 StreamTracker，以便 stop 端点可以取消它
                 streamTracker.setDisposable(conversationId, disposable);
+                // JVM 关闭时优雅落盘：避免 mvn spring-boot:run 重启 / SIGTERM 把
+                // 进行中 turn 的 assistant 消息丢失（doOnError 来不及在 Hikari 关闭前执行）
+                streamTracker.setEmergencySaveCallback(conversationId,
+                        () -> emergencySaveAccumulator(conversationId, accumulator));
 
             } catch (Exception e) {
                 log.error("SSE setup error: {}", e.getMessage());
@@ -707,27 +785,56 @@ public class ChatController {
     /**
      * 停止指定会话的流式生成。
      * 取消 Flux 订阅（底层 HTTP 连接也会随之关闭），已生成的部分内容以 stopped 状态入库。
+     * <p>
+     * Stop 同时清理所有未 resolve 的 pending approval：当 LLM 在一个 turn 里连发了
+     * 多个需要审批的工具调用、用户在中间 Stop 时，这些 pending 会一直留在 in-memory
+     * pendingMap 里。下次刷新页面时 frontend 的 hydrate 链路（`getPendingApprovals` API
+     * + 消息 metadata 里的 `pendingApproval` 字段）会反复弹出"允许 xxx 执行？"banner。
+     * Stop 端点现在 deny 所有 pending、同步 update 受影响 message 的 metadata，并广播
+     * tool_approval_resolved 让前端实时清理 UI。
      */
     @Operation(summary = "停止流式生成")
     @PostMapping("/{conversationId}/stop")
-    public R<Map<String, Boolean>> stopStream(@PathVariable String conversationId, Authentication auth) {
+    public R<Map<String, Object>> stopStream(@PathVariable String conversationId, Authentication auth) {
         String username = auth != null ? auth.getName() : "anonymous";
         // 权限校验：已认证用户需验证会话归属，匿名用户（permitAll）直接放行
         if (auth != null && !conversationService.isConversationOwner(conversationId, username)) {
             return R.fail("无权操作该会话");
         }
         boolean stopped = streamTracker.requestStop(conversationId);
-        log.info("Stop requested: conversationId={}, user={}, stopped={}", conversationId, username, stopped);
-        return R.ok(Map.of("stopped", stopped));
+
+        // Sweep ghost approvals — workflow.denyAllByConversation owns DB + metadata + memory
+        // atomically; we only need to broadcast SSE events on the resulting outcomes.
+        List<ResolveOutcome> denied = approvalService.denyAllByConversation(conversationId, username);
+        int messagesRewritten = denied.stream().mapToInt(ResolveOutcome::messagesRewritten).sum();
+        for (ResolveOutcome o : denied) {
+            broadcastEvent(conversationId, "tool_approval_resolved", Map.of(
+                    "pendingId", o.pendingId(),
+                    "decision", "denied",
+                    "toolName", o.toolName() != null ? o.toolName() : "",
+                    "timestamp", System.currentTimeMillis()
+            ));
+        }
+
+        log.info("Stop requested: conversationId={}, user={}, stopped={}, ghostPendingsCleared={}, messagesRewritten={}",
+                conversationId, username, stopped, denied.size(), messagesRewritten);
+        return R.ok(Map.of(
+                "stopped", stopped,
+                "ghostPendingsCleared", denied.size(),
+                "messagesRewritten", messagesRewritten
+        ));
     }
 
     /**
-     * 中断当前流并排队一条后续消息。
+     * 在执行中追加一条后续消息：仅入队，等当前 turn 自然结束后再启动。
      * <p>
-     * 与 stop 的区别：interrupt 会在当前 turn 安全结束后自动启动排队消息。
-     * 如果当前阶段不可中断（awaiting_approval），消息会被排队但不打断当前执行。
+     * 对齐 Claude Code 行为：流式输出过程中收到新输入不会强制 dispose 当前 LLM 调用，
+     * 而是仅入队。当前 turn 跑到 doOnComplete/doOnError 后由 startQueuedMessage 接管。
+     * <p>
+     * 旧行为（dispose 当前 disposable + 立即重启）会导致部分 LLM 输出被丢弃 + token 浪费，
+     * 已废弃。如果未来需要"立即打断"语义，应该走 /stop（用户主动取消）+ 重新发起新消息的路径。
      */
-    @Operation(summary = "中断并排队后续消息")
+    @Operation(summary = "排队后续消息（不打断当前流）")
     @PostMapping("/{conversationId}/interrupt")
     public R<Map<String, Object>> interruptStream(
             @PathVariable String conversationId,
@@ -746,34 +853,20 @@ public class ChatController {
         Long agentId = request.getAgentId();
         List<MessageContentPart> contentParts = request.getContentParts();
 
-        // 判断当前阶段是否可中断
-        // awaiting_approval 阶段不直接中断，只排队
+        // 判断当前阶段（仅用于 reason 字段，行为对所有阶段一致：仅入队）
         boolean isAwaitingApproval = approvalService.findPendingByConversation(conversationId) != null;
 
-        if (isAwaitingApproval) {
-            // 不可中断：排队但不打断。先持久化（含 contentParts）再入队（persisted=true）
-            conversationService.saveMessage(conversationId, "user", message, contentParts, "queued");
-            boolean queued = streamTracker.enqueueMessage(conversationId, message, agentId, true);
-            log.info("Interrupt requested during approval, message queued: conversationId={}, user={}, queueSize={}",
-                    conversationId, username, streamTracker.getQueueSize(conversationId));
-            return R.ok(Map.of(
-                    "interrupted", false,
-                    "queued", queued,
-                    "reason", "awaiting_approval"
-            ));
-        }
-
-        // 可中断：先持久化（含 contentParts）再打断并入队（persisted=true）
-        conversationService.saveMessage(conversationId, "user", message, contentParts, "queued");
-        boolean interrupted = streamTracker.requestInterrupt(conversationId, message, agentId, true);
-        log.info("Interrupt requested: conversationId={}, user={}, interrupted={}, queueSize={}",
-                conversationId, username, interrupted, streamTracker.getQueueSize(conversationId));
+        // 仅入队、不 dispose。延迟持久化到 startQueuedMessage（让 Asst-N 先在 doOnComplete 落库，
+        // 否则 listMessages ORDER BY create_time ASC 会把 Q(N+1) 排到 Asst-N 前面）
+        boolean queued = streamTracker.enqueueMessage(conversationId, message, agentId, false, contentParts);
+        log.info("Enqueued follow-up message during running turn: conversationId={}, user={}, queueSize={}, awaitingApproval={}",
+                conversationId, username, streamTracker.getQueueSize(conversationId), isAwaitingApproval);
 
         return R.ok(Map.of(
-                "interrupted", interrupted,
-                "queued", true,
+                "interrupted", false,
+                "queued", queued,
                 "queueSize", streamTracker.getQueueSize(conversationId),
-                "reason", interrupted ? "interrupted" : "queued"
+                "reason", isAwaitingApproval ? "awaiting_approval" : "queued"
         ));
     }
 
@@ -806,14 +899,7 @@ public class ChatController {
         String promptText = buildPromptText(request.getMessage(), request.getContentParts());
         String response = agentService.chat(agentId, promptText, request.getConversationId());
         conversationService.saveMessage(request.getConversationId(), "assistant", response);
-        // 发布对话完成事件
-        try {
-            int msgCount = conversationService.getMessageCount(request.getConversationId());
-            eventPublisher.publishEvent(new ConversationCompletedEvent(
-                    agentId, request.getConversationId(), request.getMessage(), response, msgCount, "web"));
-        } catch (Exception ex) {
-            log.debug("[Memory] Failed to publish ConversationCompletedEvent: {}", ex.getMessage());
-        }
+        completionPublisher.publish(agentId, request.getConversationId(), request.getMessage(), response, "web");
         return R.ok(response);
     }
 
@@ -965,9 +1051,12 @@ public class ChatController {
         log.info("Starting queued message: conversationId={}, agentId={}, message={}",
                 conversationId, agentId, queuedMessage.substring(0, Math.min(30, queuedMessage.length())));
 
-        // 持久化排队的用户消息（幂等：如果 /interrupt 已提前持久化则跳过）
+        // 持久化排队的用户消息（含 contentParts；幂等：如果 /interrupt 已提前持久化则跳过）。
+        // 这里持久化是为了确保 user 消息在 assistant 消息（doOnError/doOnCancel 已写入）之后落库，
+        // 让 listMessages ORDER BY create_time ASC 后顺序正确：Q1 → Asst1 → Q2 → Asst2。
         if (queuedMessage != null && !queuedMessage.isBlank() && !preConsumedInput.persisted()) {
-            conversationService.saveMessage(conversationId, "user", queuedMessage);
+            conversationService.saveMessage(conversationId, "user", queuedMessage,
+                    preConsumedInput.contentParts(), "queued");
         }
 
         // 广播 queued_input_started 事件
@@ -987,7 +1076,12 @@ public class ChatController {
         broadcastEvent(conversationId, "message_start", Map.of("role", "assistant"));
 
         streamTracker.incrementFlux(conversationId);
-        Disposable disposable = agentService.chatStructuredStream(agentId, queuedMessage, conversationId, requesterId)
+        // RFC-063r §2.5: queued messages land in the same conversation; carry
+        // a web-origin ChatOrigin so any cron job created during the queued
+        // turn keeps a consistent (null-channel) binding.
+        vip.mate.agent.context.ChatOrigin queuedOrigin =
+                vip.mate.agent.context.ChatOrigin.web(conversationId, requesterId, null, null);
+        Disposable disposable = agentService.chatStructuredStream(agentId, queuedMessage, conversationId, requesterId, null, queuedOrigin)
                 .doOnNext(delta -> {
                     if (emitterDone.get()) return;
                     try {
@@ -998,13 +1092,24 @@ public class ChatController {
                 })
                 .doOnComplete(() -> {
                     if (!finalized.compareAndSet(false, true)) return;
+                    // RFC-067 §4.6: queued stream can hit a tool_approval_requested event
+                    // mid-flight. Derive status via the shared helper so awaiting_approval
+                    // is not silently downgraded to completed (which would prematurely fire
+                    // expirePendingApprovals on the frontend and ghost-clear the banner).
+                    boolean queuedWasStopped = streamTracker.isStopRequested(conversationId);
+                    ChatStreamTracker.InterruptType queuedInterrupt = streamTracker.getInterruptType(conversationId);
+                    boolean queuedIsError = accumulator.getContent() != null
+                            && accumulator.getContent().startsWith("[错误] ");
+                    String persistStatus = derivePersistStatus(
+                            accumulator.isAwaitingApproval(), queuedIsError,
+                            queuedWasStopped, queuedInterrupt);
                     try {
                         MessageEntity savedAssistant = null;
                         List<MessageContentPart> parts = accumulator.toAssistantParts();
                         String text = accumulator.getContent();
                         if (!text.isBlank() || !parts.isEmpty()) {
                             savedAssistant = conversationService.saveMessage(conversationId, "assistant", text, parts,
-                                    "completed",
+                                    persistStatus,
                                     accumulator.getPromptTokens(),
                                     accumulator.getCompletionTokens(),
                                     accumulator.getRuntimeModelName(),
@@ -1012,12 +1117,12 @@ public class ChatController {
                                     accumulator.toMetadataJson());
                         }
                         broadcastEvent(conversationId, "message_complete", Map.of(
-                                "status", "completed",
+                                "status", persistStatus,
                                 "hasThinking", !accumulator.getThinking().isBlank(),
                                 "hasContent", !text.isBlank()
                         ));
                         broadcastEvent(conversationId, "done", buildDonePayload(
-                                conversationId, "completed", savedAssistant,
+                                conversationId, persistStatus, savedAssistant,
                                 accumulator.getPromptTokens(), accumulator.getCompletionTokens(), true,
                                 conversationService.getMessageCount(conversationId)));
                     } catch (Exception e) {
@@ -1078,6 +1183,8 @@ public class ChatController {
                 })
                 .subscribe();
         streamTracker.setDisposable(conversationId, disposable);
+        streamTracker.setEmergencySaveCallback(conversationId,
+                () -> emergencySaveAccumulator(conversationId, accumulator));
     }
 
     private void sendEvent(SseEmitter emitter, String name, Object data) throws IOException {
@@ -1098,6 +1205,35 @@ public class ChatController {
             payload = "{\"message\":\"serialization_error\"}";
         }
         streamTracker.broadcast(conversationId, name, payload);
+    }
+
+    /**
+     * Derive the persistence status for an assistant message at stream finalization
+     * (RFC-067 §4.6). Five-way state machine:
+     * <ul>
+     *   <li>{@code awaiting_approval} — accumulator hit a tool_approval_requested
+     *       event; the turn is paused, not finished. queued / replay paths must not
+     *       collapse this to {@code completed}.</li>
+     *   <li>{@code error} — content carries the typed-error prefix from the LLM
+     *       client. BaseAgent history sanitization skips these on the next prompt
+     *       so error text doesn't poison the conversation.</li>
+     *   <li>{@code completed} — clean finish, default case.</li>
+     *   <li>{@code interrupted} — user halted the running turn AND queued a
+     *       follow-up message (interrupt-with-followup).</li>
+     *   <li>{@code stopped} — user pressed Stop without follow-up.</li>
+     * </ul>
+     * Package-private so {@link vip.mate.channel.web.ChatControllerPersistStatusTest}
+     * can exercise the truth table directly without spinning up the controller.
+     */
+    static String derivePersistStatus(boolean isAwaitingApproval,
+                                      boolean isError,
+                                      boolean wasStopped,
+                                      ChatStreamTracker.InterruptType interruptType) {
+        if (isAwaitingApproval) return "awaiting_approval";
+        if (isError)            return "error";
+        if (!wasStopped)        return "completed";
+        return interruptType == ChatStreamTracker.InterruptType.USER_INTERRUPT_WITH_FOLLOWUP
+                ? "interrupted" : "stopped";
     }
 
     private Map<String, Object> buildDonePayload(String conversationId, String status, MessageEntity savedAssistant,
@@ -1124,6 +1260,54 @@ public class ChatController {
             payload.put("assistantMessageId", savedAssistant.getId());
         }
         return payload;
+    }
+
+    /**
+     * Snapshot the accumulator and persist it as an assistant message during JVM shutdown.
+     * Invoked from {@link ChatStreamTracker#onShutdown()} so any in-flight turn doesn't
+     * lose its already-streamed content + tool calls when the process exits.
+     * <p>
+     * Status routing (RFC-067 §4.6):
+     * <ul>
+     *   <li>If the accumulator was awaiting approval at shutdown, the message keeps
+     *       {@code awaiting_approval}. After restart, {@code recoverFromDb} re-registers
+     *       the pending in memory and the existing approval banner remains coherent
+     *       with both DB and metadata. Falling back to {@code interrupted_shutdown}
+     *       here would orphan the message metadata (UI would render "interrupted"
+     *       while the approval is still recoverable).</li>
+     *   <li>Otherwise {@code interrupted_shutdown} as before.</li>
+     * </ul>
+     * Idempotent w.r.t. the normal doOnComplete/doOnError save: if those paths already
+     * persisted the message, this writes a second row, which is rare in practice
+     * (race window is sub-second between dispose and save) and acceptable. Skipping
+     * save when nothing to save avoids empty rows.
+     */
+    private void emergencySaveAccumulator(String conversationId, StreamAccumulator accumulator) {
+        try {
+            String text = accumulator.getContent();
+            List<MessageContentPart> parts = accumulator.toAssistantParts();
+            if (text.isBlank() && parts.isEmpty()) {
+                return;
+            }
+            boolean awaitingApproval = accumulator.isAwaitingApproval();
+            String status = awaitingApproval ? "awaiting_approval" : "interrupted_shutdown";
+            String savedText = text.isBlank()
+                    ? (awaitingApproval ? "[等待审批 — 服务重启]" : "[已中断 — 服务重启]")
+                    : text;
+            conversationService.saveMessage(conversationId, "assistant", savedText, parts,
+                    status,
+                    accumulator.getPromptTokens(),
+                    accumulator.getCompletionTokens(),
+                    accumulator.getRuntimeModelName(),
+                    accumulator.getRuntimeProviderId(),
+                    accumulator.toMetadataJson());
+            log.info("[ChatController] Emergency-saved in-flight assistant message: " +
+                    "conversationId={}, status={}, textLen={}, partsCount={}",
+                    conversationId, status, text.length(), parts.size());
+        } catch (Exception e) {
+            log.error("[ChatController] Emergency save failed for {}: {}",
+                    conversationId, e.getMessage(), e);
+        }
     }
 
     private List<MessageContentPart> normalizeRequestParts(ChatStreamRequest request) {
@@ -1252,6 +1436,8 @@ public class ChatController {
         private final List<Map<String, Object>> browserActions = new ArrayList<>();
         private final List<String> warnings = new ArrayList<>();
         private final List<Map<String, Object>> planStepResults = new ArrayList<>();
+        /** RFC-052: tool names whose returnDirect output was folded into the assistant message */
+        private final List<String> directToolNames = new ArrayList<>();
         private int segCounter = 0;
         private int promptTokens = 0;
         private int completionTokens = 0;
@@ -1404,6 +1590,18 @@ public class ChatController {
                 seg.put("toolName", data.getOrDefault("toolName", ""));
                 seg.put("toolArgs", data.getOrDefault("arguments", ""));
                 segments.add(seg);
+            } else if ("tool_direct_result".equals(eventType)) {
+                // RFC-052: returnDirect tool — track the tool name so history
+                // replay can render a "data returned directly by tool" badge.
+                // The actual textual content reaches the user/persistence layer
+                // through the regular content_delta path (FinalAnswerNode's
+                // FINAL_ANSWER → StateGraphReActAgent → StreamDelta), so we
+                // intentionally do NOT add a content-bearing segment here to
+                // avoid the user seeing the same text twice.
+                String toolName = String.valueOf(data.getOrDefault("toolName", ""));
+                if (!toolName.isBlank() && !directToolNames.contains(toolName)) {
+                    directToolNames.add(toolName);
+                }
             } else if ("tool_call_completed".equals(eventType)) {
                 String toolName = String.valueOf(data.getOrDefault("toolName", ""));
                 // toolCalls（兼容）
@@ -1538,6 +1736,13 @@ public class ChatController {
                 }
                 if (!warnings.isEmpty()) {
                     metadata.put("warnings", warnings);
+                }
+                if (!directToolNames.isEmpty()) {
+                    // RFC-052 §3.3: only the tool names go into metadata —
+                    // the full content already lives in mate_message.content
+                    // (assembled by FinalAnswerNode). UI uses this to badge
+                    // historical messages as "data returned directly by tool".
+                    metadata.put("directToolNames", directToolNames);
                 }
                 return objectMapper.writeValueAsString(metadata);
             } catch (Exception e) {

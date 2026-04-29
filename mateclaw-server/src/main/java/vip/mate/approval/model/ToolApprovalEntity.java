@@ -36,12 +36,21 @@ public class ToolApprovalEntity {
     private LocalDateTime resolvedAt;
     private LocalDateTime expireAt;
 
+    /**
+     * RFC-063r §2.12: serialized {@link vip.mate.agent.context.ChatOrigin}
+     * snapshot captured when this approval was created. The Memento lets
+     * ChannelMessageRouter.replayApprovedToolCall (and the web ApprovalController
+     * replay path) restore the originating channel/workspace context after
+     * a process restart, so a tool approved hours later still binds back to
+     * the original channel.
+     */
+    private String chatOrigin;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updateTime;
 
-    @TableLogic
     private Integer deleted;
 }

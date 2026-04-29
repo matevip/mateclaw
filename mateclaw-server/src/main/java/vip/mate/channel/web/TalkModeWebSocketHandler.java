@@ -10,6 +10,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 import vip.mate.agent.AgentService;
+import vip.mate.memory.event.ConversationCompletionPublisher;
 import vip.mate.stt.SttService;
 import vip.mate.tts.TtsService;
 import vip.mate.workspace.conversation.ConversationService;
@@ -48,6 +49,7 @@ public class TalkModeWebSocketHandler extends AbstractWebSocketHandler {
     private final TtsService ttsService;
     private final AgentService agentService;
     private final ConversationService conversationService;
+    private final ConversationCompletionPublisher completionPublisher;
     private final ObjectMapper objectMapper;
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
@@ -116,7 +118,10 @@ public class TalkModeWebSocketHandler extends AbstractWebSocketHandler {
             sendJson(session, Map.of("type", "state", "state", "processing"));
 
             // 2. STT: 音频转文字
-            Map<String, Object> sttResult = sttService.transcribe(audioData, "audio.webm", "audio/webm", null);
+            // 前端用 WavRecorder（Web Audio API + 手写 PCM WAV 编码）— 见
+            // mateclaw-ui/src/utils/wavEncoder.ts. WebM/Opus 被 DashScope
+            // Paraformer 拒收，WAV 是所有 STT provider 都接受的最大公约数。
+            Map<String, Object> sttResult = sttService.transcribe(audioData, "audio.wav", "audio/wav", null);
             if (!Boolean.TRUE.equals(sttResult.get("success"))) {
                 sendJson(session, Map.of("type", "error", "message", "Speech recognition failed: " + sttResult.get("error")));
                 sendJson(session, Map.of("type", "state", "state", "idle"));
@@ -147,6 +152,10 @@ public class TalkModeWebSocketHandler extends AbstractWebSocketHandler {
 
             // 6. 保存助手回复
             conversationService.saveMessage(talkSession.conversationId, "assistant", reply, List.of());
+
+            // Publish conversation-completed event so memory extraction runs for voice turns too.
+            completionPublisher.publish(talkSession.agentId, talkSession.conversationId,
+                    transcript, reply, "talk");
 
             // 7. 推送文字回复
             sendJson(session, Map.of("type", "reply", "text", reply));

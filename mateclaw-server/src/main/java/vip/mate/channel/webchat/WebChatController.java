@@ -9,11 +9,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import vip.mate.channel.web.Utf8SseEmitter;
 import vip.mate.agent.AgentService;
 import vip.mate.channel.model.ChannelEntity;
 import vip.mate.channel.service.ChannelService;
 import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.common.result.R;
+import vip.mate.memory.event.ConversationCompletionPublisher;
 import vip.mate.workspace.conversation.ConversationService;
 import vip.mate.workspace.conversation.model.MessageContentPart;
 
@@ -47,6 +49,7 @@ public class WebChatController {
     private final ConversationService conversationService;
     private final ChatStreamTracker streamTracker;
     private final ObjectMapper objectMapper;
+    private final ConversationCompletionPublisher completionPublisher;
 
     private final ExecutorService sseExecutor = Executors.newCachedThreadPool();
 
@@ -59,7 +62,8 @@ public class WebChatController {
             @RequestHeader("X-MC-Key") String apiKey,
             @RequestBody WebChatRequest request) {
 
-        SseEmitter emitter = new SseEmitter(10 * 60 * 1000L);
+        // RFC-058 PR-1: Utf8SseEmitter 显式 charset=UTF-8，防止中文 SSE 乱码
+        SseEmitter emitter = new Utf8SseEmitter(10 * 60 * 1000L);
 
         // 验证 API Key 并获取关联的 Channel 配置
         ChannelEntity channel = resolveChannel(apiKey);
@@ -110,19 +114,39 @@ public class WebChatController {
                 streamTracker.register(conversationId);
                 streamTracker.attach(conversationId, emitter);
 
-                // 调用 Agent 流式对话
+                // Accumulate the assistant reply so it can be persisted on stream completion.
+                // Pattern mirrors ChatController: always accumulate, only broadcast when the
+                // delta is not a persistence-only echo of content already streamed by inner nodes.
+                StringBuilder assistantReply = new StringBuilder();
+
                 agentService.chatStructuredStream(agentId, message, conversationId, visitorId)
                         .doOnNext(delta -> {
                             if (delta.content() != null && !delta.content().isEmpty()) {
-                                streamTracker.broadcast(conversationId, "content_delta",
-                                        "{\"text\":" + escapeJson(delta.content()) + "}");
+                                assistantReply.append(delta.content());
+                                if (!delta.persistenceOnly()) {
+                                    streamTracker.broadcast(conversationId, "content_delta",
+                                            "{\"text\":" + escapeJson(delta.content()) + "}");
+                                }
                             }
-                            if (delta.thinking() != null && !delta.thinking().isEmpty()) {
+                            if (delta.thinking() != null && !delta.thinking().isEmpty()
+                                    && !delta.persistenceOnly()) {
                                 streamTracker.broadcast(conversationId, "thinking_delta",
                                         "{\"text\":" + escapeJson(delta.thinking()) + "}");
                             }
                         })
                         .doOnComplete(() -> {
+                            String reply = assistantReply.toString();
+                            try {
+                                if (!reply.isBlank()) {
+                                    conversationService.saveMessage(
+                                            conversationId, "assistant", reply, List.of());
+                                }
+                                completionPublisher.publish(
+                                        agentId, conversationId, message, reply, "webchat");
+                            } catch (Exception persistErr) {
+                                log.warn("[WebChat] Failed to persist assistant reply / publish event: {}",
+                                        persistErr.getMessage());
+                            }
                             streamTracker.broadcast(conversationId, "done", "{\"status\":\"completed\"}");
                             streamTracker.complete(conversationId);
                         })

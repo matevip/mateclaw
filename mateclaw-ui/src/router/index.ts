@@ -33,12 +33,21 @@ const router = createRouter({
           component: () => import('@/views/Wiki/index.vue'),
           meta: { title: 'Wiki' },
         },
+        {
+          path: 'memory',
+          name: 'Memory',
+          component: () => import('@/views/Memory/index.vue'),
+          meta: { title: 'Memory' },
+        },
         // ==================== Connect ====================
         {
           path: 'channels',
           name: 'Channels',
           component: () => import('@/views/Channels.vue'),
-          meta: { title: 'Channels' },
+          // keepAlive: cache the component instance so navigating away and
+          // back doesn't re-mount + re-fetch the list. Channels.vue must
+          // pause polling in onDeactivated to avoid a leaked timer.
+          meta: { title: 'Channels', keepAlive: true },
         },
         {
           path: 'skills',

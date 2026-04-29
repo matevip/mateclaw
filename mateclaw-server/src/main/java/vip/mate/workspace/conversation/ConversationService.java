@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.approval.ApprovalPlaceholderUtil;
+import vip.mate.approval.MetadataDecision;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.workspace.conversation.model.ConversationEntity;
 import vip.mate.workspace.conversation.model.MessageContentPart;
@@ -20,6 +21,7 @@ import vip.mate.workspace.conversation.vo.MessageVO;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
@@ -431,7 +433,9 @@ public class ConversationService {
             return objectMapper.readValue(message.getContentParts(), new TypeReference<List<MessageContentPart>>() {});
         } catch (Exception e) {
             log.warn("Failed to parse content_parts for message {}: {}", message.getId(), e.getMessage());
-            return List.of();
+            return List.of(MessageContentPart.parseError(
+                    message.getId() != null ? message.getId().toString() : "unknown",
+                    e.getMessage() != null ? e.getMessage() : "unknown error"));
         }
     }
 
@@ -448,8 +452,8 @@ public class ConversationService {
             }
             switch (part.getType()) {
                 case "text" -> appendSegment(text, part.getText());
-                case "thinking", "tool_call" -> { /* skip — frontend reads these from contentParts directly */ }
-                case "file" -> appendSegment(text, "[附件] " + safe(part.getFileName()));
+                case "thinking", "tool_call", "parse_error" -> { /* skip — frontend reads these from contentParts directly */ }
+                case "file" -> appendSegment(text, renderFilePart(part));
                 default -> appendSegment(text, part.getText());
             }
         }
@@ -491,6 +495,23 @@ public class ConversationService {
         return rendered;
     }
 
+    /**
+     * Render a "file" content part for the LLM prompt. The original filename can be
+     * non-ASCII (Chinese, emoji, …); the upload pipeline sanitizes those characters
+     * to underscores when storing on disk, so the LLM-visible name and the on-disk
+     * name diverge. Surface the actual server-side path here so any tool the LLM
+     * picks (read_file / extract_document_text / detect_file_type / …) can be called
+     * with a path that resolves directly, instead of relying on per-tool fallbacks.
+     */
+    private String renderFilePart(MessageContentPart part) {
+        String name = safe(part.getFileName());
+        String path = safe(part.getPath());
+        if (path.isBlank()) {
+            return "[附件] " + name;
+        }
+        return "[附件] " + name + "（路径: " + path + "）";
+    }
+
     private void appendSegment(StringBuilder builder, String text) {
         String safeText = safe(text);
         if (safeText.isBlank()) {
@@ -511,6 +532,206 @@ public class ConversationService {
      * <p>
      * 在 replay 前调用，确保 LLM 上下文中不包含任何审批相关文本。
      */
+    /**
+     * Reconcile persisted assistant-message state when one or more pending approvals
+     * leave the {@code pending} status (approve / deny / timeout / superseded / consumed).
+     * <p>
+     * For each assistant message in the conversation whose
+     * {@code metadata.pendingApproval.pendingId} appears in {@code resolvedPendingIds}
+     * and whose {@code metadata.pendingApproval.status == "pending_approval"}, this
+     * method updates three fields atomically (within a single transaction):
+     * <ol>
+     *   <li>{@code metadata.pendingApproval.status} → {@code decision.pendingApprovalStatus}</li>
+     *   <li>{@code metadata.currentPhase} flips {@code awaiting_approval} → {@code resolved}</li>
+     *   <li>{@code MessageEntity.status} flips {@code awaiting_approval}
+     *       → {@code decision.messageStatus} (one of the existing terminal states the
+     *       frontend Message.status union supports)</li>
+     * </ol>
+     * Without this synchronization, a page refresh re-hydrates the stale
+     * {@code pending_approval} status from message metadata and the UI pops a ghost
+     * approval banner for an approval the user already settled. See RFC-067 §4.1.5.
+     * <p>
+     * Idempotent: messages whose metadata does not match, or whose status already moved
+     * off {@code pending_approval}, are left untouched. Timeout / superseded callers
+     * pass {@link MetadataDecision#DENIED}; the more specific terminal status lives
+     * on {@code mate_tool_approval.status} for audit (see RFC-067 §4.4.1).
+     *
+     * @param conversationId target conversation
+     * @param resolvedPendingIds pendingIds whose owning message metadata should be reconciled
+     * @param decision the metadata-layer decision to apply
+     * @return number of messages whose state was rewritten
+     */
+    @Transactional
+    public int markPendingApprovalsResolved(String conversationId,
+                                            java.util.Set<String> resolvedPendingIds,
+                                            MetadataDecision decision) {
+        if (conversationId == null || resolvedPendingIds == null || resolvedPendingIds.isEmpty()) {
+            return 0;
+        }
+        if (decision == null) {
+            throw new IllegalArgumentException("decision must not be null");
+        }
+        List<MessageEntity> messages = listMessages(conversationId);
+        int rewritten = 0;
+        for (MessageEntity msg : messages) {
+            if (!"assistant".equals(msg.getRole())) continue;
+            String raw = msg.getMetadata();
+            if (raw == null || raw.isBlank() || !raw.contains("pendingApproval")) continue;
+
+            try {
+                // H2's JSON column returns the metadata as a JSON-encoded string
+                // (wrapped + escaped) when read through MyBatis. MessageVO.parseMetadataToObject
+                // (the read-to-frontend path) already handles this; we mirror the same
+                // unwrap here. Without it, readValue tokenizes the leading `"` as a
+                // String token and explodes with "Cannot construct LinkedHashMap from
+                // String value", silently turning every approve / deny / Stop sweep
+                // into a no-op (messagesRewritten=0).
+                String json = raw.trim();
+                if (json.startsWith("\"") && json.endsWith("\"")) {
+                    json = objectMapper.readValue(json, String.class);
+                }
+                java.util.Map<String, Object> meta = objectMapper.readValue(json,
+                        new TypeReference<java.util.Map<String, Object>>() {});
+                Object pa = meta.get("pendingApproval");
+                if (!(pa instanceof java.util.Map)) continue;
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> pendingApproval = (java.util.Map<String, Object>) pa;
+                Object pid = pendingApproval.get("pendingId");
+                if (pid == null || !resolvedPendingIds.contains(String.valueOf(pid))) continue;
+                Object pendingStatus = pendingApproval.get("status");
+                if (!"pending_approval".equals(String.valueOf(pendingStatus))) continue;
+
+                pendingApproval.put("status", decision.pendingApprovalStatus);
+                meta.put("pendingApproval", pendingApproval);
+
+                Object phase = meta.get("currentPhase");
+                if ("awaiting_approval".equals(String.valueOf(phase))) {
+                    meta.put("currentPhase", "resolved");
+                }
+
+                // RFC-067 §4.10 (PR 9): flip the matching toolCall + segment entries
+                // inside this message's metadata. Both DENIED and APPROVED need this
+                // because the LLM streamed tool_call_started → segment.status='running'
+                // before the user's decision arrived, and replay creates a NEW assistant
+                // message rather than updating the original — so without this fix the
+                // gate message's tool card stays as an orange spinner forever.
+                //   DENIED   → success=false + result='[已拒绝]'  → red ✗
+                //   APPROVED → success=true  + result='[已批准]'  → green ✓ on the gate
+                //              row; the actual execution result still appears in the
+                //              replayed assistant message that follows.
+                Object toolName = pendingApproval.get("toolName");
+                Object toolArgs = pendingApproval.get("arguments");
+                String tnStr = toolName == null ? null : String.valueOf(toolName);
+                String taStr = toolArgs == null ? null : String.valueOf(toolArgs);
+                flipResolvedToolCalls(meta, tnStr, taStr, decision);
+                flipResolvedSegments(meta, tnStr, taStr, decision);
+
+                msg.setMetadata(objectMapper.writeValueAsString(meta));
+                if ("awaiting_approval".equals(msg.getStatus())) {
+                    msg.setStatus(decision.messageStatus);
+                }
+                messageMapper.updateById(msg);
+                rewritten++;
+            } catch (Exception e) {
+                String preview = raw.length() > 200 ? raw.substring(0, 200) + "..." : raw;
+                log.warn("[ConversationService] Failed to rewrite pendingApproval status for message {} " +
+                                "(rawLen={}, preview={}): {}",
+                        msg.getId(), raw.length(), preview, e.getMessage());
+            }
+        }
+        if (rewritten > 0) {
+            log.info("[ConversationService] Reconciled {} message(s) in conversation {} " +
+                            "to decision={} (cleared {} ghost pendings)",
+                    rewritten, conversationId, decision, resolvedPendingIds.size());
+        }
+        return rewritten;
+    }
+
+    /**
+     * Flip the gate message's tool-call entry to a terminal state matching the
+     * approval decision (RFC-067 §4.10).
+     * <p>
+     * Driven by {@link MetadataDecision}:
+     * <ul>
+     *   <li>{@link MetadataDecision#APPROVED} → {@code status='completed'} +
+     *       {@code success=true} + {@code result='[已批准]'}. The actual tool
+     *       execution result appears in the replayed assistant message that
+     *       follows — not on this gate row.</li>
+     *   <li>{@link MetadataDecision#DENIED} → {@code status='completed'} +
+     *       {@code success=false} + {@code result='[已拒绝]'}. MessageBubble
+     *       renders this as a red ✗.</li>
+     * </ul>
+     * Both paths flip status off {@code awaiting_approval} / {@code running} so
+     * MessageBubble's icon precedence (running > awaiting_approval > success
+     * branches) can reach the right terminal icon. Without the flip the card
+     * stays as an orange spinner forever — replay creates a new message
+     * instead of overwriting the gate row, so nothing else updates it.
+     * Best-effort: if metadata.toolCalls is missing or no entry matches, this
+     * is a silent no-op.
+     */
+    @SuppressWarnings("unchecked")
+    private void flipResolvedToolCalls(java.util.Map<String, Object> meta,
+                                       String toolName, String toolArgs,
+                                       MetadataDecision decision) {
+        Object tc = meta.get("toolCalls");
+        if (!(tc instanceof java.util.List)) return;
+        boolean approved = decision == MetadataDecision.APPROVED;
+        String resultText = approved ? "[已批准]" : "[已拒绝]";
+        for (Object entry : (java.util.List<Object>) tc) {
+            if (!(entry instanceof java.util.Map)) continue;
+            java.util.Map<String, Object> call = (java.util.Map<String, Object>) entry;
+            if (!matchesNameAndArgs(call.get("name"), call.get("arguments"), toolName, toolArgs)) continue;
+            Object status = call.get("status");
+            if ("awaiting_approval".equals(String.valueOf(status))
+                    || "running".equals(String.valueOf(status))) {
+                call.put("status", "completed");
+            }
+            call.put("success", approved ? Boolean.TRUE : Boolean.FALSE);
+            call.put("result", resultText);
+        }
+    }
+
+    /**
+     * Same terminal-state flip as {@link #flipResolvedToolCalls} but on the
+     * streaming-segments timeline. Segments use {@code toolName} / {@code toolArgs}
+     * + {@code toolSuccess} / {@code toolResult} field names (not
+     * {@code name} / {@code arguments} / {@code success} / {@code result}); the
+     * shape is otherwise symmetric.
+     */
+    @SuppressWarnings("unchecked")
+    private void flipResolvedSegments(java.util.Map<String, Object> meta,
+                                      String toolName, String toolArgs,
+                                      MetadataDecision decision) {
+        Object segs = meta.get("segments");
+        if (!(segs instanceof java.util.List)) return;
+        boolean approved = decision == MetadataDecision.APPROVED;
+        String resultText = approved ? "[已批准]" : "[已拒绝]";
+        for (Object entry : (java.util.List<Object>) segs) {
+            if (!(entry instanceof java.util.Map)) continue;
+            java.util.Map<String, Object> seg = (java.util.Map<String, Object>) entry;
+            if (!"tool_call".equals(String.valueOf(seg.get("type")))) continue;
+            if (!matchesNameAndArgs(seg.get("toolName"), seg.get("toolArgs"), toolName, toolArgs)) continue;
+            Object status = seg.get("status");
+            if ("awaiting_approval".equals(String.valueOf(status))
+                    || "running".equals(String.valueOf(status))) {
+                seg.put("status", "completed");
+            }
+            seg.put("toolSuccess", approved ? Boolean.TRUE : Boolean.FALSE);
+            seg.put("toolResult", resultText);
+        }
+    }
+
+    private static boolean matchesNameAndArgs(Object actualName, Object actualArgs,
+                                              String expectedName, String expectedArgs) {
+        if (expectedName == null || actualName == null) return false;
+        if (!expectedName.equals(String.valueOf(actualName))) return false;
+        // Arguments equality: pendingApproval stores them as the JSON-stringified form
+        // produced by the tool-call creator, identical to what's recorded on the
+        // toolCall / segment entry. A null comparator on either side falls through.
+        if (expectedArgs == null) return true;
+        return expectedArgs.equals(String.valueOf(actualArgs));
+    }
+
     @Transactional
     public void removeApprovalPlaceholders(String conversationId) {
         List<MessageEntity> messages = listMessages(conversationId);
@@ -571,7 +792,17 @@ public class ConversationService {
      * 清理会话关联的附件文件
      */
     public void cleanAttachmentFiles(String conversationId) {
-        Path dir = UPLOAD_ROOT.resolve(conversationId);
+        Path dir;
+        try {
+            dir = UPLOAD_ROOT.resolve(conversationId);
+        } catch (InvalidPathException e) {
+            // Conversation id contains characters illegal on this filesystem
+            // (e.g. ':' in cron:<jobId> on Windows). No attachments could
+            // ever have been written under such an id on this OS, so there
+            // is nothing to clean.
+            log.debug("Skipping attachment cleanup for non-path-safe conversation id: {}", conversationId);
+            return;
+        }
         if (!Files.exists(dir)) {
             return;
         }

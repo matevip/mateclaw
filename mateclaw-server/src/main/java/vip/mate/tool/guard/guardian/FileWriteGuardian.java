@@ -1,20 +1,25 @@
 package vip.mate.tool.guard.guardian;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
 import vip.mate.tool.guard.model.*;
 
 import java.util.List;
 import java.util.Set;
 
 /**
- * 文件写入守卫
- * <p>
- * 标记写文件/编辑文件操作为 MEDIUM 风险。
- * 最终是否需要审批由 ToolPolicyResolver 决定。
+ * File-write guardian — historically marked every write_file / edit_file call
+ * as MEDIUM risk and forced an approval popup. Disabled (no @Component)
+ * because in-workspace writes are already path-bounded by
+ * {@code FilePathGuardian} + {@code WorkspacePathGuard.validatePath()}, and
+ * the per-call approval prompt drove operators to give up on multi-file
+ * workflows (a 22-chapter docx generation = 22 popups). The class is kept on
+ * disk for two reasons: (1) re-enabling guardian-level write approval is a
+ * one-line `@Component` change if a deployment really wants it, (2) it
+ * documents the historical behavior for anyone diffing why approval suddenly
+ * stopped firing on write_file. The mate_tool_guard_config row's
+ * guarded_tools_json was narrowed to {@code execute_shell_command} in V51.
  */
 @Slf4j
-@Component
 public class FileWriteGuardian implements ToolGuardGuardian {
 
     private static final Set<String> FILE_WRITE_TOOL_NAMES = Set.of(

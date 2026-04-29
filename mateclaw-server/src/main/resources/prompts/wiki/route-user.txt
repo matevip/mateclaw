@@ -2,6 +2,8 @@
 
 {config}
 
+{document_map_section}
+
 ## 已有 Wiki 页面索引（slug + 摘要）
 
 {existing_pages}

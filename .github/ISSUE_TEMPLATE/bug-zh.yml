@@ -1,0 +1,74 @@
+name: "🐛 Bug 报告（中文）"
+description: 报告一个不工作的功能。三个必填项，写完就交。
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢花时间反馈。三件事，写完就好——少一件我们没法定位，多一件浪费你时间。
+
+        > **没截图、没日志、没步骤的 issue 我们会直接关掉**，不是不在乎，是真的修不了。
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 出了什么问题？（必填，附截图）
+      description: |
+        一句话说清现象 + 至少一张截图（直接拖进文本框即可）。
+        如果是后端报错，把后端日志也贴这里（用 ``` 包起来）。
+      placeholder: |
+        例：作为 member 角色用户，在 ws-b 工作区点「从模板创建」，新建出来的 Agent 出现在了默认工作区，不在 ws-b。
+
+        [拖入截图 / 录屏]
+
+        [贴出后端 stack trace 或前端 console error]
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 怎么复现？（必填，编号步骤）
+      description: |
+        让一个完全不知情的人能按步骤复现。**说不出步骤的现象不是 bug，是猜想。**
+      placeholder: |
+        1. 用 admin / admin123 登录，新建工作区 ws-b
+        2. 添加用户 bob 为 ws-b 的 member
+        3. 注销，用 bob 登录，前端切到 ws-b
+        4. 点 Agents 页面 → 「从模板创建」 → 选 assistant → 应用
+        5. 切回默认工作区，看到 Agent 出现在了这里
+    validations:
+      required: true
+
+  - type: dropdown
+    id: module
+    attributes:
+      label: 影响模块（选填，多选）
+      description: 大致是哪一块？不确定就空着，方便维护者打 label。
+      multiple: true
+      options:
+        - 后端 / Backend
+        - 前端 / Frontend (admin UI)
+        - 桌面端 / Desktop
+        - Webchat 嵌入组件
+        - Channel（钉钉/飞书/Telegram/Discord/QQ/Slack...）
+        - Tool / 工具
+        - Skill / 技能
+        - Wiki / 知识库
+        - Memory / 记忆
+        - Agent / StateGraph 运行时
+        - Auth / 工作区权限
+        - 部署 / 数据库迁移
+        - 其它
+    validations:
+      required: false
+
+  - type: input
+    id: env
+    attributes:
+      label: 环境（必填，一行）
+      description: 版本 / 工作区角色 / 浏览器或客户端。一行写完。
+      placeholder: "v0.x.y / member / Chrome 130 macOS 14.5"
+    validations:
+      required: true

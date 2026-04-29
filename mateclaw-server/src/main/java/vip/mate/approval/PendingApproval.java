@@ -59,6 +59,16 @@ public class PendingApproval {
     /** 风险摘要 */
     private String summary;
 
+    /**
+     * RFC-063r §2.12: serialized {@code ChatOrigin} snapshot captured when
+     * this approval was created. Lets cross-process / cross-restart replays
+     * (the user approves hours later from a different node) restore the
+     * original channel binding so the replayed tool call still delivers
+     * back to the correct channel. Persisted into
+     * {@code mate_tool_approval.chat_origin}.
+     */
+    private String chatOrigin;
+
     public PendingApproval(String pendingId, String conversationId, String userId,
                            String toolName, String toolArguments, String reason) {
         this.pendingId = pendingId;
@@ -69,6 +79,24 @@ public class PendingApproval {
         this.reason = reason;
         this.createdAt = Instant.now();
         this.status = "pending";
+    }
+
+    /**
+     * INTERNAL — recovery constructor for {@code ApprovalWorkflowService.recoverFromDb}.
+     * Preserves the persisted {@code createdAt} and {@code status} so TTL/GC keep working
+     * across JVM restarts. Do not use from business paths.
+     */
+    PendingApproval(String pendingId, String conversationId, String userId,
+                    String toolName, String toolArguments, String reason,
+                    Instant createdAt, String status) {
+        this.pendingId = pendingId;
+        this.conversationId = conversationId;
+        this.userId = userId;
+        this.toolName = toolName;
+        this.toolArguments = toolArguments;
+        this.reason = reason;
+        this.createdAt = createdAt;
+        this.status = status;
     }
 
     // === Getters ===
@@ -92,6 +120,7 @@ public class PendingApproval {
     public String getFindingsJson() { return findingsJson; }
     public String getMaxSeverity() { return maxSeverity; }
     public String getSummary() { return summary; }
+    public String getChatOrigin() { return chatOrigin; }
 
     // === Setters ===
 
@@ -107,4 +136,5 @@ public class PendingApproval {
     public void setFindingsJson(String findingsJson) { this.findingsJson = findingsJson; }
     public void setMaxSeverity(String maxSeverity) { this.maxSeverity = maxSeverity; }
     public void setSummary(String summary) { this.summary = summary; }
+    public void setChatOrigin(String chatOrigin) { this.chatOrigin = chatOrigin; }
 }

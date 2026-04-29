@@ -52,6 +52,9 @@ public class AgentEntity {
     /** 所属工作区 ID（默认 1 = default） */
     private Long workspaceId;
 
+    /** Creator user ID — backfilled on create; lets members delete their own Agents without admin role */
+    private Long creatorUserId;
+
     /** 默认思考深度：off / low / medium / high / max，null 表示跟随模型默认 */
     private String defaultThinkingLevel;
 
@@ -61,6 +64,5 @@ public class AgentEntity {
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updateTime;
 
-    @TableLogic
     private Integer deleted;
 }

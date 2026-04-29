@@ -34,12 +34,24 @@
               <div class="model-group-header">
                 <span class="model-group-header__name">{{ group.provider.name }}</span>
                 <span v-if="group.provider.isLocal" class="model-group-header__badge model-group-header__badge--local">Local</span>
+                <!-- RFC-073: liveness dot. UNPROBED = grey (still booting),
+                     COOLDOWN = amber (transient backoff). LIVE has no dot. -->
+                <span
+                  v-if="group.provider.liveness === 'UNPROBED'"
+                  class="model-group-header__dot model-group-header__dot--unprobed"
+                  :title="$t('chat.modelLivenessUnprobed')"
+                ></span>
+                <span
+                  v-else-if="group.provider.liveness === 'COOLDOWN'"
+                  class="model-group-header__dot model-group-header__dot--cooldown"
+                  :title="$t('chat.modelLivenessCooldown', { seconds: cooldownSeconds(group.provider) })"
+                ></span>
               </div>
               <div
                 v-for="item in group.models"
                 :key="item.value"
                 class="model-dropdown-item"
-                :class="{ active: item.value === activeValue }"
+                :class="{ active: item.value === activeValue, dimmed: group.provider.liveness === 'COOLDOWN' || group.provider.liveness === 'UNPROBED' }"
                 @click="handleSelect(item.value)"
               >
                 <span class="model-dropdown-item__name">{{ item.name }}</span>
@@ -49,7 +61,19 @@
 
             <!-- 无结果 -->
             <div v-if="filteredGroups.length === 0" class="model-empty">
-              {{ $t('chat.noMatchModel') }}
+              <!-- RFC-074 PR-2: when there are zero usable models AND the user
+                   isn't searching, this is the "no providers configured" empty
+                   state. Push them into Settings/Models with the drawer
+                   pre-opened via ?addProvider=1. -->
+              <template v-if="query.trim() === '' && groups.length === 0">
+                {{ $t('chat.noProvidersConfigured') }}
+                <RouterLink class="model-empty__cta" to="/settings/models?addProvider=1" @click="open = false">
+                  {{ $t('chat.goConfigure') }}
+                </RouterLink>
+              </template>
+              <template v-else>
+                {{ $t('chat.noMatchModel') }}
+              </template>
             </div>
           </div>
         </div>
@@ -61,6 +85,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, type CSSProperties } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { RouterLink } from 'vue-router'
 import type { ProviderInfo } from '@/types'
 
 const { t } = useI18n()
@@ -118,12 +143,19 @@ function toggle() {
 }
 
 // 按 provider 分组，云端在前，本地在后
+// RFC-073: 仅过滤 UNCONFIGURED / REMOVED；UNPROBED + COOLDOWN 仍显示但视觉上区分。
+function isHidden(p: ProviderInfo): boolean {
+  // 旧后端不返回 liveness 时退回 available 行为，避免渐进升级期间 UI 全空。
+  if (!p.liveness) return !p.available
+  return p.liveness === 'UNCONFIGURED' || p.liveness === 'REMOVED'
+}
+
 const groups = computed<ModelGroup[]>(() => {
   const cloud: ModelGroup[] = []
   const local: ModelGroup[] = []
 
   for (const provider of props.providers) {
-    if (!provider.available) continue
+    if (isHidden(provider)) continue
     const allModels = [...(provider.models || []), ...(provider.extraModels || [])]
     if (allModels.length === 0) continue
 
@@ -145,6 +177,10 @@ const groups = computed<ModelGroup[]>(() => {
 
   return [...cloud, ...local]
 })
+
+function cooldownSeconds(provider: ProviderInfo): number {
+  return Math.max(1, Math.ceil((provider.cooldownRemainingMs || 0) / 1000))
+}
 
 const totalCount = computed(() =>
   groups.value.reduce((n, g) => n + g.models.length, 0)
@@ -245,11 +281,11 @@ watch(open, async (isOpen) => {
 .model-dropdown-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  z-index: 4000;
 }
 
 .model-dropdown {
-  z-index: 2001;
+  z-index: 4001;
   min-width: 280px;
   max-width: 360px;
   background: var(--mc-bg-elevated);
@@ -329,6 +365,26 @@ watch(open, async (isOpen) => {
   color: var(--mc-success, #34c759);
 }
 
+/* RFC-073 liveness dot — sits next to the provider name */
+.model-group-header__dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  cursor: help;
+}
+.model-group-header__dot--unprobed {
+  background: var(--mc-text-quaternary, #c0c4cc);
+  animation: model-dot-pulse 1.6s ease-in-out infinite;
+}
+.model-group-header__dot--cooldown {
+  background: #f59e0b;
+}
+@keyframes model-dot-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
 /* ---- Items ---- */
 
 .model-dropdown-item {
@@ -348,6 +404,14 @@ watch(open, async (isOpen) => {
 
 .model-dropdown-item.active {
   background: var(--mc-primary-bg);
+}
+
+/* RFC-073: cooldown / unprobed models render dimmed but still selectable. */
+.model-dropdown-item.dimmed {
+  opacity: 0.55;
+}
+.model-dropdown-item.dimmed:hover {
+  opacity: 0.85;
 }
 
 .model-dropdown-item__name {
@@ -371,6 +435,18 @@ watch(open, async (isOpen) => {
   font-size: 13px;
   color: var(--mc-text-quaternary);
 }
+.model-empty__cta {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--mc-primary);
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.model-empty__cta:hover { background: var(--mc-primary-hover, var(--mc-primary)); }
 
 /* ---- Transition ---- */
 

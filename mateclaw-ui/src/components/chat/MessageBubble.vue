@@ -89,7 +89,7 @@
                     <el-icon v-else-if="tc.success !== false" class="tc-icon--success"><Select /></el-icon>
                     <el-icon v-else class="tc-icon--error"><CloseBold /></el-icon>
                   </span>
-                  <span class="tool-call__name">{{ tc.name }}</span>
+                  <span class="tool-call__name">{{ getToolLabel(tc.name) }}</span>
                   <span class="tool-call__args" v-if="tc.arguments">{{ truncateArgs(tc.arguments) }}</span>
                 </div>
               </div>
@@ -108,13 +108,13 @@
         <div v-if="pendingApproval" class="approval-inline">
           <el-icon class="approval-inline__icon"><WarningFilled /></el-icon>
           <span v-if="pendingApproval.status === 'pending_approval'" class="approval-inline__text">
-            {{ $t('chat.approvalWaiting') }} <code>{{ pendingApproval.toolName }}</code>
+            {{ $t('chat.approvalWaiting') }} <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
           </span>
           <span v-else-if="pendingApproval.status === 'approved'" class="approval-inline__text approval-inline--approved">
-            {{ $t('chat.approved') }}: <code>{{ pendingApproval.toolName }}</code>
+            {{ $t('chat.approved') }}: <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
           </span>
           <span v-else class="approval-inline__text approval-inline--denied">
-            {{ $t('chat.denied') }}: <code>{{ pendingApproval.toolName }}</code>
+            {{ $t('chat.denied') }}: <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
           </span>
         </div>
 
@@ -124,8 +124,16 @@
           class="msg-content"
           :class="{ 'with-cursor': showCursor }"
         >
-          <div class="markdown-body" v-html="renderedContent"></div>
-          <TypingCursor v-if="showCursor" :typing="isGenerating" />
+          <!--
+            User-authored messages render as plain text (no markdown) and
+            auto-collapse beyond 8 lines. Assistant content goes through the
+            normal markdown pipeline.
+          -->
+          <UserMessageContent v-if="role === 'user'" :content="displayContent" />
+          <template v-else>
+            <div class="markdown-body" v-html="renderedContent"></div>
+            <TypingCursor v-if="showCursor" :typing="isGenerating" />
+          </template>
         </div>
 
 
@@ -133,6 +141,12 @@
         <div v-if="status === 'stopped' || status === 'interrupted'" class="stopped-indicator">
           <el-icon><CloseBold /></el-icon>
           <span>{{ status === 'interrupted' ? $t('chat.interrupted') : $t('chat.stopped') }}</span>
+        </div>
+
+        <!-- parse_error content block -->
+        <div v-if="parseErrorText" class="parse-error-card">
+          <el-icon class="parse-error-card__icon"><WarningFilled /></el-icon>
+          <span class="parse-error-card__text">{{ parseErrorText }}</span>
         </div>
 
         <!-- 错误卡片 -->
@@ -265,6 +279,7 @@ import {
 } from '@element-plus/icons-vue'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { useAuthenticatedAttachment } from '@/composables/useAuthenticatedAttachment'
+import { useToolLabel } from '@/composables/useToolLabel'
 import { http } from '@/api'
 import TypingCursor from './TypingCursor.vue'
 import BrowserTimeline from './BrowserTimeline.vue'
@@ -272,12 +287,14 @@ import ToolCallSegment from './ToolCallSegment.vue'
 import ThinkingSegment from './ThinkingSegment.vue'
 import ContentSegment from './ContentSegment.vue'
 import PlanStepsPanel from './PlanStepsPanel.vue'
+import UserMessageContent from './UserMessageContent.vue'
 import type { BrowserAction } from './BrowserTimeline.vue'
 import type { Message, MessageSegment, ChatAttachment, ToolCallMeta, PlanMeta } from '@/types'
 import type { ChatErrorInfo } from '@/types/chatError'
 
 const { renderMarkdown } = useMarkdownRenderer()
 const { t } = useI18n()
+const { getToolLabel } = useToolLabel()
 const { blobUrls, loadAllImages, loadAllVideos, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
 
 interface Props {
@@ -325,8 +342,10 @@ const errorDescription = computed(() => {
   // 优先展示后端 extractUserFriendlyError 生成的具体消息（比泛化模板更有指向性，
   // 比如"当前模型不支持工具调用，请切换到 qwen3 / qwen2.5 ..."）。
   // 仅当 rawMessage 为空/过短时才回退到分类模板。
+  // 阈值用 3：可过滤 "OK"/"fail" 之类无意义短串，又能放行 "无权操作该会话"
+  // 这类 7 字中文 / "Forbidden" 这类英文短消息，避免被泛模板覆盖。
   const raw = errorInfo.value.rawMessage?.trim() || ''
-  if (raw.length > 8) {
+  if (raw.length > 3) {
     // 去掉后端冗余前缀，错误卡标题已经表达了类别
     return raw
       .replace(/^Bad request:\s*/i, '')
@@ -429,6 +448,12 @@ const displayContent = computed(() => {
   // 有错误卡片时隐藏 [错误] 原始文本，避免重复展示
   if (status.value === 'failed' && errorInfo.value && text.startsWith('[错误]')) return ''
   return text
+})
+
+// --- parse_error detection ---
+const parseErrorText = computed(() => {
+  const errorPart = props.message.contentParts?.find(p => p.type === 'parse_error')
+  return errorPart?.text || ''
 })
 
 const renderedContent = computed(() => {
@@ -1073,6 +1098,31 @@ watch(isGenerating, (generating) => {
   to { transform: rotate(360deg); }
 }
 
+/* ==================== parse_error card ==================== */
+.parse-error-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--mc-warning, #f59e0b) 8%, var(--mc-bg-elevated, #f8fafc));
+  border: 1px solid color-mix(in srgb, var(--mc-warning, #f59e0b) 25%, transparent);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--mc-text-secondary, #64748b);
+}
+
+.parse-error-card__icon {
+  flex-shrink: 0;
+  color: var(--mc-warning, #f59e0b);
+  margin-top: 1px;
+}
+
+.parse-error-card__text {
+  word-break: break-word;
+}
+
 /* ==================== 审批面板 ==================== */
 /* 极简审批状态（一行式） */
 .approval-inline {
@@ -1503,50 +1553,50 @@ watch(isGenerating, (generating) => {
   font-size: 0.92em;
 }
 
-.markdown-body :deep(.code-block) {
+/* Code-block CSS lives globally in main.css now (.markdown-body .code-block*)
+   so the rules apply consistently across MessageBubble, AgentContext, and
+   any future markdown-body context, and don't depend on Vue's per-component
+   scope hash. Keep this comment as a breadcrumb so future edits don't get
+   re-added here by reflex. */
+
+/* ===== Mermaid block ===== */
+.markdown-body :deep(.mermaid-block) {
   margin: 14px 0;
+  padding: 16px;
   border-radius: 12px;
-  overflow: hidden;
-  background: var(--mc-code-bg, #1e293b);
+  background: var(--mc-mermaid-bg, #f8fafc);
+  border: 1px solid var(--mc-mermaid-border, #e2e8f0);
+  text-align: center;
+  overflow-x: auto;
 }
-
-.markdown-body :deep(.code-block__header) {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  background: rgba(0, 0, 0, 0.2);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+.markdown-body :deep(.mermaid-block svg) {
+  max-width: 100%;
+  height: auto;
 }
-
-.markdown-body :deep(.code-block__lang) {
+.markdown-body :deep(.mermaid-block.mermaid-error) {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+  text-align: left;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
-  color: #94a3b8;
-  font-weight: 500;
+  white-space: pre-wrap;
 }
 
-.markdown-body :deep(.code-block__copy) {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: #94a3b8;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s ease;
+/* ===== KaTeX inline / block ===== */
+.markdown-body :deep(.katex-inline) {
+  font-size: 1em;
 }
-
-.markdown-body :deep(.code-block__copy:hover) {
-  background: rgba(255, 255, 255, 0.1);
-  color: #e2e8f0;
+.markdown-body :deep(.katex-block) {
+  display: block;
+  margin: 12px 0;
+  text-align: center;
+  overflow-x: auto;
 }
-
-.markdown-body :deep(.code-block pre) {
-  margin: 0;
-  border-radius: 0;
+.markdown-body :deep(.katex-error) {
+  color: #b91c1c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
 }
 
 .markdown-body :deep(img) {

@@ -68,24 +68,43 @@ public class WikiPageService {
     }
 
     /**
-     * 列出知识库的所有页面（不含 content）
+     * RFC-051 PR-7 follow-up: list ONLY archived pages — the inverse of the
+     * default {@link #listByKbId} filter. Used by the admin UI's "show archived"
+     * panel so users can see what they archived and recover it.
+     */
+    public List<WikiPageEntity> listArchivedByKbId(Long kbId) {
+        List<WikiPageEntity> pages = pageMapper.selectList(
+                new LambdaQueryWrapper<WikiPageEntity>()
+                        .eq(WikiPageEntity::getKbId, kbId)
+                        .eq(WikiPageEntity::getArchived, 1)
+                        .orderByDesc(WikiPageEntity::getUpdateTime));
+        pages.forEach(p -> p.setContent(null));
+        return pages;
+    }
+
+    /**
+     * 列出知识库的所有页面（不含 content）。
+     * RFC-051 PR-7: archived 页面默认不返回。
      */
     public List<WikiPageEntity> listByKbId(Long kbId) {
         List<WikiPageEntity> pages = pageMapper.selectList(
                 new LambdaQueryWrapper<WikiPageEntity>()
                         .eq(WikiPageEntity::getKbId, kbId)
+                        .ne(WikiPageEntity::getArchived, 1)
                         .orderByAsc(WikiPageEntity::getTitle));
         pages.forEach(p -> p.setContent(null));
         return pages;
     }
 
     /**
-     * 列出知识库所有页面（含 content，用于全文搜索）
+     * 列出知识库所有页面（含 content，用于全文搜索）。
+     * RFC-051 PR-7: archived 页面不参与 enrich / 全文搜索遍历。
      */
     public List<WikiPageEntity> listByKbIdWithContent(Long kbId) {
         return pageMapper.selectList(
                 new LambdaQueryWrapper<WikiPageEntity>()
                         .eq(WikiPageEntity::getKbId, kbId)
+                        .ne(WikiPageEntity::getArchived, 1)
                         .orderByAsc(WikiPageEntity::getTitle));
     }
 
@@ -98,11 +117,15 @@ public class WikiPageService {
         if (cached != null && !cached.isExpired()) {
             return cached.data;
         }
+        // RFC-051 PR-7: archived pages are hidden from default summary listings;
+        // PR-2 added page_type so callers can filter system pages too.
         List<WikiPageEntity> pages = pageMapper.selectList(
                 new LambdaQueryWrapper<WikiPageEntity>()
                         .select(WikiPageEntity::getSlug, WikiPageEntity::getTitle,
-                                WikiPageEntity::getSummary, WikiPageEntity::getLastUpdatedBy)
+                                WikiPageEntity::getSummary, WikiPageEntity::getLastUpdatedBy,
+                                WikiPageEntity::getPageType)
                         .eq(WikiPageEntity::getKbId, kbId)
+                        .ne(WikiPageEntity::getArchived, 1)
                         .orderByAsc(WikiPageEntity::getTitle));
         summaryCache.put(kbId, new CachedSummaries(pages, System.currentTimeMillis() + SUMMARY_CACHE_TTL_MS));
         return pages;
@@ -169,11 +192,33 @@ public class WikiPageService {
     }
 
     /**
-     * 创建新 Wiki 页面
+     * Direct update by entity (used by enrichment service).
+     */
+    @Transactional
+    public void updateById(WikiPageEntity entity) {
+        pageMapper.updateById(entity);
+        if (entity.getKbId() != null) {
+            evictSummaryCache(entity.getKbId());
+        }
+    }
+
+    /**
+     * Create a new wiki page (without explicit pageType)
      */
     @Transactional
     public WikiPageEntity createPage(Long kbId, String slug, String title, String content,
                                       String summary, String sourceRawIds) {
+        return createPage(kbId, slug, title, content, summary, sourceRawIds, null);
+    }
+
+    /**
+     * Create a new wiki page with explicit pageType classification.
+     * pageType is stored lowercase (concept / person / place / event / technology /
+     * organization / product / term / process / other).
+     */
+    @Transactional
+    public WikiPageEntity createPage(Long kbId, String slug, String title, String content,
+                                      String summary, String sourceRawIds, String pageType) {
         WikiPageEntity entity = new WikiPageEntity();
         entity.setKbId(kbId);
         entity.setSlug(slug);
@@ -184,9 +229,30 @@ public class WikiPageService {
         entity.setSourceRawIds(sourceRawIds);
         entity.setVersion(1);
         entity.setLastUpdatedBy("ai");
+        if (pageType != null && !pageType.isBlank()) {
+            entity.setPageType(pageType.toLowerCase());
+        }
         pageMapper.insert(entity);
         evictSummaryCache(kbId);
         return entity;
+    }
+
+    /**
+     * List pages derived from a specific raw material (for UI sidebar filtering).
+     * Uses a LIKE search on sourceRawIds JSON field — cheap and dialect-agnostic.
+     */
+    public List<WikiPageEntity> listBySourceRawId(Long kbId, Long rawId) {
+        List<WikiPageEntity> pages = pageMapper.selectList(
+                new LambdaQueryWrapper<WikiPageEntity>()
+                        .eq(WikiPageEntity::getKbId, kbId)
+                        // RFC-051 PR-7: a raw's archived pages stop showing up in the
+                        // sidebar's "filter by raw" listing. Lineage is still queryable
+                        // by hitting the page directly via slug.
+                        .ne(WikiPageEntity::getArchived, 1)
+                        .like(WikiPageEntity::getSourceRawIds, rawId.toString())
+                        .orderByAsc(WikiPageEntity::getTitle));
+        pages.forEach(p -> p.setContent(null));
+        return pages;
     }
 
     /**
@@ -235,6 +301,43 @@ public class WikiPageService {
         pageMapper.updateById(existing);
         evictSummaryCache(kbId);
         return existing;
+    }
+
+    /**
+     * RFC-047 P2: Paired source lineage entry (rawId + rawTitle snapshot at ingest time).
+     * Keyed by rawId; rawTitle is a snapshot — the raw may be renamed later but lineage stays accurate.
+     */
+    public record SourceEntry(long rawId, String rawTitle) {}
+
+    /**
+     * RFC-047 P2: Merge a (rawId, rawTitle) pair into a page's source lineage.
+     * Dual-writes to both sourceEntries (canonical) and sourceRawIds (legacy compat).
+     * Idempotent: no-ops if rawId already present.
+     */
+    @Transactional
+    public void mergeSourceLineage(Long pageId, Long rawId, String rawTitle) {
+        WikiPageEntity page = pageMapper.selectById(pageId);
+        if (page == null) return;
+
+        List<SourceEntry> entries = parseSourceEntries(page.getSourceEntries());
+        boolean entryExists = entries.stream().anyMatch(e -> e.rawId() == rawId);
+
+        List<Long> rawIds = parseSourceRawIds(page.getSourceRawIds());
+        boolean idExists = rawIds.contains(rawId);
+
+        if (!entryExists) {
+            entries.add(new SourceEntry(rawId, rawTitle != null ? rawTitle : ""));
+            page.setSourceEntries(toJson(entries));
+        }
+        if (!idExists) {
+            rawIds.add(rawId);
+            page.setSourceRawIds(toJson(rawIds));
+        }
+
+        if (!entryExists || !idExists) {
+            pageMapper.updateById(page);
+            evictSummaryCache(page.getKbId());
+        }
     }
 
     /**
@@ -298,13 +401,62 @@ public class WikiPageService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * RFC-051 PR-2: a page is protected from AI / tool / batch deletion when
+     * either {@code locked == 1} or {@code pageType == "system"}. The system
+     * pages ({@code overview} / {@code log}) carry both flags; users may set
+     * {@code locked} on individual curated pages without making them system.
+     */
+    public static boolean isProtected(WikiPageEntity page) {
+        if (page == null) return false;
+        if (page.getLocked() != null && page.getLocked() == 1) return true;
+        return "system".equals(page.getPageType());
+    }
+
     @Transactional
     public void delete(Long kbId, String slug) {
+        WikiPageEntity existing = getBySlug(kbId, slug);
+        if (existing == null) {
+            // Nothing to delete; preserve idempotent behavior.
+            return;
+        }
+        if (isProtected(existing)) {
+            log.warn("[Wiki] Refusing to delete protected page kbId={}, slug={}, type={}, locked={}",
+                    kbId, slug, existing.getPageType(), existing.getLocked());
+            return;
+        }
         pageMapper.delete(
                 new LambdaQueryWrapper<WikiPageEntity>()
                         .eq(WikiPageEntity::getKbId, kbId)
                         .eq(WikiPageEntity::getSlug, slug));
         evictSummaryCache(kbId);
+    }
+
+    /**
+     * RFC-051 PR-7: flip the {@code archived} flag.
+     * <p>
+     * Archive hides the page from default list/search/related results without
+     * destroying it. Citation lineage and source-raw links survive, so an
+     * archived page can still be unarchived later or audited from raw history.
+     * Refuses to archive a system page since those are part of the KB's spine.
+     *
+     * @param archive true to archive, false to unarchive
+     * @return true on a state change, false if no-op (page missing or already in target state)
+     */
+    @Transactional
+    public boolean setArchived(Long kbId, String slug, boolean archive) {
+        WikiPageEntity existing = getBySlug(kbId, slug);
+        if (existing == null) return false;
+        if ("system".equals(existing.getPageType())) {
+            log.warn("[Wiki] Refusing to archive system page kbId={}, slug={}", kbId, slug);
+            return false;
+        }
+        int target = archive ? 1 : 0;
+        if (existing.getArchived() != null && existing.getArchived() == target) return false;
+        existing.setArchived(target);
+        pageMapper.updateById(existing);
+        evictSummaryCache(kbId);
+        return true;
     }
 
     /**
@@ -333,16 +485,21 @@ public class WikiPageService {
         int deleted = 0;
         for (WikiPageEntity page : allPages) {
             if ("manual".equals(page.getLastUpdatedBy())) continue;
+            // RFC-051 PR-2: never sweep system / locked pages, even when their
+            // source raw is being reprocessed.
+            if (isProtected(page)) continue;
             List<Long> sourceIds = parseSourceRawIds(page.getSourceRawIds());
             if (sourceIds.contains(rawId)) {
                 if (sourceIds.size() == 1) {
-                    // 独占页面：直接删除
                     delete(kbId, page.getSlug());
                     deleted++;
                 } else {
-                    // 多来源页面：仅移除该 rawId 引用
+                    // Multi-source page: remove this rawId from both sourceRawIds and sourceEntries
                     sourceIds.remove(rawId);
                     page.setSourceRawIds(toJson(sourceIds));
+                    List<SourceEntry> entries = parseSourceEntries(page.getSourceEntries());
+                    entries.removeIf(e -> e.rawId() == rawId);
+                    page.setSourceEntries(toJson(entries));
                     pageMapper.updateById(page);
                 }
             }
@@ -357,15 +514,38 @@ public class WikiPageService {
     }
 
     /**
-     * 从 Markdown 内容中提取 [[links]] 并返回 JSON 数组
+     * Count wiki pages derived from a specific raw material.
+     * Uses sourceRawIds JSON array field (e.g. "[123]" or "[123,456]").
+     */
+    public int countBySourceRawId(Long kbId, Long rawId) {
+        // Use LIKE search on sourceRawIds JSON — works for both single and multi-source pages
+        return Math.toIntExact(pageMapper.selectCount(
+                new LambdaQueryWrapper<WikiPageEntity>()
+                        .eq(WikiPageEntity::getKbId, kbId)
+                        .like(WikiPageEntity::getSourceRawIds, rawId.toString())));
+    }
+
+    /**
+     * Extract {@code [[links]]} (and {@code [[target|label]]} alias form,
+     * RFC-051 PR-5) from Markdown content and return them as a JSON array of
+     * canonical slugs.
+     * <p>
+     * For aliased links the {@code label} part is purely display — only
+     * {@code target} feeds slug resolution. Without this split we'd canonicalize
+     * "Spring AI|Spring AI Alibaba" as a single slug, polluting outgoingLinks
+     * and breaking graph view / backlinks.
      */
     String extractLinksAsJson(String content) {
         if (content == null) return "[]";
         List<String> links = new ArrayList<>();
         Matcher matcher = WIKI_LINK_PATTERN.matcher(content);
         while (matcher.find()) {
-            String link = matcher.group(1).trim();
-            String slug = toSlug(link);
+            String raw = matcher.group(1).trim();
+            int pipe = raw.indexOf('|');
+            String target = pipe >= 0 ? raw.substring(0, pipe).trim() : raw;
+            if (target.isEmpty()) continue;
+            String slug = toSlug(target);
+            if (slug.isEmpty()) continue;
             if (!links.contains(slug)) {
                 links.add(slug);
             }
@@ -390,6 +570,15 @@ public class WikiPageService {
         if (json == null || json.isBlank()) return new ArrayList<>();
         try {
             return objectMapper.readValue(json, new TypeReference<List<Long>>() {});
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
+    }
+
+    private List<SourceEntry> parseSourceEntries(String json) {
+        if (json == null || json.isBlank()) return new ArrayList<>();
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<SourceEntry>>() {});
         } catch (Exception e) {
             return new ArrayList<>();
         }

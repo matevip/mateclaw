@@ -47,6 +47,18 @@ public enum ModelFamily {
     DEEPSEEK_REASONER(false, false, false, true, true, true),
 
     /**
+     * DeepSeek V4 reasoning 模型：deepseek-v4-flash / deepseek-v4-pro。
+     * <p>
+     * 与 {@link #DEEPSEEK_REASONER}（v3.2）的关键差异：V4 接受 {@code reasoning_effort} 字段，
+     * 也不强制 temperature=1。OpenClaw 实现参考 {@code extensions/deepseek/models.ts:28-81} 标记
+     * {@code supportsReasoningEffort: true}。<br>
+     * 约束：保留 max_tokens；支持 reasoning_effort；temperature/topP 用配置值。
+     * thinking=true 让 {@link vip.mate.agent.chatmodel.DeepSeekV4ThinkingDecorator}
+     * 在请求体注入 OpenAI 协议外的 {@code thinking: {type: enabled|disabled}} 字段。
+     */
+    DEEPSEEK_V4_REASONING(false, false, true, false, false, true),
+
+    /**
      * 通用 thinking 模型（名称含 "thinking" 或 "reasoner" 但不匹配上述族）：
      * 如 qwen3-235b-a22b-thinking-2507
      * <p>
@@ -135,6 +147,12 @@ public enum ModelFamily {
         // Kimi thinking 族：kimi-k2* 全系列 + kimi-for-coding（底层为 kimi-k2.5）
         if (normalized.startsWith("kimi-k2") || normalized.equals("kimi-for-coding")) {
             return KIMI_THINKING;
+        }
+
+        // DeepSeek V4 reasoning 族：deepseek-v4-flash / deepseek-v4-pro
+        // 优先匹配（在 DEEPSEEK_REASONER 之前），因为两者都含 "deepseek" 前缀但 V4 接受 reasoning_effort。
+        if (normalized.equals("deepseek-v4-flash") || normalized.equals("deepseek-v4-pro")) {
+            return DEEPSEEK_V4_REASONING;
         }
 
         // DeepSeek reasoning 族：仅 deepseek-reasoner

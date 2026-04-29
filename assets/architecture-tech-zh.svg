@@ -59,13 +59,15 @@
   </g>
   <g transform="translate(632, 118)">
     <rect width="130" height="40" rx="8" fill="#dce8e4" stroke="#5ca69d" stroke-width="0.5"/>
-    <text x="65" y="17" text-anchor="middle" font-size="11" font-weight="600" fill="#184a45">多渠道适配器</text>
-    <text x="65" y="31" text-anchor="middle" font-size="9" fill="#9b7d6c">钉钉 / 飞书 / 企微 / TG</text>
+    <text x="65" y="14" text-anchor="middle" font-size="11" font-weight="600" fill="#184a45">国内 IM (5)</text>
+    <text x="65" y="26" text-anchor="middle" font-size="9" fill="#665245">钉钉·飞书·企微</text>
+    <text x="65" y="37" text-anchor="middle" font-size="9" fill="#665245">微信·QQ</text>
   </g>
   <g transform="translate(776, 118)">
     <rect width="130" height="40" rx="8" fill="#dce8e4" stroke="#5ca69d" stroke-width="0.5"/>
-    <text x="65" y="17" text-anchor="middle" font-size="11" font-weight="600" fill="#184a45">Webhook</text>
-    <text x="65" y="31" text-anchor="middle" font-size="9" fill="#9b7d6c">Discord / QQ</text>
+    <text x="65" y="14" text-anchor="middle" font-size="11" font-weight="600" fill="#184a45">海外 IM (3)</text>
+    <text x="65" y="26" text-anchor="middle" font-size="9" fill="#665245">Telegram·Discord</text>
+    <text x="65" y="37" text-anchor="middle" font-size="9" fill="#665245">Slack</text>
   </g>
 
   <!-- ===== Layer 2: Agent Engine ===== -->
@@ -93,9 +95,9 @@
   </g>
   <g transform="translate(620, 222)">
     <rect width="172" height="68" rx="10" fill="#f6e2d7" stroke="#ebb08f" stroke-width="0.5" filter="url(#shadowSm)"/>
-    <text x="86" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#d96d46">记忆系统</text>
+    <text x="86" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#d96d46">记忆 · Dreaming</text>
     <text x="86" y="36" text-anchor="middle" font-size="9" fill="#665245">短期上下文 + 长期提取</text>
-    <text x="86" y="50" text-anchor="middle" font-size="9" fill="#665245">定时整理 + 记忆涌现</text>
+    <text x="86" y="50" text-anchor="middle" font-size="9" fill="#665245">夜里整合 · 你睡了它在工作</text>
   </g>
   <g transform="translate(808, 222)">
     <rect width="108" height="68" rx="10" fill="#f6e2d7" stroke="#ebb08f" stroke-width="0.5" filter="url(#shadowSm)"/>
@@ -135,9 +137,9 @@
 
   <g transform="translate(516, 356)">
     <rect width="120" height="68" rx="10" fill="#dce8e4" stroke="#5ca69d" stroke-width="0.5" filter="url(#shadowSm)"/>
-    <text x="60" y="20" text-anchor="middle" font-size="10" font-weight="600" fill="#184a45">Spring AI</text>
-    <text x="60" y="36" text-anchor="middle" font-size="9" fill="#665245">统一模型抽象</text>
-    <text x="60" y="50" text-anchor="middle" font-size="8" fill="#9b7d6c">Chat + Embedding</text>
+    <text x="60" y="20" text-anchor="middle" font-size="10" font-weight="600" fill="#184a45">模型池 · Failover</text>
+    <text x="60" y="36" text-anchor="middle" font-size="9" fill="#665245">Spring AI 统一抽象</text>
+    <text x="60" y="50" text-anchor="middle" font-size="8" fill="#9b7d6c">健康追踪 · 自动切换</text>
   </g>
   <g transform="translate(650, 356)">
     <rect width="130" height="68" rx="10" fill="#dce8e4" stroke="#5ca69d" stroke-width="0.5" filter="url(#shadowSm)"/>
@@ -179,8 +181,9 @@
   </g>
   <g transform="translate(632, 488)">
     <rect width="130" height="40" rx="8" fill="#fff" stroke="#d9cec2" stroke-width="0.5"/>
-    <text x="65" y="17" text-anchor="middle" font-size="11" font-weight="600" fill="#1d1612">定时任务</text>
-    <text x="65" y="31" text-anchor="middle" font-size="9" fill="#9b7d6c">Cron 调度引擎</text>
+    <text x="65" y="14" text-anchor="middle" font-size="11" font-weight="600" fill="#1d1612">Cron → 渠道</text>
+    <text x="65" y="26" text-anchor="middle" font-size="9" fill="#665245">Ambient AI</text>
+    <text x="65" y="37" text-anchor="middle" font-size="9" fill="#665245">主动交付</text>
   </g>
   <g transform="translate(776, 488)">
     <rect width="130" height="40" rx="8" fill="#fff" stroke="#d9cec2" stroke-width="0.5"/>
@@ -195,7 +198,7 @@
   <line x1="710" y1="438" x2="710" y2="454" stroke="#665245" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.4"/>
 
   <!-- Footer -->
-  <text x="480" y="575" text-anchor="middle" font-size="10" fill="#9b7d6c">Java 17+ · Spring Boot 3.5 · Spring AI Alibaba · Vue 3 · TypeScript · Vite · Electron</text>
+  <text x="480" y="575" text-anchor="middle" font-size="10" fill="#9b7d6c">Java 21+ · Spring Boot 3.5 · Spring AI Alibaba · Vue 3 · TypeScript · Vite · Electron</text>
   <rect x="380" y="590" width="200" height="24" rx="12" fill="url(#primary)"/>
   <text x="480" y="607" text-anchor="middle" font-size="11" font-weight="600" fill="#fff" letter-spacing="0.5">claw.mate.vip</text>
 </svg>

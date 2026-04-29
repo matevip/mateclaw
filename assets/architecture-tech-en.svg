@@ -56,13 +56,15 @@
   </g>
   <g transform="translate(632, 118)">
     <rect width="130" height="40" rx="8" fill="#dce8e4" stroke="#5ca69d" stroke-width="0.5"/>
-    <text x="65" y="17" text-anchor="middle" font-size="11" font-weight="600" fill="#184a45">Channel Adapters</text>
-    <text x="65" y="31" text-anchor="middle" font-size="9" fill="#9b7d6c">DingTalk / Feishu / WeCom</text>
+    <text x="65" y="14" text-anchor="middle" font-size="11" font-weight="600" fill="#184a45">China IM (5)</text>
+    <text x="65" y="26" text-anchor="middle" font-size="9" fill="#665245">DingTalk · Feishu</text>
+    <text x="65" y="37" text-anchor="middle" font-size="9" fill="#665245">WeCom · WeChat · QQ</text>
   </g>
   <g transform="translate(776, 118)">
     <rect width="130" height="40" rx="8" fill="#dce8e4" stroke="#5ca69d" stroke-width="0.5"/>
-    <text x="65" y="17" text-anchor="middle" font-size="11" font-weight="600" fill="#184a45">Webhooks</text>
-    <text x="65" y="31" text-anchor="middle" font-size="9" fill="#9b7d6c">Telegram / Discord / QQ</text>
+    <text x="65" y="14" text-anchor="middle" font-size="11" font-weight="600" fill="#184a45">Global IM (3)</text>
+    <text x="65" y="26" text-anchor="middle" font-size="9" fill="#665245">Telegram · Discord</text>
+    <text x="65" y="37" text-anchor="middle" font-size="9" fill="#665245">Slack</text>
   </g>
 
   <!-- ===== Layer 2: Agent Engine ===== -->
@@ -132,9 +134,9 @@
 
   <g transform="translate(516, 356)">
     <rect width="120" height="68" rx="10" fill="#dce8e4" stroke="#5ca69d" stroke-width="0.5" filter="url(#shadowSm)"/>
-    <text x="60" y="20" text-anchor="middle" font-size="10" font-weight="600" fill="#184a45">Spring AI</text>
-    <text x="60" y="36" text-anchor="middle" font-size="9" fill="#665245">Unified Abstraction</text>
-    <text x="60" y="50" text-anchor="middle" font-size="8" fill="#9b7d6c">Chat + Embedding</text>
+    <text x="60" y="20" text-anchor="middle" font-size="10" font-weight="600" fill="#184a45">Provider Pool</text>
+    <text x="60" y="36" text-anchor="middle" font-size="9" fill="#665245">Spring AI · Failover</text>
+    <text x="60" y="50" text-anchor="middle" font-size="8" fill="#9b7d6c">Health Tracker · Cooldown</text>
   </g>
   <g transform="translate(650, 356)">
     <rect width="130" height="68" rx="10" fill="#dce8e4" stroke="#5ca69d" stroke-width="0.5" filter="url(#shadowSm)"/>
@@ -176,8 +178,9 @@
   </g>
   <g transform="translate(632, 488)">
     <rect width="130" height="40" rx="8" fill="#fff" stroke="#d9cec2" stroke-width="0.5"/>
-    <text x="65" y="17" text-anchor="middle" font-size="11" font-weight="600" fill="#1d1612">Cron Scheduler</text>
-    <text x="65" y="31" text-anchor="middle" font-size="9" fill="#9b7d6c">Task Automation</text>
+    <text x="65" y="14" text-anchor="middle" font-size="11" font-weight="600" fill="#1d1612">Cron → Channel</text>
+    <text x="65" y="26" text-anchor="middle" font-size="9" fill="#665245">Ambient AI</text>
+    <text x="65" y="37" text-anchor="middle" font-size="9" fill="#665245">Proactive Delivery</text>
   </g>
   <g transform="translate(776, 488)">
     <rect width="130" height="40" rx="8" fill="#fff" stroke="#d9cec2" stroke-width="0.5"/>
@@ -191,7 +194,7 @@
   <line x1="250" y1="438" x2="250" y2="454" stroke="#665245" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.4"/>
   <line x1="710" y1="438" x2="710" y2="454" stroke="#665245" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.4"/>
 
-  <text x="480" y="575" text-anchor="middle" font-size="10" fill="#9b7d6c">Java 17+ · Spring Boot 3.5 · Spring AI Alibaba · Vue 3 · TypeScript · Vite · Electron</text>
+  <text x="480" y="575" text-anchor="middle" font-size="10" fill="#9b7d6c">Java 21+ · Spring Boot 3.5 · Spring AI Alibaba · Vue 3 · TypeScript · Vite · Electron</text>
   <rect x="380" y="590" width="200" height="24" rx="12" fill="url(#primary)"/>
   <text x="480" y="607" text-anchor="middle" font-size="11" font-weight="600" fill="#fff" letter-spacing="0.5">claw.mate.vip</text>
 </svg>

@@ -13,6 +13,8 @@ import java.time.LocalDateTime;
 public class CronJobDTO {
 
     private Long id;
+    /** Out-only: workspace ID stamped by the server from X-Workspace-Id (RFC-083). */
+    private Long workspaceId;
     private String name;
     private String cronExpression;
     private String timezone;
@@ -28,9 +30,33 @@ public class CronJobDTO {
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 
+    /** RFC-063r §2.9: originating channel binding (null = web-origin cron). */
+    private Long channelId;
+
+    /**
+     * Read-only display name for the bound channel — populated by
+     * {@code CronJobService.list()} via a batch lookup so the UI can show
+     * "钉钉 / 飞书 / 微信" alongside the cron row without an extra request.
+     */
+    private String channelName;
+
+    /** RFC-063r §2.9: delivery target detail (targetId / threadId / accountId). */
+    private DeliveryConfig deliveryConfig;
+
+    /**
+     * RFC-063r §2.14: read-model field surfaced by CronJobMapper#selectListWithDeliveryStatus
+     * (PR-3). One of NONE / PENDING / DELIVERED / NOT_DELIVERED, taken from
+     * the most-recent run row. Out-only — never accepted on create/update.
+     */
+    private String lastDeliveryStatus;
+
+    /** RFC-063r §2.14: out-only error detail for the most-recent delivery attempt. */
+    private String lastDeliveryError;
+
     public static CronJobDTO from(CronJobEntity entity) {
         CronJobDTO dto = new CronJobDTO();
         dto.setId(entity.getId());
+        dto.setWorkspaceId(entity.getWorkspaceId());
         dto.setName(entity.getName());
         dto.setCronExpression(entity.getCronExpression());
         dto.setTimezone(entity.getTimezone());
@@ -43,6 +69,15 @@ public class CronJobDTO {
         dto.setLastRunTime(entity.getLastRunTime());
         dto.setCreateTime(entity.getCreateTime());
         dto.setUpdateTime(entity.getUpdateTime());
+        dto.setChannelId(entity.getChannelId());
+        dto.setDeliveryConfig(entity.getDeliveryConfig());
+        // RFC-063r §2.14: surface the latest-run delivery snapshot when the
+        // entity was loaded via selectListWithDeliveryStatus / selectByIdWithDeliveryStatus.
+        // Default "NONE" when no run has ever been recorded so the UI can
+        // render a neutral badge instead of a blank cell.
+        dto.setLastDeliveryStatus(entity.getLastDeliveryStatus() != null
+                ? entity.getLastDeliveryStatus() : "NONE");
+        dto.setLastDeliveryError(entity.getLastDeliveryError());
         return dto;
     }
 
@@ -63,6 +98,8 @@ public class CronJobDTO {
         entity.setTriggerMessage(this.triggerMessage);
         entity.setRequestBody(this.requestBody);
         entity.setEnabled(this.enabled);
+        entity.setChannelId(this.channelId);
+        entity.setDeliveryConfig(this.deliveryConfig);
         return entity;
     }
 }

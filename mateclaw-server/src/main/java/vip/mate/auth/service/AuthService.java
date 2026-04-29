@@ -51,7 +51,7 @@ public class AuthService {
                 .eq(UserEntity::getEnabled, true));
 
         if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            throw new MateClawException("err.auth.invalid_credentials", "用户名或密码错误");
+            throw new MateClawException("err.auth.invalid_credentials", 401, "用户名或密码错误");
         }
 
         String token = generateToken(user);

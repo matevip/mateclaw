@@ -1,6 +1,6 @@
 {
   "name": "mateclaw-ui",
-  "version": "1.1.0",
+  "version": "1.1.137",
   "private": true,
   "type": "module",
   "description": "MateClaw - Personal AI Assistant Web Console",
@@ -18,8 +18,10 @@
     "echarts": "^6.0.0",
     "element-plus": "^2.9.1",
     "highlight.js": "^11.11.1",
+    "katex": "^0.16.45",
     "marked": "^15.0.6",
     "marked-highlight": "^2.2.3",
+    "mermaid": "^11.14.0",
     "pinia": "^3.0.1",
     "vue": "^3.5.13",
     "vue-i18n": "9.14.4",
@@ -27,6 +29,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.2",
+    "@types/katex": "^0.16.8",
     "@vitejs/plugin-vue": "^6.0.5",
     "@vue/tsconfig": "^0.7.0",
     "autoprefixer": "^10.4.20",

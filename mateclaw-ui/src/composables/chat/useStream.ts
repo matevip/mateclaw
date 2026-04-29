@@ -43,6 +43,7 @@ export type SSEEventType =
   | 'delegation_start'
   | 'delegation_progress'
   | 'delegation_end'
+  | 'delegation_child_complete'
 
 export interface SSEEvent {
   type: SSEEventType
@@ -239,8 +240,9 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
         errorInfo.requestId = response.headers.get('X-Request-Id')
           || errorBody?.requestId
           || errorInfo.requestId
-        // 401/403 时清除 token 并跳转登录页（与 http.ts 保持一致）
-        if (response.status === 401 || response.status === 403) {
+        // 401 = authentication failure → log out (consistent with http.ts).
+        // 403 = authorization failure (e.g. workspace permission denied) → keep session.
+        if (response.status === 401) {
           handleAuthFailure()
         }
         throw Object.assign(new Error(errorMsg), { errorInfo })

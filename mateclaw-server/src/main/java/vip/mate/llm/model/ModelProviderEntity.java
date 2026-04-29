@@ -49,6 +49,23 @@ public class ModelProviderEntity {
 
     private String oauthAccountId;
 
+    /**
+     * RFC-009: position of this provider in the fallback chain.
+     * {@code 0} (default) means "not in the chain"; positive values are tried
+     * in ascending order after the primary model exhausts its retries.
+     */
+    private Integer fallbackPriority;
+
+    /**
+     * RFC-074: explicit user-enabled flag. {@code FALSE} means the provider is
+     * known to the catalog but hidden from the dropdown / chat fallback chain
+     * — the user must opt in via the "Add Provider" drawer. Default {@code FALSE}
+     * for fresh installs; V55 migration backfills {@code TRUE} for rows with
+     * evidence of prior use (real api_key, OAuth token, recent chat usage,
+     * or current default model).
+     */
+    private Boolean enabled;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

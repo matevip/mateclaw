@@ -2,8 +2,10 @@ package vip.mate.tool.music;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import vip.mate.tool.builtin.ToolExecutionContext;
 
@@ -23,9 +25,11 @@ public class MusicGenerateTool {
     public String music_generate(
             @ToolParam(description = "音乐风格/场景描述，如：'轻快的钢琴爵士乐'、'史诗电影配乐'、'欢快的流行歌曲'") String prompt,
             @ToolParam(description = "歌词文本（可选，不填则由 AI 生成或生成纯音乐）") String lyrics,
-            @ToolParam(description = "是否生成纯音乐（无人声），默认 false") Boolean instrumental) {
+            @ToolParam(description = "是否生成纯音乐（无人声），默认 false") Boolean instrumental,
+            // RFC-063r §2.5: hidden from LLM by JsonSchemaGenerator.
+            @Nullable ToolContext ctx) {
 
-        String conversationId = ToolExecutionContext.conversationId();
+        String conversationId = ToolExecutionContext.conversationId(ctx);
         if (conversationId == null) {
             return "无法获取会话 ID";
         }

@@ -33,12 +33,15 @@ public class WikiProperties {
     private int maxParallelRawMaterials = 3;
 
     /**
-     * 单个材料内 chunk 的并行处理数上限。
+     * Max parallel chunks within a single raw material.
      * <p>
-     * RFC-012 Change 1：从硬编码 3 提到 5，并暴露为配置项。默认总并发为
-     * maxParallelRawMaterials × maxParallelChunks = 15，仍在常见 60 RPM 限额下。
+     * RFC-047 P3: Changed from 5 to 1. Parallel chunks all share the same existingPagesIndex
+     * snapshot, so chunk N cannot see pages created by chunk N-1 — causing duplicate pages and
+     * stale-index collisions. Serializing chunks eliminates this class of bug. Document-level
+     * parallelism (maxParallelRawMaterials) is preserved, so overall throughput is unchanged
+     * for multi-document batches.
      */
-    private int maxParallelChunks = 5;
+    private int maxParallelChunks = 1;
 
     /**
      * 单个 chunk 内 phase B 阶段的 page 并行处理数上限。
@@ -85,6 +88,25 @@ public class WikiProperties {
     private long llmMaxTotalDurationMs = 240_000;
 
     /**
+     * RFC-047 P1: Max pages per BatchCreate LLM call.
+     * Pages planned by route are chunked into sub-batches of this size;
+     * a local liveIndex is updated between sub-batches so later pages can
+     * link to earlier ones created in the same chunk.
+     * Default 2: keeps total output tokens well under typical provider caps
+     * (~2k–3k completion tokens) so the FILE-block JSON doesn't get truncated
+     * mid-object. Raising this risks unparseable JSON skips on long content.
+     */
+    private int batchCreatePageSize = 2;
+
+    /**
+     * RFC-047: Minimum chunk length (chars) for the chunk-fallback mechanism.
+     * If route returns 0 create+update entries and the chunk exceeds this threshold,
+     * an overview page is auto-injected so no substantial content is silently dropped.
+     * Chunks shorter than this (e.g. TOC lines, blank pages) are allowed to produce nothing.
+     */
+    private int chunkFallbackMinChars = 200;
+
+    /**
      * 是否启用两阶段消化（路由 → 逐页 merge）。
      * <p>
      * RFC-012 M2：true 时单 chunk 的 LLM 输出量大幅缩减，避免 nginx 60s 网关超时。
@@ -110,4 +132,95 @@ public class WikiProperties {
 
     /** 混合搜索默认模式：keyword / semantic / hybrid */
     private String searchDefaultMode = "hybrid";
+
+    // ==================== RFC-031: Light processing tiers ====================
+
+    /** Whether to auto-dispatch a LIGHT_ENRICH job after heavy ingest completes */
+    private boolean lightEnrichEnabled = true;
+
+    /** Delay before light enrichment starts (ms) */
+    private long lightEnrichDelayMs = 2000;
+
+    /**
+     * Minimum ratio of enriched content length to original content length.
+     * If the LLM returns text shorter than this ratio, the enrichment is rejected.
+     */
+    private double wikilinkMinContentRatio = 0.5;
+
+    /** Maximum characters for local repair single-page regeneration */
+    private int localRepairMaxChars = 8000;
+
+    /**
+     * Whether to run a document-level analysis pass before routing.
+     * When enabled, a single LLM call produces a concept map (topics + key_concepts)
+     * that is injected into every chunk's route prompt, giving the router global
+     * awareness of the document structure and reducing concept omissions.
+     * Adds ~1 LLM call and 10-20s per raw material.
+     */
+    private boolean useDocumentAnalysis = true;
+
+    /**
+     * Max characters of document text fed to the analysis pass.
+     * Larger values improve coverage but increase prompt tokens.
+     * Default 15000 covers most documents while staying well within model limits.
+     */
+    private int documentAnalysisSampleChars = 15000;
+
+    /**
+     * RFC-051 PR-6b: route-phase output binding. When {@code true}, the route
+     * LLM call uses a Spring AI {@code BeanOutputConverter<RouteResult>} —
+     * the format hint is injected into the user prompt and the response is
+     * parsed strictly into the DTO. Failures fall back to the legacy lenient
+     * JSON parser so a flaky model never blocks ingest.
+     * <p>
+     * Default {@code false} keeps existing behavior on first upgrade. Flip on
+     * once you've validated the route prompt against the models you actually
+     * run (DashScope / OpenAI / Anthropic / DeepSeek tend to be fine; Ollama
+     * and weaker models may need the fallback).
+     */
+    private boolean useStructuredRoute = false;
+
+    /**
+     * RFC-051 follow-up: how many pages the enrich service packs into a single
+     * LLM call. {@code 1} (default) reproduces the legacy behavior of one
+     * call per page. {@code 5}–{@code 10} is reasonable for most chat models;
+     * weaker locally-served models may need to stay at 1.
+     * <p>
+     * Larger batches reduce LLM cost roughly proportional to the batch size,
+     * but each batch's prompt grows linearly with the included page bodies,
+     * so very long pages still benefit from single-page mode. Pages exceeding
+     * {@link #enrichBatchPerPageMaxChars} are excluded from the batch and
+     * enriched individually.
+     */
+    private int enrichBatchSize = 1;
+
+    /**
+     * RFC-051 follow-up: per-page content cap when packing pages into an
+     * enrich batch. Pages whose body exceeds this size fall through to a
+     * single-page enrich call so the batch prompt stays bounded. The cap
+     * applies only to the prompt; the applier always sees full content.
+     */
+    private int enrichBatchPerPageMaxChars = 3000;
+
+    /**
+     * RFC-051 §9.4: replace the legacy flat 0.15 relation boost with a
+     * normalized score per query, scaled by {@link #relationBoostLambda}.
+     * Default {@code false} keeps the legacy ranking; flip on after
+     * validating against your retrieval test set.
+     * <p>
+     * Why it matters: the flat 0.15 was bigger than typical RRF scores
+     * (~0.02–0.05), so boosted neighbors routinely leapfrogged real RRF
+     * hits. Normalization keeps boost on the same scale as fused scores.
+     */
+    private boolean useNormalizedRelationBoost = false;
+
+    /**
+     * RFC-051 §9.4: maximum boost contribution from the relation pass when
+     * {@link #useNormalizedRelationBoost} is on. Each boosted candidate
+     * gets {@code (rawRelationScore / maxRawRelationScore) * lambda} added
+     * to its fused score. Default {@code 0.05} is roughly the size of a
+     * top-3 RRF score, so a max-relation neighbor competes evenly with a
+     * top-3 RRF hit but doesn't dominate it.
+     */
+    private double relationBoostLambda = 0.05;
 }

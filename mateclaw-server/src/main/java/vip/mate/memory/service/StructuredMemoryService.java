@@ -2,7 +2,9 @@ package vip.mate.memory.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import vip.mate.memory.event.MemoryWriteEvent;
 import vip.mate.workspace.document.WorkspaceFileService;
 import vip.mate.workspace.document.model.WorkspaceFileEntity;
 
@@ -35,6 +37,7 @@ public class StructuredMemoryService {
     private static final Pattern SECTION_PATTERN = Pattern.compile("^## (.+)$", Pattern.MULTILINE);
 
     private final WorkspaceFileService workspaceFileService;
+    private final ApplicationEventPublisher eventPublisher;
 
     /** Per-file lock to prevent concurrent read-modify-write on the same file */
     private final ConcurrentHashMap<String, ReentrantLock> fileLocks = new ConcurrentHashMap<>();
@@ -69,6 +72,8 @@ public class StructuredMemoryService {
             workspaceFileService.saveFile(agentId, filename, updated);
             log.info("[StructuredMemory] {} entry '{}' for agent={} (source={})",
                     existingSection != null ? "Updated" : "Added", key, agentId, source);
+            // Publish event for SOUL auto-evolution (Phase 2)
+            eventPublisher.publishEvent(new MemoryWriteEvent(agentId, filename, "remember", content));
         } finally {
             lock.unlock();
         }

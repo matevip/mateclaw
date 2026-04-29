@@ -1,10 +1,12 @@
 package vip.mate.channel.web;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
+import vip.mate.workspace.conversation.model.MessageContentPart;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -24,6 +26,25 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 采用生产者-消费者解耦设计：将 SSE 事件的生产（Flux 订阅）与消费（SseEmitter 连接）解耦。
  * 一个后台 Flux 生产者持续产出事件，广播给所有 SseEmitter 订阅者并缓存到 buffer。
  * 新连接（重连）到来时，先回放 buffer，再接入实时流。
+ *
+ * <h2>Single-instance assumption</h2>
+ * <p><strong>The {@link #runs} map is process-local memory.</strong> A reconnect
+ * request can only re-attach to a {@code RunState} that lives on the <em>same</em>
+ * JVM that originally created it. In a multi-node deployment behind a load
+ * balancer, the LB MUST be configured for sticky session by {@code conversationId}
+ * (Nginx {@code hash $arg_conversationId consistent;}, K8s Ingress
+ * cookie-based affinity, AWS ALB target-group stickiness, etc.).
+ *
+ * <p>This is an explicit CE constraint — see
+ * {@code rfcs/community/90-appendix/02-tech-debt-inventory.md §4.1} and
+ * {@code rfc-054 §0}. Cross-node SSE relay (Redis Stream / NATS / Kafka) is
+ * tracked under the EE roadmap.
+ *
+ * <p>Operator-facing diagnostics: callers should use
+ * {@link #streamExistsOnThisNode(String)} when distinguishing "stream finished
+ * normally" from "stream is on a different node" — both return {@code false}
+ * from {@link #attach(String, SseEmitter)} but mean very different things to
+ * the user.
  *
  * @author MateClaw Team
  */
@@ -84,6 +105,18 @@ public class ChatStreamTracker {
 
         /** 排队的用户消息队列（支持多条排队消息，按序消费） */
         final java.util.Queue<QueuedInput> messageQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+        /**
+         * Emergency save callback registered by the SSE chain owner (ChatController).
+         * Invoked from {@link #onShutdown()} so the accumulated assistant content + tool_calls
+         * are persisted before the JVM tears down — without this, a `mvn spring-boot:run`
+         * restart wipes any in-flight turn and leaves only the user message in DB.
+         * <p>
+         * The callback must be idempotent (will not be called twice for the same run, but
+         * may race with normal doOnComplete/doOnError; both paths must tolerate the other
+         * having saved already).
+         */
+        volatile Runnable emergencySaveCallback;
 
         /** 心跳定时器 */
         volatile ScheduledFuture<?> heartbeatFuture;
@@ -172,6 +205,18 @@ public class ChatStreamTracker {
     }
 
     /**
+     * Register an emergency-save callback for this run, invoked from {@link #onShutdown()}
+     * before the JVM tears down. The callback should snapshot the current accumulator
+     * state and persist it as the assistant message (status="interrupted").
+     */
+    public void setEmergencySaveCallback(String conversationId, Runnable callback) {
+        RunState state = runs.get(conversationId);
+        if (state != null) {
+            state.emergencySaveCallback = callback;
+        }
+    }
+
+    /**
      * 请求停止指定会话的流。
      * 取消 Flux 订阅（底层 HTTP 连接也会随之关闭），返回 true 表示确实停止了正在运行的流。
      */
@@ -207,10 +252,17 @@ public class ChatStreamTracker {
     public void broadcast(String conversationId, String eventName, String jsonData) {
         RunState state = runs.get(conversationId);
 
-        // 特殊处理 "done" 事件：即使流已完成，仍然尝试发送给所有订阅者
+        // 特殊处理 "done" 事件：即使流已完成，仍然尝试发送给所有订阅者，
+        // 并且**也必须入 buffer**——这样如果客户端在生成期间 SSE 断了
+        // (broken pipe / 浏览器 tab throttle / 网络抖动)，刷新页面重连
+        // 时仍能从 buffer 回放 done 事件，UI 不再永远卡在"生成中"。
+        // 之前的设计 done 不入 buffer，配合 complete() 立即 runs.remove()
+        // 一起，使得 SSE 中途断开 = done 永远丢，是这次故障的根源。
         if ("done".equals(eventName)) {
             if (state != null) {
+                SseEvent doneEvent = new SseEvent(eventName, jsonData);
                 synchronized (state.lock) {
+                    state.buffer.add(doneEvent);
                     Iterator<SseEmitter> it = state.subscribers.iterator();
                     while (it.hasNext()) {
                         SseEmitter emitter = it.next();
@@ -286,21 +338,41 @@ public class ChatStreamTracker {
     }
 
     /**
-     * 将 emitter 附着到现有的运行中的流。
-     * 先回放 buffer 中的全部事件，再加入订阅者列表接收后续实时事件。
+     * Diagnostic helper for the multi-node deployment edge case (issue #17):
+     * tells the caller whether a {@link RunState} for this conversation
+     * exists on <em>this</em> JVM at all (regardless of done state).
      *
-     * @return true 如果成功附着（流正在运行），false 如果没有活跃的流
+     * <p>{@link #attach(String, SseEmitter)} returns {@code false} both when
+     * the stream finished normally <em>and</em> when no state exists on this
+     * node. Callers that need to distinguish those two cases (e.g. to send a
+     * different SSE event to the client) should consult this method first.
+     *
+     * @return {@code true} when a RunState exists locally for this
+     *         conversationId; {@code false} when it never existed here OR was
+     *         already cleaned up after completion
+     */
+    public boolean streamExistsOnThisNode(String conversationId) {
+        return runs.containsKey(conversationId);
+    }
+
+    /**
+     * 将 emitter 附着到现有的运行中或刚刚完成的流。
+     * 先回放 buffer 中的全部事件，再加入订阅者列表接收后续实时事件（仅当流仍在运行时）。
+     * <p>
+     * 兼容"流已完成"语义：如果 RunState 还在 map 里但 done=true，仍然回放 buffer
+     * （包含 done 事件本身），让重连客户端拿到完成信号后正常退出"生成中"状态。
+     * RunState 完成后会保留 DONE_RETENTION_MS（5 分钟），由 cleanupStaleRuns 异步清理；
+     * 这段窗口期内任何刷新页面都能拿到 done 回放。
+     *
+     * @return true 如果成功附着或重放（订阅者已加入或事件已重放完毕），false 如果没有任何状态可恢复
      */
     public boolean attach(String conversationId, SseEmitter emitter) {
         RunState state = runs.get(conversationId);
-        if (state == null || state.done) {
+        if (state == null) {
             return false;
         }
         synchronized (state.lock) {
-            if (state.done) {
-                return false;
-            }
-            // 回放全部缓冲事件
+            // 回放全部缓冲事件（包含 done 事件本身——见 broadcast 的 done 分支）
             for (SseEvent event : state.buffer) {
                 try {
                     emitter.send(SseEmitter.event().name(event.name()).data(event.json()));
@@ -309,6 +381,17 @@ public class ChatStreamTracker {
                             conversationId, e.getMessage());
                     return false;
                 }
+            }
+            // 流已完成：buffer 已回放完毕（含 done event），不需要订阅后续事件
+            if (state.done) {
+                log.info("[SSE] Replayed {} buffered events to reconnecting client for completed stream: {}",
+                        state.buffer.size(), conversationId);
+                try {
+                    emitter.complete();
+                } catch (Exception ignored) {
+                    // emitter 已被 servlet 容器关掉了，无需处理
+                }
+                return true;
             }
             state.subscribers.add(emitter);
         }
@@ -359,11 +442,14 @@ public class ChatStreamTracker {
                 return false;
             }
         }
-        // 所有 Flux 都已完成，停止心跳并移除 RunState（不消费 queue）
+        // 所有 Flux 都已完成，停止心跳，标记 done 但**不立即移除 RunState**——
+        // 留给 cleanupStaleRuns 在 DONE_RETENTION_MS 后异步清理。这段窗口期内
+        // 客户端刷新页面 attach() 能从 buffer 回放 done 事件，UI 不会卡在
+        // "生成中"。之前立即 runs.remove() 是 SSE 中途断开导致 done 永远丢的根源。
         stopHeartbeat(conversationId);
-        runs.remove(conversationId);
         state.done = true;
-        log.debug("Stream fully completed (no queue drain): {}", conversationId);
+        log.debug("Stream fully completed (no queue drain): {} (kept in map for {}ms reconnect window)",
+                conversationId, DONE_RETENTION_MS);
         return true;
     }
 
@@ -391,11 +477,12 @@ public class ChatStreamTracker {
             // 最后一个 Flux：在同一个锁内消费排队消息（取队首）
             consumed = state.messageQueue.poll();
         }
-        // 锁外：停止心跳并移除 RunState
+        // 锁外：停止心跳，标记 done。**不立即移除 RunState**——保留 DONE_RETENTION_MS
+        // 让客户端可在窗口期内刷新页面通过 attach() 回放 done 事件。
         stopHeartbeat(conversationId);
-        runs.remove(conversationId);
         state.done = true;
-        log.debug("Stream fully completed: {} (hasQueuedSnapshot={})", conversationId, consumed != null);
+        log.debug("Stream fully completed: {} (hasQueuedSnapshot={}, kept in map for {}ms reconnect window)",
+                conversationId, consumed != null, DONE_RETENTION_MS);
         return new CompletionResult(true, consumed);
     }
 
@@ -516,6 +603,11 @@ public class ChatStreamTracker {
      * @return true 如果成功请求了中断
      */
     public boolean requestInterrupt(String conversationId, String queuedMessage, Long agentId, boolean persisted) {
+        return requestInterrupt(conversationId, queuedMessage, agentId, persisted, null);
+    }
+
+    public boolean requestInterrupt(String conversationId, String queuedMessage, Long agentId,
+                                    boolean persisted, List<MessageContentPart> contentParts) {
         RunState state = runs.get(conversationId);
         if (state == null || state.done) {
             return false;
@@ -528,7 +620,7 @@ public class ChatStreamTracker {
             Disposable d = state.disposable;
             canInterrupt = d != null && !d.isDisposed();
             // 无论是否可中断，都入队（支持多条排队消息）
-            state.messageQueue.offer(new QueuedInput(queuedMessage, agentId, persisted));
+            state.messageQueue.offer(new QueuedInput(queuedMessage, agentId, persisted, contentParts));
             if (canInterrupt) {
                 state.interruptType = InterruptType.USER_INTERRUPT_WITH_FOLLOWUP;
                 state.stopRequested.set(true);
@@ -575,11 +667,16 @@ public class ChatStreamTracker {
      * 将消息加入队列但不中断当前执行（用于不可中断阶段）。
      */
     public boolean enqueueMessage(String conversationId, String message, Long agentId, boolean persisted) {
+        return enqueueMessage(conversationId, message, agentId, persisted, null);
+    }
+
+    public boolean enqueueMessage(String conversationId, String message, Long agentId, boolean persisted,
+                                  List<MessageContentPart> contentParts) {
         RunState state = runs.get(conversationId);
         if (state == null || state.done) {
             return false;
         }
-        state.messageQueue.offer(new QueuedInput(message, agentId, persisted));
+        state.messageQueue.offer(new QueuedInput(message, agentId, persisted, contentParts));
         // broadcast 在锁外
         try {
             String json = objectMapper.writeValueAsString(Map.of(
@@ -595,9 +692,14 @@ public class ChatStreamTracker {
     }
 
     /**
-     * 排队输入的原子快照（message + agentId + persisted 一起返回，避免分离读取导致不一致）
+     * 排队输入的原子快照（message + agentId + persisted + contentParts 一起返回，避免分离读取导致不一致）
      */
-    public record QueuedInput(String message, Long agentId, boolean persisted) {}
+    public record QueuedInput(String message, Long agentId, boolean persisted,
+                              List<MessageContentPart> contentParts) {
+        public QueuedInput(String message, Long agentId, boolean persisted) {
+            this(message, agentId, persisted, null);
+        }
+    }
 
     /**
      * 原子消费排队的输入（流完成/中断后调用）。
@@ -842,6 +944,66 @@ public class ChatStreamTracker {
         if (evicted > 0) {
             log.info("[SSE] Cleanup completed: evicted {} stale RunState entries, {} remaining",
                     evicted, runs.size());
+        }
+    }
+
+    /**
+     * Flush in-flight runs before JVM shutdown.
+     * <p>
+     * Spring closes singleton beans in reverse construction order; ConversationService /
+     * Hikari outlive ChatStreamTracker, so saveMessage from {@link #onShutdown()} still
+     * has a working DB connection. Without this, a {@code mvn spring-boot:run} restart or
+     * SIGTERM during a turn races against the Reactor cancellation: the doOnError /
+     * doOnComplete saveMessage may not run before HikariPool shuts down, leaving the
+     * conversation with only the user message and no assistant reply (the
+     * "对话框里除了问题外什么也没留下" symptom seen in production logs at 07:23:02).
+     * <p>
+     * Behavior:
+     * <ol>
+     *   <li>Walk every active (not-done) RunState.</li>
+     *   <li>Invoke its registered emergencySaveCallback synchronously — the callback
+     *       (set by ChatController) snapshots the current accumulator and persists it
+     *       as an "interrupted" assistant message.</li>
+     *   <li>Dispose the Reactor disposable so the LLM stream terminates promptly.</li>
+     * </ol>
+     * The callback must tolerate normal doOnError/doOnComplete having raced and saved
+     * already; the latest commit wins for that conversation.
+     */
+    @PreDestroy
+    public void onShutdown() {
+        int active = (int) runs.values().stream().filter(s -> !s.done).count();
+        if (active == 0) {
+            log.info("[ChatStreamTracker] Shutdown: no active runs to flush");
+            return;
+        }
+        log.warn("[ChatStreamTracker] Shutdown: flushing {} active run(s) before JVM exit",
+                active);
+        for (Map.Entry<String, RunState> entry : runs.entrySet()) {
+            RunState state = entry.getValue();
+            if (state.done) continue;
+            String cid = entry.getKey();
+            try {
+                Runnable callback = state.emergencySaveCallback;
+                if (callback != null) {
+                    log.info("[ChatStreamTracker] Emergency-saving in-flight run: {}", cid);
+                    callback.run();
+                } else {
+                    log.warn("[ChatStreamTracker] No emergency-save callback for active run: {} " +
+                            "(content may be lost)", cid);
+                }
+            } catch (Exception e) {
+                log.error("[ChatStreamTracker] Emergency save failed for {}: {}",
+                        cid, e.getMessage(), e);
+            }
+            try {
+                Disposable d = state.disposable;
+                if (d != null && !d.isDisposed()) {
+                    d.dispose();
+                }
+            } catch (Exception e) {
+                log.warn("[ChatStreamTracker] Disposable.dispose failed for {}: {}",
+                        cid, e.getMessage());
+            }
         }
     }
 }

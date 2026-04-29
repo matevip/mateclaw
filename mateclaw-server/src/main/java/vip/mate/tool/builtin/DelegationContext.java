@@ -1,62 +1,65 @@
 package vip.mate.tool.builtin;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.Set;
 
 /**
- * 跟踪 Agent 委派调用的上下文信息，防止无限递归并传递父会话信息。
+ * Tracks Agent delegation call context to prevent infinite recursion and carry parent session info.
  * <p>
- * 使用 ThreadLocal 存储当前线程的委派层级、父会话 ID 和子 Agent 禁用工具集。
- * 每次 {@link DelegateAgentTool} 发起委派时调用 enter()，返回后调用 exit()。
+ * Uses a ThreadLocal stack so that nested delegations correctly restore the previous layer's
+ * parentConversationId and childDeniedTools on exit.
+ * Each {@link DelegateAgentTool} delegation calls enter() before and exit() after execution.
  *
  * @author MateClaw Team
  */
 public final class DelegationContext {
 
-    private static final ThreadLocal<Integer> DEPTH = ThreadLocal.withInitial(() -> 0);
-    private static final ThreadLocal<String> PARENT_CONVERSATION_ID = new ThreadLocal<>();
-    private static final ThreadLocal<Set<String>> CHILD_DENIED_TOOLS = new ThreadLocal<>();
+    /**
+     * Snapshot of one delegation layer's state.
+     */
+    private record Frame(String parentConversationId, Set<String> childDeniedTools) {}
+
+    private static final ThreadLocal<Deque<Frame>> STACK = ThreadLocal.withInitial(ArrayDeque::new);
 
     private DelegationContext() {}
 
-    /** 获取当前委派深度（0 = 顶层调用） */
+    /** Current delegation depth (0 = top-level call, not inside any delegation) */
     public static int currentDepth() {
-        return DEPTH.get();
+        return STACK.get().size();
     }
 
-    /** 获取父会话 ID（用于事件 relay） */
+    /** Parent conversation ID for event relay (from the current frame) */
     public static String parentConversationId() {
-        return PARENT_CONVERSATION_ID.get();
+        Frame top = STACK.get().peek();
+        return top != null ? top.parentConversationId : null;
     }
 
-    /** 获取子 Agent 禁用的工具集 */
+    /** Denied tools set for the child Agent (from the current frame) */
     public static Set<String> childDeniedTools() {
-        Set<String> denied = CHILD_DENIED_TOOLS.get();
-        return denied != null ? denied : Set.of();
+        Frame top = STACK.get().peek();
+        return top != null && top.childDeniedTools != null ? top.childDeniedTools : Set.of();
     }
 
-    /** 进入下一层委派（带父会话 ID 和子 Agent 工具限制） */
+    /** Enter the next delegation layer (with parent conversation ID and child tool restrictions) */
     public static void enter(String parentConversationId, Set<String> deniedTools) {
-        DEPTH.set(DEPTH.get() + 1);
-        PARENT_CONVERSATION_ID.set(parentConversationId);
-        if (deniedTools != null) {
-            CHILD_DENIED_TOOLS.set(deniedTools);
-        }
+        STACK.get().push(new Frame(parentConversationId, deniedTools));
     }
 
-    /** 进入下一层委派（兼容旧调用） */
+    /** Enter the next delegation layer (backward-compatible overload) */
     public static void enter() {
         enter(null, null);
     }
 
-    /** 退出当前委派层 */
+    /** Exit the current delegation layer, restoring the previous layer's context */
     public static void exit() {
-        int current = DEPTH.get();
-        if (current <= 1) {
-            DEPTH.remove();
-            PARENT_CONVERSATION_ID.remove();
-            CHILD_DENIED_TOOLS.remove();
-        } else {
-            DEPTH.set(current - 1);
+        Deque<Frame> stack = STACK.get();
+        if (!stack.isEmpty()) {
+            stack.pop();
+        }
+        // Clean up ThreadLocal entirely when the stack is empty to prevent memory leaks
+        if (stack.isEmpty()) {
+            STACK.remove();
         }
     }
 }

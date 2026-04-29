@@ -30,7 +30,9 @@ http.interceptors.response.use(
     // 后端统一响应格式 R<T>: { code: number, msg: string, data: T }
     if (data && typeof data === 'object' && 'code' in data) {
       if (data.code === 200) return data
-      if (data.code === 401 || data.code === 403) {
+      // 401 = authentication failure → log out
+      // 403 = authorization failure (e.g. workspace permission denied) → keep session, surface error to caller
+      if (data.code === 401) {
         handleAuthFailure()
         return Promise.reject(new Error(data.msg || 'Unauthorized'))
       }
@@ -39,7 +41,7 @@ http.interceptors.response.use(
     return data
   },
   (err) => {
-    if (err.response?.status === 401 || err.response?.status === 403) {
+    if (err.response?.status === 401) {
       handleAuthFailure()
     }
     return Promise.reject(err.response?.data?.msg || err.message)
@@ -121,8 +123,6 @@ export const chatApi = {
   },
   stop: (conversationId: string) =>
     http.post<{ stopped: boolean }>(`/chat/${conversationId}/stop`),
-  approve: (conversationId: string, data: { pendingId: string; decision: string }) =>
-    http.post(`/chat/${conversationId}/approve`, data),
   getPendingApprovals: (conversationId: string) =>
     http.get(`/chat/${conversationId}/pending-approvals`),
 }
@@ -144,7 +144,20 @@ export const conversationApi = {
 
 // ==================== Skill ====================
 export const skillApi = {
-  list: () => http.get('/skills'),
+  /** RFC-042 §2.1 — paginated skill listing with search/type/enabled/scanStatus filters */
+  page: (params: {
+    page?: number
+    size?: number
+    keyword?: string
+    skillType?: string
+    enabled?: boolean
+    /** 'PASSED' / 'FAILED' — filters by security_scan_status (RFC-042 §2.3.5) */
+    scanStatus?: string
+  } = {}) => http.get('/skills', { params }),
+  /** Tab count aggregate — returns { all, builtin, mcp, dynamic } */
+  counts: () => http.get('/skills/counts'),
+  /** RFC-042 §2.3.4 — manually rescan a single skill's security */
+  rescan: (id: string | number) => http.post(`/skills/${id}/rescan`),
   listEnabled: () => http.get('/skills/enabled'),
   get: (id: string | number) => http.get(`/skills/${id}`),
   create: (data: any) => http.post('/skills', data),
@@ -215,10 +228,24 @@ export const channelApi = {
   toggle: (id: string | number, enabled: boolean) =>
     http.put(`/channels/${id}/toggle?enabled=${enabled}`),
   status: () => http.get('/channels/status'),
+  /** Real-time per-channel health (true transport state, not DB enabled flag). */
+  health: (id: string | number) => http.get(`/channels/${id}/health`),
+  /** Batch health for all channels in current workspace. */
+  healthAll: () => http.get('/channels/health'),
   // 微信 iLink Bot QR 码登录
   weixinQrcode: () => http.get('/channels/webhook/weixin/qrcode'),
   weixinQrcodeStatus: (qrcode: string) =>
     http.get(`/channels/webhook/weixin/qrcode/status?qrcode=${encodeURIComponent(qrcode)}`),
+  // Feishu one-click app registration (oapi-sdk 2.6+ scene/registration)
+  feishuRegisterBegin: (domain: string) =>
+    http.post(`/channels/webhook/feishu/register/begin?domain=${encodeURIComponent(domain)}`),
+  feishuRegisterStatus: (sessionId: string) =>
+    http.get(`/channels/webhook/feishu/register/status?session=${encodeURIComponent(sessionId)}`),
+  // DingTalk one-click app registration (OAuth Device Flow)
+  dingtalkRegisterBegin: () =>
+    http.post('/channels/webhook/dingtalk/register/begin'),
+  dingtalkRegisterStatus: (sessionId: string) =>
+    http.get(`/channels/webhook/dingtalk/register/status?session=${encodeURIComponent(sessionId)}`),
 }
 
 // ==================== MCP Server ====================
@@ -272,6 +299,14 @@ export const modelApi = {
   testModel: (providerId: string, modelId: string) =>
     http.post(`/models/${providerId}/models/${encodeURIComponent(modelId)}/test`),
 
+  // ==================== RFC-074: enabled / catalog ====================
+  /** Full provider catalog including enabled=false rows; powers the Add Provider drawer. */
+  catalog: () => http.get('/models/catalog'),
+  /** Opt a provider into the dropdown; backend triggers re-probe via ModelConfigChangedEvent. */
+  enableProvider: (providerId: string) => http.post(`/models/${providerId}/enable`),
+  /** Hide a provider; if it owned the current default model, backend auto-promotes a replacement. */
+  disableProvider: (providerId: string) => http.post(`/models/${providerId}/disable`),
+
   // ==================== Embedding Model (RFC Embedding UI) ====================
   listByType: (modelType: 'chat' | 'embedding') =>
     http.get('/models/by-type', { params: { modelType } }),
@@ -282,12 +317,47 @@ export const modelApi = {
     http.post('/models/embedding/default', { modelId }),
 }
 
+// ==================== Provider Pool (RFC-009 Phase 4) ====================
+export interface ProviderPoolEntry {
+  providerId: string
+  providerName: string
+  inPool: boolean
+  removalSource: string | null
+  removalMessage: string | null
+  removedAtMs: number | null
+  inCooldown: boolean
+  cooldownRemainingMs: number
+  consecutiveFailures: number
+}
+
+export interface ReprobeResult {
+  providerId: string
+  success: boolean
+  latencyMs: number
+  errorMessage: string | null
+  inPool: boolean
+}
+
+export const providerPoolApi = {
+  snapshot: () => http.get<ProviderPoolEntry[]>('/llm/provider-pool'),
+  reprobe: (providerId: string) =>
+    http.post<ReprobeResult>(`/llm/provider-pool/${encodeURIComponent(providerId)}/reprobe`),
+}
+
 // ==================== OAuth ====================
 export const oauthApi = {
   authorize: () => http.get('/oauth/openai/authorize'),
   status: () => http.get('/oauth/openai/status'),
   refresh: () => http.post('/oauth/openai/refresh'),
   revoke: () => http.delete('/oauth/openai/revoke'),
+}
+
+// RFC-062: Claude Code OAuth piggybacks on the user's local Claude Code
+// install — no in-app authorize/revoke flow yet (PR-4). Until then the UI
+// can only check status + force a re-detect from disk.
+export const claudeCodeOAuthApi = {
+  status: () => http.get('/oauth/anthropic/status'),
+  reload: () => http.post('/oauth/anthropic/reload'),
 }
 
 // ==================== Setup ====================
@@ -382,17 +452,25 @@ export const wikiApi = {
   listRaw: (kbId: number) => http.get(`/wiki/knowledge-bases/${kbId}/raw`),
   addRawText: (kbId: number, data: { title: string; content: string }) =>
     http.post(`/wiki/knowledge-bases/${kbId}/raw/text`, data),
-  uploadRaw: (kbId: number, formData: FormData) =>
+  uploadRaw: (kbId: number, formData: FormData, onProgress?: (pct: number) => void) =>
     http.post(`/wiki/knowledge-bases/${kbId}/raw/upload`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: onProgress
+        ? (e) => { if (e.total) onProgress(Math.round((e.loaded / e.total) * 100)) }
+        : undefined,
     }),
   deleteRaw: (kbId: number, rawId: number) =>
     http.delete(`/wiki/knowledge-bases/${kbId}/raw/${rawId}`),
   reprocessRaw: (kbId: number, rawId: number) =>
     http.post(`/wiki/knowledge-bases/${kbId}/raw/${rawId}/reprocess`),
+  downloadRaw: (kbId: number, rawId: number) =>
+    http.get<Blob>(`/wiki/knowledge-bases/${kbId}/raw/${rawId}/download`, {
+      responseType: 'blob',
+    }),
 
   // Wiki Pages
-  listPages: (kbId: number) => http.get(`/wiki/knowledge-bases/${kbId}/pages`),
+  listPages: (kbId: number, rawId?: number) =>
+    http.get(`/wiki/knowledge-bases/${kbId}/pages`, rawId != null ? { params: { rawId } } : undefined),
   getPage: (kbId: number, slug: string) =>
     http.get(`/wiki/knowledge-bases/${kbId}/pages/${encodeURIComponent(slug)}`),
   updatePage: (kbId: number, slug: string, content: string) =>
@@ -404,9 +482,41 @@ export const wikiApi = {
   getBacklinks: (kbId: number, slug: string) =>
     http.get(`/wiki/knowledge-bases/${kbId}/pages/${encodeURIComponent(slug)}/backlinks`),
 
+  // RFC-051 PR-7: archived pages
+  listArchivedPages: (kbId: number) =>
+    http.get(`/wiki/knowledge-bases/${kbId}/pages/archived`),
+  archivePage: (kbId: number, slug: string) =>
+    http.post(`/wiki/knowledge-bases/${kbId}/pages/${encodeURIComponent(slug)}/archive`),
+  unarchivePage: (kbId: number, slug: string) =>
+    http.post(`/wiki/knowledge-bases/${kbId}/pages/${encodeURIComponent(slug)}/unarchive`),
+
   // Processing
   processKB: (kbId: number) => http.post(`/wiki/knowledge-bases/${kbId}/process`),
   getProcessingStatus: (kbId: number) => http.get(`/wiki/knowledge-bases/${kbId}/processing-status`),
+
+  // RFC-029: Relations
+  getRelatedPages: (kbId: number, slug: string, topK = 5) =>
+    http.get(`/wiki/kb/${kbId}/pages/${encodeURIComponent(slug)}/related`, { params: { topK } }),
+  explainRelation: (kbId: number, slugA: string, slugB: string) =>
+    http.get(`/wiki/kb/${kbId}/pages/${encodeURIComponent(slugA)}/relation/${encodeURIComponent(slugB)}`),
+  getPageCitations: (kbId: number, pageId: number) =>
+    http.get(`/wiki/kb/${kbId}/pages/${pageId}/citations`),
+
+  // RFC-030: Jobs
+  getWikiJobs: (kbId: number, rawId: number) =>
+    http.get(`/wiki/kb/${kbId}/jobs`, { params: { rawId } }),
+  getKBStats: (kbId: number) =>
+    http.get(`/wiki/kb/${kbId}/stats`),
+
+  // RFC-031: Enrichment & Repair
+  enrichPage: (kbId: number, slug: string) =>
+    http.post(`/wiki/kb/${kbId}/pages/${encodeURIComponent(slug)}/enrich`),
+  repairPage: (kbId: number, slug: string) =>
+    http.post(`/wiki/kb/${kbId}/pages/${encodeURIComponent(slug)}/repair`),
+
+  // RFC-032: Search preview
+  searchPreview: (kbId: number, data: { query: string; mode?: string; topK?: number }) =>
+    http.post(`/wiki/kb/${kbId}/search-preview`, data),
 }
 
 // ==================== Workspace (Team) ====================
@@ -433,6 +543,11 @@ export const agentBindingApi = {
   unbindSkill: (agentId: string | number, skillId: number) => http.delete(`/agents/${agentId}/skills/${skillId}`),
   listTools: (agentId: string | number) => http.get(`/agents/${agentId}/tools`),
   setTools: (agentId: string | number, toolNames: string[]) => http.put(`/agents/${agentId}/tools`, toolNames),
+  // RFC-009 PR-3: per-agent provider preference order. Empty list = use global chain order.
+  listProviderPreferences: (agentId: string | number) =>
+    http.get(`/agents/${agentId}/provider-preferences`),
+  setProviderPreferences: (agentId: string | number, providerIds: string[]) =>
+    http.put(`/agents/${agentId}/provider-preferences`, providerIds),
 }
 
 // ==================== Dashboard ====================

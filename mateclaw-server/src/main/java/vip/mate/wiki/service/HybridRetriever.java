@@ -2,52 +2,81 @@ package vip.mate.wiki.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import vip.mate.wiki.WikiProperties;
+import vip.mate.wiki.dto.PageSearchResult;
+import vip.mate.wiki.dto.RelatedPageResult;
+import vip.mate.wiki.dto.WikiPageLite;
 import vip.mate.wiki.model.WikiChunkEntity;
 import vip.mate.wiki.model.WikiPageEntity;
+import vip.mate.wiki.repository.WikiPageMapper;
+import vip.mate.wiki.retrieval.SnippetExtractor;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * RFC-011: 混合检索服务
+ * RFC-011 + RFC-032: Hybrid retrieval service.
  * <p>
- * 支持三种模式：
- * <ul>
- *   <li>{@code keyword} — DB LIKE 搜索（现有 WikiPageService.searchPages）</li>
- *   <li>{@code semantic} — chunk 向量 cosine 相似度 → 回溯到 page</li>
- *   <li>{@code hybrid} — 两者融合，RRF (Reciprocal Rank Fusion) 排名</li>
- * </ul>
- *
- * @author MateClaw Team
+ * Three search modes: keyword (DB LIKE), semantic (chunk vectors),
+ * hybrid (RRF fusion). RFC-032 adds: N+1 fix, two-phase keyword search,
+ * relation boost, snippet extraction, and PageSearchResult DTO.
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class HybridRetriever {
 
     private final WikiPageService pageService;
     private final WikiChunkService chunkService;
     private final WikiEmbeddingService embeddingService;
     private final WikiProperties properties;
+    private final WikiPageMapper pageMapper;
+
+    @Autowired(required = false)
+    private WikiRelationService relationService;
+
+    private static final double RELATION_BOOST = 0.15;
+
+    public HybridRetriever(WikiPageService pageService,
+                            WikiChunkService chunkService,
+                            WikiEmbeddingService embeddingService,
+                            WikiProperties properties,
+                            WikiPageMapper pageMapper) {
+        this.pageService = pageService;
+        this.chunkService = chunkService;
+        this.embeddingService = embeddingService;
+        this.properties = properties;
+        this.pageMapper = pageMapper;
+    }
 
     public enum Mode { KEYWORD, SEMANTIC, HYBRID }
 
     /**
-     * 搜索结果（页面级）
+     * Legacy page hit record (kept for backward compatibility).
      */
     public record PageHit(Long pageId, String slug, String title, String summary, double score) {}
 
     /**
-     * 搜索结果（chunk 级，语义搜索专用）
+     * Chunk-level search result (semantic search).
+     * <p>
+     * RFC-051 PR-1c: {@code pageNumber} and {@code headerBreadcrumb} are
+     * populated when the chunk has those columns set (lazy ingest with
+     * preprocessor on, or backfilled chunks). Both are nullable.
      */
-    public record ChunkHit(Long chunkId, Long rawId, String snippet, float score) {}
+    public record ChunkHit(Long chunkId, Long rawId, String snippet, float score,
+                            Integer pageNumber, String headerBreadcrumb) {
+
+        /** Backwards-compatible factory for callers that don't yet pass metadata. */
+        public ChunkHit(Long chunkId, Long rawId, String snippet, float score) {
+            this(chunkId, rawId, snippet, score, null, null);
+        }
+    }
 
     /**
-     * 执行混合搜索，返回页面级结果
+     * RFC-032: Enhanced search returning PageSearchResult with snippet and matchedBy metadata.
      */
-    public List<PageHit> searchPages(Long kbId, String query, String modeStr, int topK) {
+    public List<PageSearchResult> search(Long kbId, String query, String modeStr, int topK) {
         Mode mode = parseMode(modeStr);
 
         List<RankedItem> semantic = List.of();
@@ -60,9 +89,7 @@ public class HybridRetriever {
             keyword = keywordSearch(kbId, query, topK * 3);
         }
 
-        // 如果 semantic 不可用（no embedding model），回退到 keyword
         if (mode == Mode.SEMANTIC && semantic.isEmpty()) {
-            log.debug("[HybridRetriever] Semantic unavailable, falling back to keyword");
             keyword = keywordSearch(kbId, query, topK * 3);
         }
 
@@ -75,21 +102,60 @@ public class HybridRetriever {
             fused = rrfFuse(semantic, keyword, 60);
         }
 
-        // 取 topK，装配 PageHit
-        return fused.stream()
-                .limit(topK)
-                .map(ri -> {
-                    WikiPageEntity page = pageService.getById(ri.pageId);
-                    if (page == null) return null;
-                    return new PageHit(ri.pageId, page.getSlug(), page.getTitle(),
-                            page.getSummary(), ri.score);
-                })
-                .filter(Objects::nonNull)
-                .toList();
+        // RFC-032: Relation boost (1-hop expansion on top-3 seeds)
+        fused = applyRelationBoost(fused, kbId, topK);
+
+        // Batch-fetch page info (N+1 fix)
+        List<Long> topIds = fused.stream().limit(topK).map(ri -> ri.pageId).toList();
+        if (topIds.isEmpty()) return List.of();
+
+        Map<Long, WikiPageLite> liteMap = pageMapper.selectBatchLite(topIds)
+            .stream().collect(Collectors.toMap(WikiPageLite::id, p -> p));
+
+        // Build result with snippets
+        List<PageSearchResult> results = new ArrayList<>();
+        for (RankedItem ri : fused.stream().limit(topK).toList()) {
+            WikiPageLite lite = liteMap.get(ri.pageId);
+            if (lite == null) continue;
+            // RFC-051 PR-2: hide system pages (overview / log) from search results.
+            if (lite.isSystem()) continue;
+
+            String snippet = null;
+            if (!ri.matchedBy.contains("relation_boost")) {
+                String content = pageMapper.selectContentById(ri.pageId);
+                if (content != null) {
+                    snippet = SnippetExtractor.extract(content, query);
+                }
+            }
+
+            String reason = buildReason(lite, ri.matchedBy, query);
+            // RFC-051 §9.4: when the entry came from relation boost, override / append
+            // the reason with the seed slug + dominant signals so callers can explain
+            // why an out-of-search-corpus page surfaced.
+            if (ri.relationReason() != null && !ri.relationReason().isBlank()) {
+                reason = (reason == null || reason.isBlank())
+                        ? ri.relationReason()
+                        : reason + " · " + ri.relationReason();
+            }
+            results.add(new PageSearchResult(
+                lite.slug(), lite.title(), lite.summary(),
+                snippet != null ? snippet : lite.summary(),
+                ri.matchedBy, reason, ri.score));
+        }
+        return results;
     }
 
     /**
-     * chunk 级语义搜索（Agent 直接拿 chunk 片段作为证据）
+     * Legacy searchPages — returns PageHit for backward compatibility.
+     */
+    public List<PageHit> searchPages(Long kbId, String query, String modeStr, int topK) {
+        return search(kbId, query, modeStr, topK).stream()
+            .map(r -> new PageHit(null, r.slug(), r.title(), r.summary(), r.score()))
+            .toList();
+    }
+
+    /**
+     * Chunk-level semantic search.
      */
     public List<ChunkHit> searchChunks(Long kbId, String query, int topK) {
         if (!embeddingService.isAvailable()) return List.of();
@@ -107,16 +173,17 @@ public class HybridRetriever {
                     String snippet = c.getContent().length() > 300
                             ? c.getContent().substring(0, 300) + "..."
                             : c.getContent();
-                    return new ChunkHit(c.getId(), c.getRawId(), snippet, score);
+                    return new ChunkHit(c.getId(), c.getRawId(), snippet, score,
+                            c.getPageNumber(), c.getHeaderBreadcrumb());
                 })
                 .sorted(Comparator.comparingDouble(ChunkHit::score).reversed())
                 .limit(topK)
                 .toList();
     }
 
-    // ==================== 内部方法 ====================
+    // ==================== Internal methods ====================
 
-    /** 语义搜索：chunk cosine → 聚合到 page（同页多 chunk 取最高分） */
+    /** Semantic search: chunk cosine → aggregate to page level */
     private List<RankedItem> semanticSearch(Long kbId, String query, int limit) {
         float[] queryVec = embeddingService.embedQuery(kbId, query);
         if (queryVec == null) return List.of();
@@ -124,25 +191,19 @@ public class HybridRetriever {
         List<WikiChunkEntity> allChunks = chunkService.listByKbId(kbId);
         if (allChunks.isEmpty()) return List.of();
 
-        // chunk → score, 然后 需要映射到 page。
-        // 当前没有 chunk → page 的直接关联（chunk 只有 rawId）。
-        // 走 rawId → 找该 rawId 对应的所有 page（source_raw_ids 含该 rawId）
-        // 这是个近似：一个 rawId 可能产出多个 page，都算命中。
         Map<Long, Float> chunkScores = new HashMap<>();
         for (WikiChunkEntity chunk : allChunks) {
-            if (chunk.getEmbedding() == null) continue;
+            if (chunk.getEmbedding() == null || chunk.getRawId() == null) continue;
             float[] vec = WikiEmbeddingService.bytesToFloats(chunk.getEmbedding());
             float score = WikiEmbeddingService.cosine(queryVec, vec);
-            chunkScores.merge(chunk.getRawId(), score, Math::max); // rawId 级聚合
+            chunkScores.merge(chunk.getRawId(), score, Math::max);
         }
 
-        // rawId → page IDs
         List<WikiPageEntity> allPages = pageService.listByKbId(kbId);
         Map<Long, Double> pageScores = new HashMap<>();
         for (WikiPageEntity page : allPages) {
             String rawIds = page.getSourceRawIds();
             if (rawIds == null) continue;
-            // 解析 "[1,2,3]" 格式
             for (String rawIdStr : rawIds.replaceAll("[\\[\\]\\s]", "").split(",")) {
                 try {
                     long rawId = Long.parseLong(rawIdStr.trim());
@@ -157,30 +218,142 @@ public class HybridRetriever {
         return pageScores.entrySet().stream()
                 .sorted(Map.Entry.<Long, Double>comparingByValue().reversed())
                 .limit(limit)
-                .map(e -> new RankedItem(e.getKey(), e.getValue()))
+                .map(e -> new RankedItem(e.getKey(), e.getValue(), List.of("semantic")))
                 .toList();
     }
 
-    /** 关键词搜索：走现有 DB LIKE */
+    /**
+     * RFC-032: Two-phase keyword search — fast path (title+summary) first,
+     * full content search only if needed to fill topK.
+     */
     private List<RankedItem> keywordSearch(Long kbId, String query, int limit) {
-        List<WikiPageEntity> results = pageService.searchPages(kbId, query);
+        String kw = "%" + query.toLowerCase()
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_") + "%";
+
+        // Phase 1: fast path (title + summary only)
+        List<Long> fastIds = pageMapper.searchFastIds(kbId, kw, limit);
+
         List<RankedItem> ranked = new ArrayList<>();
-        for (int i = 0; i < Math.min(results.size(), limit); i++) {
-            // LIKE 无分数，用倒序排名作为伪分数
-            ranked.add(new RankedItem(results.get(i).getId(), 1.0 / (i + 1)));
+        for (int i = 0; i < fastIds.size(); i++) {
+            ranked.add(new RankedItem(fastIds.get(i), 1.0 / (i + 1), List.of("title")));
         }
+
+        if (fastIds.size() >= limit) return ranked;
+
+        // Phase 2: full content search (supplement)
+        List<Long> contentIds = pageMapper.searchContentIds(kbId, kw, fastIds, limit - fastIds.size());
+        for (int i = 0; i < contentIds.size(); i++) {
+            ranked.add(new RankedItem(contentIds.get(i),
+                    1.0 / (fastIds.size() + i + 1), List.of("content")));
+        }
+
         return ranked;
     }
 
-    /** RRF 融合：score = Σ 1/(k + rank_i) */
+    /** RRF fusion: score = Σ 1/(k + rank_i) */
     private List<RankedItem> rrfFuse(List<RankedItem> a, List<RankedItem> b, int k) {
         Map<Long, Double> fused = new HashMap<>();
-        for (int i = 0; i < a.size(); i++) fused.merge(a.get(i).pageId, 1.0 / (k + i + 1), Double::sum);
-        for (int i = 0; i < b.size(); i++) fused.merge(b.get(i).pageId, 1.0 / (k + i + 1), Double::sum);
+        Map<Long, List<String>> matchedByMap = new HashMap<>();
+
+        for (int i = 0; i < a.size(); i++) {
+            fused.merge(a.get(i).pageId, 1.0 / (k + i + 1), Double::sum);
+            matchedByMap.computeIfAbsent(a.get(i).pageId, x -> new ArrayList<>()).addAll(a.get(i).matchedBy);
+        }
+        for (int i = 0; i < b.size(); i++) {
+            fused.merge(b.get(i).pageId, 1.0 / (k + i + 1), Double::sum);
+            matchedByMap.computeIfAbsent(b.get(i).pageId, x -> new ArrayList<>()).addAll(b.get(i).matchedBy);
+        }
+
         return fused.entrySet().stream()
                 .sorted(Map.Entry.<Long, Double>comparingByValue().reversed())
-                .map(e -> new RankedItem(e.getKey(), e.getValue()))
+                .map(e -> new RankedItem(e.getKey(), e.getValue(),
+                        matchedByMap.getOrDefault(e.getKey(), List.of()).stream().distinct().toList()))
                 .toList();
+    }
+
+    /**
+     * RFC-032: 1-hop relation boost on top-3 seed pages.
+     * <p>
+     * RFC-051 §9.4 makes the boost magnitude data-driven instead of a flat
+     * constant when {@code mate.wiki.use-normalized-relation-boost} is on.
+     */
+    private List<RankedItem> applyRelationBoost(List<RankedItem> hits, Long kbId, int topK) {
+        if (relationService == null || hits.isEmpty()) return hits;
+
+        List<Long> seedIds = hits.stream().limit(3).map(h -> h.pageId).toList();
+        // Per-candidate aggregate raw score (sum of contributions from each seed-relation
+        // pair) plus a remembered "best" reason — the seed that contributed the highest
+        // relation score and its dominant signals. Used for the human-readable reason
+        // surfaced via PageSearchResult.reason.
+        Map<Long, Double> rawScoreMap = new HashMap<>();
+        Map<Long, RelationReasonRecord> reasonMap = new HashMap<>();
+
+        for (Long seedId : seedIds) {
+            List<WikiPageLite> seedLites = pageMapper.selectBatchLite(List.of(seedId));
+            if (seedLites.isEmpty()) continue;
+            WikiPageLite seed = seedLites.get(0);
+            // RFC-051 PR-5: don't expand 1-hop neighborhood from a system page seed.
+            // Otherwise the overview / log neighborhood — typically every page that
+            // shares a raw with them — leaks into search results via boost. PR-2's
+            // result-emit filter drops the system pages themselves; this guard ensures
+            // we don't even use them as expansion roots.
+            if (seed.isSystem()) continue;
+            try {
+                relationService.relatedPages(kbId, seed.slug(), 3)
+                    .forEach(r -> {
+                        WikiPageEntity relPage = pageService.getBySlug(kbId, r.slug());
+                        if (relPage == null) return;
+                        rawScoreMap.merge(relPage.getId(), r.score(), Double::sum);
+                        // Keep the strongest single seed→neighbor pair as the reason.
+                        RelationReasonRecord existing = reasonMap.get(relPage.getId());
+                        if (existing == null || r.score() > existing.contribution) {
+                            reasonMap.put(relPage.getId(),
+                                new RelationReasonRecord(seed.slug(), r.signals(), r.score()));
+                        }
+                    });
+            } catch (Exception e) {
+                log.debug("[HybridRetriever] Relation boost failed for seed {}: {}", seed.slug(), e.getMessage());
+            }
+        }
+
+        Set<Long> existingIds = hits.stream().map(h -> h.pageId).collect(Collectors.toSet());
+        rawScoreMap.keySet().removeAll(existingIds);
+
+        if (rawScoreMap.isEmpty()) return hits;
+
+        // Choose boost magnitude per candidate: legacy flat constant or normalized × λ.
+        Map<Long, Double> boostMap = new HashMap<>();
+        if (properties != null && properties.isUseNormalizedRelationBoost()) {
+            double maxRaw = rawScoreMap.values().stream().mapToDouble(Double::doubleValue).max().orElse(0.0);
+            double lambda = Math.max(0, properties.getRelationBoostLambda());
+            if (maxRaw <= 0 || lambda <= 0) {
+                rawScoreMap.forEach((pid, raw) -> boostMap.put(pid, 0.0));
+            } else {
+                final double maxRawF = maxRaw;
+                rawScoreMap.forEach((pid, raw) -> boostMap.put(pid, (raw / maxRawF) * lambda));
+            }
+        } else {
+            rawScoreMap.forEach((pid, raw) -> boostMap.put(pid, RELATION_BOOST));
+        }
+
+        List<RankedItem> expanded = new ArrayList<>(hits);
+        boostMap.forEach((pid, score) -> {
+            RelationReasonRecord rr = reasonMap.get(pid);
+            String reason = rr == null ? null : formatRelationReason(rr);
+            expanded.add(new RankedItem(pid, score, List.of("relation_boost"), reason));
+        });
+        return expanded;
+    }
+
+    private String buildReason(WikiPageLite lite, List<String> matchedBy, String query) {
+        if (matchedBy.contains("relation_boost")) return "Structurally related to top search results";
+        if (matchedBy.contains("title") && matchedBy.contains("semantic")) return "Title and semantic match";
+        if (matchedBy.contains("title")) return "Title match";
+        if (matchedBy.contains("semantic")) return "Semantic similarity";
+        if (matchedBy.contains("content")) return "Content match";
+        return "Keyword match";
     }
 
     private Mode parseMode(String mode) {
@@ -199,5 +372,27 @@ public class HybridRetriever {
         };
     }
 
-    private record RankedItem(Long pageId, double score) {}
+    /**
+     * RFC-051 §9.4: optional human-readable explanation for relation boost
+     * entries. {@code null} when this RankedItem wasn't produced by the
+     * relation pass.
+     */
+    private record RankedItem(Long pageId, double score, List<String> matchedBy, String relationReason) {
+        /** Back-compat ctor — keyword/semantic items don't carry a relation reason. */
+        RankedItem(Long pageId, double score, List<String> matchedBy) {
+            this(pageId, score, matchedBy, null);
+        }
+    }
+
+    /** Internal: which seed/signals contributed the strongest relation pull to a candidate. */
+    private record RelationReasonRecord(String seedSlug, List<String> signals, double contribution) {}
+
+    private static String formatRelationReason(RelationReasonRecord r) {
+        if (r == null) return null;
+        StringBuilder sb = new StringBuilder("related to '").append(r.seedSlug()).append("'");
+        if (r.signals() != null && !r.signals().isEmpty()) {
+            sb.append(" via ").append(String.join("+", r.signals()));
+        }
+        return sb.toString();
+    }
 }

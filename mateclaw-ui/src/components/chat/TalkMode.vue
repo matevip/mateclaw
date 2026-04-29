@@ -37,13 +37,13 @@
         <button
           class="talk-ptt"
           :class="{ active: state === 'listening' }"
-          :disabled="state === 'processing' || state === 'speaking'"
+          :disabled="!canRecord"
           @mousedown="startListening"
           @mouseup="stopListening"
           @touchstart.prevent="startListening"
           @touchend.prevent="stopListening"
         >
-          {{ state === 'listening' ? t('talk.releaseToSend') : t('talk.holdToTalk') }}
+          {{ pttLabel }}
         </button>
       </div>
     </div>
@@ -55,6 +55,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { CloseBold, Loading, Microphone, Service } from '@element-plus/icons-vue'
+import { WavRecorder } from '@/utils/wavEncoder'
 
 const { t } = useI18n()
 
@@ -68,23 +69,53 @@ const emit = defineEmits<{
   close: []
 }>()
 
-type TalkState = 'idle' | 'listening' | 'processing' | 'speaking'
+/**
+ * Connection-aware state machine. Pre-fix the modal opened in 'idle' which
+ * lit the PTT button green even while the WebSocket was still in
+ * CONNECTING (readyState=0). Users hit the button immediately, recorded a
+ * clip, and stopListening saw ws.readyState !== OPEN — the audio went into
+ * the void. Now PTT is disabled until the backend sends {type:"ready"}.
+ */
+type TalkState = 'connecting' | 'idle' | 'listening' | 'processing' | 'speaking' | 'failed'
 
-const state = ref<TalkState>('idle')
+const state = ref<TalkState>('connecting')
 const transcript = ref<Array<{ role: 'user' | 'assistant'; text: string }>>([])
 
 let ws: WebSocket | null = null
-let mediaRecorder: MediaRecorder | null = null
-let audioChunks: Blob[] = []
+let recorder: WavRecorder | null = null
+/**
+ * Persistent warmed-up recorder kept alive for the modal's lifetime so the
+ * press-and-hold gesture doesn't race a first-time mic permission dialog.
+ * The dialog steals focus → mouseup fires on the dialog instead of the PTT
+ * button → stopListening never runs → recording is stuck on. Warming up
+ * front-loads the permission prompt and reuses the MediaStream.
+ */
+let warmRecorder: WavRecorder | null = null
 let audioContext: AudioContext | null = null
+
+/**
+ * Button-enabled predicate. Allows:
+ *   - 'idle' — fresh / between recordings (the normal case)
+ *   - 'listening' — already recording, the release event must reach us
+ *   - 'failed' — clicking restarts the WS connection (retry path)
+ */
+const canRecord = computed(() =>
+    state.value === 'idle' || state.value === 'listening' || state.value === 'failed')
+const pttLabel = computed(() => {
+  if (state.value === 'connecting') return t('talk.connecting')
+  if (state.value === 'failed') return t('talk.retry')
+  return state.value === 'listening' ? t('talk.releaseToSend') : t('talk.holdToTalk')
+})
 
 const stateClass = computed(() => 'talk-state--' + state.value)
 const stateLabel = computed(() => {
   switch (state.value) {
+    case 'connecting': return t('talk.connecting')
     case 'idle': return t('talk.ready')
     case 'listening': return t('talk.listening')
     case 'processing': return t('talk.processing')
     case 'speaking': return t('talk.speaking')
+    case 'failed': return t('talk.connectionError')
     default: return ''
   }
 })
@@ -92,11 +123,20 @@ const stateLabel = computed(() => {
 onMounted(() => {
   if (props.agentId) {
     connectWebSocket()
+    // Pre-acquire mic permission so the press-and-hold path skips the
+    // permission dialog. Best-effort — failure here just means the user
+    // gets the dialog on first PTT press (i.e. previous behaviour).
+    warmRecorder = new WavRecorder()
+    warmRecorder.warmUp().catch(err => {
+      console.debug('[TalkMode] mic warm-up failed (will prompt on first PTT)', err)
+    })
   }
 })
 
 onBeforeUnmount(() => {
   disconnectWebSocket()
+  warmRecorder?.releaseWarmUp()
+  warmRecorder = null
 })
 
 function connectWebSocket() {
@@ -104,10 +144,13 @@ function connectWebSocket() {
   const token = localStorage.getItem('token')
   const wsUrl = `${protocol}//${location.host}/api/v1/talk/ws${token ? '?token=' + token : ''}`
 
+  state.value = 'connecting'
   ws = new WebSocket(wsUrl)
 
   ws.onopen = () => {
-    // Send init message
+    // Send init message. Stay in 'connecting' until the backend's
+    // {type:"ready"} ack lands — the WS being open isn't the same as the
+    // backend session being initialised.
     ws?.send(JSON.stringify({
       type: 'init',
       agentId: props.agentId,
@@ -127,6 +170,7 @@ function connectWebSocket() {
       const data = JSON.parse(event.data)
       switch (data.type) {
         case 'ready':
+          // Only NOW does the PTT button unlock — see canRecord computed.
           state.value = 'idle'
           break
         case 'state':
@@ -151,14 +195,40 @@ function connectWebSocket() {
     }
   }
 
-  ws.onclose = () => {
-    state.value = 'idle'
+  ws.onerror = (e) => {
+    console.warn('[TalkMode] WS error', e)
+    if (state.value === 'connecting') {
+      state.value = 'failed'
+      ElMessage.error(t('talk.connectionError'))
+    }
+  }
+
+  ws.onclose = (e) => {
+    console.debug('[TalkMode] WS closed', 'code=', e.code, 'reason=', e.reason)
+    // Distinguish close-before-init (the user got a failed handshake) from
+    // close-after-success (the modal was just closed). A premature close
+    // leaves the user staring at "Ready" with no working button — flag
+    // it so the retry path actually runs.
+    if (state.value === 'connecting') {
+      state.value = 'failed'
+    } else if (state.value !== 'failed') {
+      state.value = 'idle'
+    }
   }
 }
 
+/** Manual reconnect — wired to the PTT button when state==='failed'. */
+function retryConnection() {
+  ws?.close()
+  ws = null
+  connectWebSocket()
+}
+
 function disconnectWebSocket() {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop()
+  // Force-stop any in-flight recording so released the mic on close.
+  if (recorder?.isActive()) {
+    recorder.stop().catch(() => {})
+    recorder = null
   }
   ws?.close()
   ws = null
@@ -167,50 +237,74 @@ function disconnectWebSocket() {
 }
 
 async function startListening() {
+  // Failed-state click is a retry, not a recording start. The button label
+  // already says "Retry" via pttLabel, so this matches the user's intent.
+  if (state.value === 'failed') {
+    retryConnection()
+    return
+  }
   if (state.value !== 'idle') return
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    audioChunks = []
-    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
-
-    mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        audioChunks.push(event.data)
-      }
-    }
-
-    mediaRecorder.onstop = async () => {
-      // Stop all tracks
-      stream.getTracks().forEach(t => t.stop())
-
-      if (audioChunks.length === 0) {
-        state.value = 'idle'
-        return
-      }
-
-      // Combine chunks and send
-      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' })
-      const arrayBuffer = await audioBlob.arrayBuffer()
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(arrayBuffer)
-        state.value = 'processing'
-      } else {
-        state.value = 'idle'
-      }
-    }
-
-    mediaRecorder.start()
+    // Web Audio API + manual WAV encode (utils/wavEncoder.ts) — replaces
+    // MediaRecorder/WebM. DashScope Paraformer rejects webm; WAV is the
+    // lowest common denominator every STT provider accepts.
+    //
+    // Reuse the warmed-up recorder so we skip the permission dialog if
+    // it was successfully acquired in onMounted. If warm-up failed (or
+    // is still pending), fall back to a fresh recorder.
+    recorder = warmRecorder ?? new WavRecorder()
+    warmRecorder = null  // ownership transferred for the duration of recording
+    await recorder.start()
     state.value = 'listening'
-  } catch {
+    console.debug('[TalkMode] listening started')
+  } catch (err) {
+    console.warn('[TalkMode] startListening failed', err)
     ElMessage.error(t('talk.micError'))
     state.value = 'idle'
+    recorder = null
   }
 }
 
-function stopListening() {
-  if (state.value !== 'listening' || !mediaRecorder) return
-  mediaRecorder.stop()
+async function stopListening() {
+  // Belt-and-braces: also stop when recorder exists but state hasn't caught
+  // up (race with the slow path of startListening). Without this, a fast
+  // press-then-release leaves the recorder running invisibly.
+  if (!recorder) {
+    if (state.value === 'listening') state.value = 'idle'
+    return
+  }
+  const result = await recorder.stop()
+  recorder = null
+  // Re-warm for the next press so subsequent PTTs also skip permission.
+  warmRecorder = new WavRecorder()
+  warmRecorder.warmUp().catch(() => {})
+
+  if (!result) {
+    // No audio captured — the most common cause is ScriptProcessor never
+    // firing (suspended AudioContext) or the recording was so short no
+    // sample buffer landed. Surface a clear hint instead of a silent idle.
+    console.warn('[TalkMode] stop returned no audio (recording too short or context suspended)')
+    ElMessage.warning(t('talk.tooShort') || '录音过短，请按住按钮多说几秒')
+    state.value = 'idle'
+    return
+  }
+  const arrayBuffer = await result.blob.arrayBuffer()
+  console.debug('[TalkMode] stop produced wav',
+    'bytes=', arrayBuffer.byteLength,
+    'duration=', result.durationSeconds, 's',
+    'wsReadyState=', ws?.readyState)
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(arrayBuffer)
+    state.value = 'processing'
+  } else {
+    // Distinct from the empty-recording case: capture worked, but the WS
+    // dropped before we got here. Tell the user instead of silently going
+    // idle — they'd otherwise blame the mic.
+    console.warn('[TalkMode] WS not open at stop time, readyState=', ws?.readyState)
+    ElMessage.error(t('talk.connectionError'))
+    state.value = 'idle'
+  }
 }
 
 async function playAudio(blob: Blob) {

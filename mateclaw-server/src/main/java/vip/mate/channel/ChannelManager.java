@@ -44,6 +44,7 @@ public class ChannelManager {
     private final ChannelMessageRouter messageRouter;
     private final ChannelSessionStore channelSessionStore;
     private final ObjectMapper objectMapper;
+    private final vip.mate.tool.document.GeneratedFileCache generatedFileCache;
 
     /** 运行中的渠道适配器：channelId -> adapter */
     private final Map<Long, ChannelAdapter> activeAdapters = new HashMap<>();
@@ -329,13 +330,23 @@ public class ChannelManager {
      * @throws IllegalStateException 渠道未启动或不支持主动推送
      */
     public void sendToChannel(Long channelId, String targetId, String content) {
+        sendToChannel(channelId, targetId, content, DeliveryOptions.DEFAULTS);
+    }
+
+    /**
+     * RFC-063r §2.10: preferred overload — accepts a {@link DeliveryOptions}
+     * Parameter Object so cron delivery (and future callers) can pass
+     * Slack {@code thread_ts}, Telegram {@code message_thread_id}, multi-bot
+     * {@code accountId}, etc. without growing a 5-arg signature.
+     */
+    public void sendToChannel(Long channelId, String targetId, String content, DeliveryOptions options) {
         ChannelAdapter adapter = getAdapter(channelId)
                 .orElseThrow(() -> new IllegalStateException("Channel not active: " + channelId));
         if (!adapter.supportsProactiveSend()) {
             throw new UnsupportedOperationException(
                     "Channel " + adapter.getDisplayName() + " (" + adapter.getChannelType() + ") does not support proactive send");
         }
-        adapter.proactiveSend(targetId, content);
+        adapter.proactiveSend(targetId, content, options != null ? options : DeliveryOptions.DEFAULTS);
         log.info("Proactive message sent via channel {} to {}: {}chars",
                 adapter.getDisplayName(), targetId, content.length());
     }
@@ -440,7 +451,7 @@ public class ChannelManager {
         String type = channel.getChannelType();
         return switch (type) {
             case "web" -> new WebChannelAdapter(channel, messageRouter, objectMapper);
-            case "dingtalk" -> new DingTalkChannelAdapter(channel, messageRouter, objectMapper);
+            case "dingtalk" -> new DingTalkChannelAdapter(channel, messageRouter, objectMapper, generatedFileCache);
             case "feishu" -> new FeishuChannelAdapter(channel, messageRouter, objectMapper);
             case "telegram" -> new TelegramChannelAdapter(channel, messageRouter, objectMapper);
             case "discord" -> new DiscordChannelAdapter(channel, messageRouter, objectMapper);

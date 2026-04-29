@@ -22,6 +22,16 @@ public class WikiKnowledgeBaseService {
 
     private final WikiKnowledgeBaseMapper kbMapper;
 
+    /**
+     * RFC-051 PR-2: optional system-page scaffold (overview / log). Marked
+     * required=false + Lazy so the KB service has no construction dependency
+     * on a service that needs WikiPageService — handy for the older tests that
+     * still wire this class manually.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private WikiScaffoldService scaffoldService;
+
     private static final String DEFAULT_CONFIG = """
             # Wiki Processing Rules
 
@@ -96,6 +106,10 @@ public class WikiKnowledgeBaseService {
         entity.setRawCount(0);
         kbMapper.insert(entity);
         log.info("[Wiki] Knowledge base created: id={}, name={}, workspaceId={}", entity.getId(), name, workspaceId);
+        // RFC-051 PR-2: ensure overview / log system pages exist for every new KB.
+        if (scaffoldService != null) {
+            scaffoldService.ensureScaffold(entity.getId());
+        }
         return entity;
     }
 

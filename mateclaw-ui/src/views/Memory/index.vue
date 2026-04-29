@@ -1,0 +1,520 @@
+<template>
+  <div class="mc-page-shell memory-shell">
+    <div class="mc-page-frame memory-frame">
+      <div class="memory-layout mc-surface-card">
+        <!-- Left: Timeline -->
+        <div class="memory-sidebar">
+          <div class="sidebar-header">
+            <div class="sidebar-header-copy">
+              <div class="panel-kicker">Memory</div>
+              <h2 class="panel-title">{{ t('memory.title') }}</h2>
+            </div>
+            <button class="dream-trigger-btn" @click="startDream" title="Dream">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
+          </div>
+
+          <!-- Agent selector (ChatConsole pattern) -->
+          <div class="agent-selector">
+            <button class="agent-select-trigger" @click="agentDropdownOpen = !agentDropdownOpen">
+              <span class="agent-select-trigger__icon">{{ currentAgent?.icon || '🧠' }}</span>
+              <span class="agent-select-trigger__name">{{ currentAgent?.name || t('memory.selectAgent') }}</span>
+              <svg class="agent-select-trigger__arrow" :class="{ open: agentDropdownOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <Transition name="fade">
+              <div v-if="agentDropdownOpen" class="agent-dropdown-backdrop" @click="agentDropdownOpen = false"></div>
+            </Transition>
+            <Transition name="agent-dropdown">
+              <div v-if="agentDropdownOpen" class="agent-dropdown">
+                <div
+                  v-for="agent in agents"
+                  :key="agent.id"
+                  class="agent-dropdown-item"
+                  :class="{ active: agent.id === selectedAgentId }"
+                  @click="selectAgent(agent)"
+                >
+                  <span class="agent-dropdown-item__icon">{{ agent.icon || '🤖' }}</span>
+                  <div class="agent-dropdown-item__info">
+                    <span class="agent-dropdown-item__name">{{ agent.name }}</span>
+                    <span class="agent-dropdown-item__desc">{{ agent.description || agent.agentType }}</span>
+                  </div>
+                  <span v-if="agent.id === selectedAgentId" class="agent-dropdown-item__check">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </span>
+                </div>
+              </div>
+            </Transition>
+          </div>
+
+          <!-- Tab nav (segment control) -->
+          <div class="memory-nav">
+            <button v-for="tab in tabs" :key="tab.key"
+              class="memory-nav-btn" :class="{ active: activeTab === tab.key, disabled: tab.disabled }"
+              :disabled="tab.disabled" @click="activeTab = tab.key">
+              {{ tab.label }}
+            </button>
+          </div>
+
+          <!-- Morning Card -->
+          <MorningCard v-if="selectedAgentId" :agent-id="selectedAgentId" />
+
+          <!-- Dream cards -->
+          <div class="timeline-scroll">
+            <template v-if="store.loading">
+              <div class="skeleton-card" v-for="i in 4" :key="i"><div class="skeleton-line" /><div class="skeleton-line short" /></div>
+            </template>
+            <template v-else-if="store.error">
+              <div class="empty-state error-state">
+                <div class="empty-icon">⚠️</div>
+                <p>{{ store.error }}</p>
+                <button class="retry-btn" @click="loadReports">{{ t('memory.retry') }}</button>
+              </div>
+            </template>
+            <template v-else-if="store.reports.length === 0">
+              <div class="empty-state">
+                <div class="empty-icon">🌙</div>
+                <p>{{ t('memory.noReports') }}</p>
+              </div>
+            </template>
+            <template v-else>
+              <div v-for="report in store.reports" :key="report.id"
+                class="dream-card" :class="{ selected: selectedReportId === report.id }"
+                @click="selectReport(report)">
+                <div class="card-row-top">
+                  <span class="status-dot" :class="report.status.toLowerCase()" />
+                  <span class="card-mode">{{ report.mode === 'FOCUSED' ? t('memory.modeFocused') : t('memory.modeNightly') }}</span>
+                  <span class="card-time">{{ relTime(report.startedAt) }}</span>
+                </div>
+                <div v-if="report.topic" class="card-topic">{{ report.topic }}</div>
+                <div class="card-stats">
+                  <span class="stat-up">+{{ report.promotedCount }}</span>
+                  <span class="stat-down">-{{ report.rejectedCount }}</span>
+                  <span class="stat-total">{{ report.candidateCount }} {{ t('memory.candidates') }}</span>
+                </div>
+              </div>
+              <div v-if="store.total > 20" class="load-more">
+                <button class="load-more-btn" @click="currentPage++; loadReports()">{{ t('memory.loadMore') }}</button>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Right: Content panel -->
+        <div class="memory-detail">
+          <!-- Memory tab -->
+          <template v-if="activeTab === 'memory' && selectedAgentId">
+            <MemoryBrowser :agent-id="selectedAgentId" />
+          </template>
+
+          <!-- Facts tab -->
+          <template v-else-if="activeTab === 'facts' && selectedAgentId">
+            <FactList :agent-id="selectedAgentId" />
+          </template>
+
+          <!-- Timeline tab detail -->
+          <template v-else-if="activeTab === 'timeline'">
+          <!-- Inline dream input (replaces dialog) -->
+          <Transition name="slide-down">
+            <div v-if="dreamInputOpen" class="dream-input-area">
+              <div class="dream-input-header">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                <span>Dream</span>
+                <button class="close-btn" @click="dreamInputOpen = false">&times;</button>
+              </div>
+              <p class="dream-input-desc">{{ t('memory.focused.desc') }}</p>
+              <input v-model="dreamTopic" class="dream-topic-input" :placeholder="t('memory.focused.placeholder')" @keydown.enter="triggerDream" />
+              <button class="dream-go-btn" :disabled="!dreamTopic.trim() || dreamRunning" @click="triggerDream">
+                {{ dreamRunning ? '...' : t('memory.focused.trigger') }}
+              </button>
+            </div>
+          </Transition>
+
+          <!-- Report detail -->
+          <template v-if="store.currentReport">
+            <div class="detail-header">
+              <div class="detail-mode-badge" :class="store.currentReport.mode.toLowerCase()">
+                {{ store.currentReport.mode === 'FOCUSED' ? t('memory.modeFocused') : t('memory.modeNightly') }}
+              </div>
+              <span v-if="store.currentReport.topic" class="detail-topic">{{ store.currentReport.topic }}</span>
+              <div class="detail-status" :class="store.currentReport.status.toLowerCase()">
+                {{ t('memory.status.' + store.currentReport.status.toLowerCase()) }}
+              </div>
+            </div>
+
+            <div class="detail-grid">
+              <div class="detail-kv"><span class="kv-label">{{ t('memory.report.time') }}</span><span class="kv-value">{{ fmtTime(store.currentReport.startedAt) }}</span></div>
+              <div class="detail-kv"><span class="kv-label">{{ t('memory.report.candidates') }}</span><span class="kv-value">{{ store.currentReport.candidateCount }}</span></div>
+              <div class="detail-kv"><span class="kv-label">{{ t('memory.report.promoted') }}</span><span class="kv-value text-up">{{ store.currentReport.promotedCount }}</span></div>
+              <div class="detail-kv"><span class="kv-label">{{ t('memory.report.rejected') }}</span><span class="kv-value text-down">{{ store.currentReport.rejectedCount }}</span></div>
+              <div class="detail-kv"><span class="kv-label">{{ t('memory.report.trigger') }}</span><span class="kv-value">{{ store.currentReport.triggerSource }}</span></div>
+            </div>
+
+            <div v-if="store.currentReport.llmReason" class="detail-section">
+              <div class="section-label">{{ t('memory.report.reason') }}</div>
+              <p class="section-body">{{ store.currentReport.llmReason }}</p>
+            </div>
+
+            <div v-if="store.currentReport.memoryDiff" class="detail-section">
+              <div class="section-label">{{ t('memory.report.diff') }}</div>
+              <pre class="diff-block">{{ store.currentReport.memoryDiff }}</pre>
+            </div>
+
+            <div v-if="store.currentReport.errorMessage" class="detail-section error">
+              <div class="section-label">Error</div>
+              <p class="section-body">{{ store.currentReport.errorMessage }}</p>
+            </div>
+          </template>
+          <template v-else>
+            <div class="detail-empty">
+              <div class="detail-empty-icon">🧠</div>
+              <p>{{ t('memory.desc') }}</p>
+            </div>
+          </template>
+          </template><!-- /timeline tab -->
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { ElMessage } from 'element-plus'
+import { http } from '@/api'
+import { useAgentStore } from '@/stores/useAgentStore'
+import { useMemoryStore, type DreamReportItem } from '@/stores/useMemoryStore'
+import MorningCard from './components/MorningCard.vue'
+import FactList from './components/FactList.vue'
+import MemoryBrowser from './components/MemoryBrowser.vue'
+
+const { t } = useI18n()
+const agentStore = useAgentStore()
+const store = useMemoryStore()
+
+const agents = ref<any[]>([])
+const selectedAgentId = ref<number | null>(null)
+const currentAgent = computed(() => agents.value.find(a => a.id === selectedAgentId.value))
+const agentDropdownOpen = ref(false)
+const activeTab = ref('timeline')
+const selectedReportId = ref<string | null>(null)
+const currentPage = ref(1)
+
+// Dream input (inline, no dialog)
+const dreamInputOpen = ref(false)
+const dreamTopic = ref('')
+const dreamRunning = ref(false)
+
+const tabs = computed(() => [
+  { key: 'timeline', label: t('memory.tabTimeline'), disabled: false },
+  { key: 'memory', label: t('memory.tabMemory'), disabled: false },
+  { key: 'facts', label: t('memory.tabFacts'), disabled: false },
+])
+
+onMounted(async () => {
+  await agentStore.fetchAgents()
+  agents.value = agentStore.agents
+  if (agents.value.length > 0) {
+    selectedAgentId.value = agents.value[0].id
+  }
+})
+
+watch(selectedAgentId, (id) => {
+  if (id) { store.subscribeEvents(id); loadReports() }
+  else store.unsubscribeEvents()
+})
+
+onUnmounted(() => store.unsubscribeEvents())
+
+function selectAgent(agent: any) {
+  selectedAgentId.value = agent.id
+  agentDropdownOpen.value = false
+  selectedReportId.value = null
+  currentPage.value = 1
+  store.currentReport = null
+}
+
+function loadReports() {
+  if (selectedAgentId.value) store.fetchReports(selectedAgentId.value, currentPage.value, 20)
+}
+
+function selectReport(report: DreamReportItem) {
+  selectedReportId.value = report.id
+  if (selectedAgentId.value) store.fetchReport(selectedAgentId.value, report.id)
+}
+
+function startDream() { dreamInputOpen.value = true }
+
+async function triggerDream() {
+  if (!dreamTopic.value.trim() || !selectedAgentId.value) return
+  dreamRunning.value = true
+  try {
+    await http.post(`/memory/${selectedAgentId.value}/dreaming/focused`, { topic: dreamTopic.value.trim() })
+    ElMessage.success(t('memory.focused.success'))
+    dreamTopic.value = ''
+    dreamInputOpen.value = false
+    loadReports()
+  } catch (e: any) {
+    ElMessage.error(e.message || 'Dream failed')
+  } finally {
+    dreamRunning.value = false
+  }
+}
+
+function relTime(iso: string) {
+  if (!iso) return ''
+  const ms = Date.now() - new Date(iso).getTime()
+  const h = Math.floor(ms / 3600000)
+  if (h < 1) return t('memory.time.justNow')
+  if (h < 24) return t('memory.time.hoursAgo', { n: h })
+  const d = Math.floor(h / 24)
+  if (d < 7) return t('memory.time.daysAgo', { n: d })
+  return new Date(iso).toLocaleDateString()
+}
+
+function fmtTime(iso: string) {
+  return iso ? new Date(iso).toLocaleString() : ''
+}
+</script>
+
+<style scoped>
+/* ========== Shell ========== */
+.memory-frame { max-width: 1200px; }
+.memory-layout {
+  display: flex;
+  min-height: calc(100vh - 120px);
+  overflow: hidden;
+}
+
+/* ========== Left sidebar ========== */
+.memory-sidebar {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--mc-border-light);
+  overflow: hidden;
+}
+.sidebar-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 16px 12px;
+}
+.sidebar-header-copy { display: flex; flex-direction: column; }
+.panel-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--mc-text-tertiary);
+}
+.panel-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 2px 0 0;
+  color: var(--mc-text-primary);
+}
+.dream-trigger-btn {
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--mc-border);
+  border-radius: 10px;
+  background: var(--mc-bg-sunken);
+  color: var(--mc-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.dream-trigger-btn:hover {
+  border-color: var(--mc-primary);
+  color: var(--mc-primary);
+  background: var(--mc-bg-elevated);
+}
+
+/* Agent selector (same CSS as ChatConsole) */
+.agent-selector { position: relative; padding: 0 12px 8px; }
+.agent-select-trigger {
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border: 1px solid var(--mc-border); border-radius: 12px;
+  font-size: 13px; color: var(--mc-text-primary); background: var(--mc-bg-sunken);
+  cursor: pointer; outline: none; transition: all 0.15s;
+}
+.agent-select-trigger:hover { border-color: var(--mc-primary); background: var(--mc-bg-elevated); }
+.agent-select-trigger__icon { font-size: 18px; line-height: 1; }
+.agent-select-trigger__name { flex: 1; text-align: left; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-select-trigger__arrow { flex-shrink: 0; color: var(--mc-text-tertiary); transition: transform 0.2s; }
+.agent-select-trigger__arrow.open { transform: rotate(180deg); }
+.agent-dropdown-backdrop { position: fixed; inset: 0; z-index: 99; }
+.agent-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 12px; right: 12px; min-width: 240px; z-index: 100;
+  background: var(--mc-bg-elevated); border: 1px solid var(--mc-border); border-radius: 14px;
+  padding: 6px; box-shadow: 0 8px 32px rgba(0,0,0,0.12); max-height: 320px; overflow-y: auto;
+}
+.agent-dropdown-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border-radius: 10px; cursor: pointer; transition: background 0.12s;
+}
+.agent-dropdown-item:hover { background: var(--mc-bg-sunken); }
+.agent-dropdown-item.active { background: var(--mc-primary-bg); }
+.agent-dropdown-item__icon { font-size: 24px; line-height: 1; flex-shrink: 0; }
+.agent-dropdown-item__info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.agent-dropdown-item__name { font-size: 13px; font-weight: 500; color: var(--mc-text-primary); }
+.agent-dropdown-item__desc { font-size: 11px; color: var(--mc-text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-dropdown-item__check { color: var(--mc-primary); flex-shrink: 0; }
+
+/* Segment control */
+.memory-nav {
+  display: flex; gap: 2px; margin: 4px 12px 8px; padding: 3px;
+  background: var(--mc-bg-sunken); border-radius: 10px; width: fit-content;
+}
+.memory-nav-btn {
+  padding: 5px 14px; border: none; border-radius: 8px; background: transparent;
+  font-size: 12px; font-weight: 500; color: var(--mc-text-tertiary);
+  cursor: pointer; transition: all 0.15s;
+}
+.memory-nav-btn:hover:not(.disabled) { color: var(--mc-text-primary); }
+.memory-nav-btn.active {
+  background: var(--mc-bg-elevated); color: var(--mc-text-primary);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.memory-nav-btn.disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Timeline scroll */
+.timeline-scroll { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+.dream-card {
+  padding: 12px 14px; margin-bottom: 6px; border-radius: 12px;
+  cursor: pointer; transition: all 0.12s; border: 1px solid transparent;
+}
+.dream-card:hover { background: var(--mc-bg-sunken); }
+.dream-card.selected { background: var(--mc-primary-bg); border-color: var(--mc-primary); }
+.card-row-top { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mc-text-tertiary); }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; }
+.status-dot.success { background: #34c759; }
+.status-dot.failed { background: #ff3b30; }
+.status-dot.skipped { background: #ff9f0a; }
+.card-mode { font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.card-time { margin-left: auto; }
+.card-topic { margin-top: 4px; font-size: 13px; font-weight: 500; color: var(--mc-text-primary); }
+.card-stats { margin-top: 4px; display: flex; gap: 8px; font-size: 11px; }
+.stat-up { color: #34c759; font-weight: 600; }
+.stat-down { color: var(--mc-text-tertiary); }
+.stat-total { color: var(--mc-text-tertiary); }
+.load-more { padding: 8px; text-align: center; }
+.load-more-btn {
+  padding: 6px 16px; border: 1px solid var(--mc-border); border-radius: 8px;
+  background: transparent; font-size: 12px; color: var(--mc-text-secondary);
+  cursor: pointer; transition: all 0.15s;
+}
+.load-more-btn:hover { border-color: var(--mc-primary); color: var(--mc-primary); }
+
+/* Skeleton */
+.skeleton-card { padding: 14px; margin-bottom: 6px; }
+.skeleton-line { height: 10px; border-radius: 4px; background: var(--mc-bg-sunken); margin-bottom: 8px; }
+.skeleton-line.short { width: 60%; }
+
+.empty-state { display: flex; flex-direction: column; align-items: center; padding: 40px 0; color: var(--mc-text-tertiary); }
+.empty-icon { font-size: 28px; margin-bottom: 8px; }
+.empty-state p { font-size: 13px; }
+.error-state p { color: var(--mc-text-secondary); }
+.retry-btn {
+  margin-top: 8px; padding: 6px 16px; border: 1px solid var(--mc-border); border-radius: 8px;
+  background: transparent; font-size: 12px; color: var(--mc-text-secondary); cursor: pointer;
+}
+.retry-btn:hover { border-color: var(--mc-primary); color: var(--mc-primary); }
+
+/* ========== Right detail ========== */
+.memory-detail {
+  flex: 1; min-width: 0; padding: 24px; overflow-y: auto;
+}
+
+/* Inline dream input */
+.dream-input-area {
+  padding: 16px; margin-bottom: 20px; border-radius: 14px;
+  background: var(--mc-bg-sunken); border: 1px solid var(--mc-border-light);
+}
+.dream-input-header {
+  display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600;
+  color: var(--mc-text-primary); margin-bottom: 8px;
+}
+.close-btn {
+  margin-left: auto; background: none; border: none; font-size: 18px;
+  color: var(--mc-text-tertiary); cursor: pointer; line-height: 1;
+}
+.dream-input-desc { font-size: 12px; color: var(--mc-text-tertiary); margin: 0 0 10px; line-height: 1.4; }
+.dream-topic-input {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--mc-border); border-radius: 10px;
+  background: var(--mc-bg-elevated); font-size: 13px; color: var(--mc-text-primary);
+  outline: none; transition: border-color 0.15s;
+}
+.dream-topic-input:focus { border-color: var(--mc-primary); }
+.dream-topic-input::placeholder { color: var(--mc-text-tertiary); }
+.dream-go-btn {
+  margin-top: 10px; padding: 8px 20px; border: none; border-radius: 10px;
+  background: var(--mc-primary); color: #fff; font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: opacity 0.15s;
+}
+.dream-go-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Detail header */
+.detail-header { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+.detail-mode-badge {
+  padding: 4px 10px; border-radius: 8px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.detail-mode-badge.nightly { background: rgba(88,86,214,0.12); color: #5856d6; }
+.detail-mode-badge.focused { background: rgba(255,159,10,0.12); color: #ff9f0a; }
+.detail-topic { font-size: 16px; font-weight: 600; color: var(--mc-text-primary); }
+.detail-status { margin-left: auto; font-size: 11px; font-weight: 500; padding: 3px 8px; border-radius: 6px; }
+.detail-status.success { background: rgba(52,199,89,0.12); color: #34c759; }
+.detail-status.failed { background: rgba(255,59,48,0.12); color: #ff3b30; }
+.detail-status.skipped { background: rgba(255,159,10,0.12); color: #ff9f0a; }
+
+/* KV grid */
+.detail-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px; margin-bottom: 24px;
+}
+.detail-kv {
+  padding: 12px 14px; border-radius: 12px; background: var(--mc-bg-sunken);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.kv-label { font-size: 11px; color: var(--mc-text-tertiary); font-weight: 500; }
+.kv-value { font-size: 16px; font-weight: 600; color: var(--mc-text-primary); }
+.kv-value.text-up { color: #34c759; }
+.kv-value.text-down { color: #ff3b30; }
+
+/* Sections */
+.detail-section { margin-bottom: 20px; }
+.section-label { font-size: 12px; font-weight: 600; color: var(--mc-text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.section-body { font-size: 13px; color: var(--mc-text-secondary); line-height: 1.6; margin: 0; }
+.diff-block {
+  margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--mc-bg-sunken);
+  font-size: 12px; font-family: 'SF Mono', Menlo, monospace; color: var(--mc-text-secondary);
+  white-space: pre-wrap; line-height: 1.5; border: 1px solid var(--mc-border-light);
+}
+.detail-section.error .section-body { color: #ff3b30; }
+
+/* Empty detail */
+.detail-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; color: var(--mc-text-tertiary); text-align: center;
+}
+.detail-empty-icon { font-size: 36px; margin-bottom: 12px; }
+.detail-empty p { font-size: 14px; max-width: 260px; line-height: 1.5; }
+
+/* ========== Transitions ========== */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.15s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+.agent-dropdown-enter-active { transition: all 0.2s ease; }
+.agent-dropdown-leave-active { transition: all 0.12s ease; }
+.agent-dropdown-enter-from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+.agent-dropdown-leave-to { opacity: 0; transform: translateY(-4px) scale(0.98); }
+.slide-down-enter-active, .slide-down-leave-active { transition: all 0.2s ease; }
+.slide-down-enter-from, .slide-down-leave-to { opacity: 0; transform: translateY(-8px); }
+
+/* ========== Responsive ========== */
+@media (max-width: 768px) {
+  .memory-layout { flex-direction: column; }
+  .memory-sidebar { width: 100%; max-height: 50vh; border-right: none; border-bottom: 1px solid var(--mc-border-light); }
+}
+</style>

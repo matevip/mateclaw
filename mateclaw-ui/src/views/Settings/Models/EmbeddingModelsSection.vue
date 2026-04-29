@@ -133,11 +133,27 @@ defineExpose({ refresh: loadAll })
 .embedding-section {
   margin-top: 24px;
 }
+/* Mirror the flex layout used by .group-title in index.vue — scoped styles
+ * don't cross component boundaries, so without this the icon stacks above
+ * the title instead of sitting inline. */
+.group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--mc-text-primary);
+}
+.group-title__icon {
+  flex-shrink: 0;
+  color: var(--mc-text-secondary);
+}
 .group-hint {
   font-size: 12px;
   font-weight: 400;
   color: var(--mc-text-tertiary);
-  margin-left: 12px;
+  margin-left: 4px;
 }
 .loading-state, .empty-state {
   padding: 32px;

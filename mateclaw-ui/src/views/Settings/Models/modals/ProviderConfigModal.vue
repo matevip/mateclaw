@@ -38,20 +38,26 @@
                 v-if="!editingProvider?.oauthConnected"
                 class="btn-oauth"
                 type="button"
-                @click="$emit('oauthLogin')"
+                @click="$emit('oauthLogin', editingProvider?.id)"
               >
-                {{ t('settings.model.oauthLogin') }}
+                {{ editingProvider?.id === 'anthropic-claude-code'
+                  ? t('settings.model.claudeCodeOauthDetect')
+                  : t('settings.model.oauthLogin') }}
               </button>
               <button
                 v-else
                 class="btn-oauth btn-oauth-revoke"
                 type="button"
-                @click="$emit('oauthRevoke')"
+                @click="$emit('oauthRevoke', editingProvider?.id)"
               >
                 {{ t('settings.model.oauthDisconnect') }}
               </button>
             </div>
-            <div class="field-hint">{{ t('settings.model.oauthHint') }}</div>
+            <div class="field-hint">
+              {{ editingProvider?.id === 'anthropic-claude-code'
+                ? t('settings.model.claudeCodeOauthHint')
+                : t('settings.model.oauthHint') }}
+            </div>
           </div>
           <!-- API Key 输入区域（非 OAuth 时显示） -->
           <div v-else class="form-group">
@@ -118,7 +124,21 @@
               <span>{{ advancedOpen ? '−' : '+' }}</span>
             </button>
             <div v-if="advancedOpen" class="advanced-panel">
-              <label class="form-label">{{ t('settings.model.fields.generateKwargs') }}</label>
+              <!-- RFC-009 P3.5: failover chain priority editor.
+                   0 = excluded; 1..N defines try-order after primary fails. -->
+              <label class="form-label">{{ t('settings.model.fields.fallbackPriority') }}</label>
+              <input
+                v-model.number="form.fallbackPriority"
+                type="number"
+                min="0"
+                max="99"
+                step="1"
+                class="form-input"
+                style="max-width: 160px"
+              />
+              <div class="field-hint">{{ t('settings.model.fallbackPriorityHint') }}</div>
+
+              <label class="form-label" style="margin-top: 14px">{{ t('settings.model.fields.generateKwargs') }}</label>
               <textarea v-model="form.generateKwargsText" rows="6" class="form-textarea mono"></textarea>
               <div class="field-hint">{{ t('settings.model.advancedHint') }}</div>
             </div>
@@ -155,6 +175,7 @@ defineProps<{
     generateKwargsText: string
     enableSearch: boolean
     searchStrategy: string
+    fallbackPriority: number
   }
   advancedOpen: boolean
   protocolOptions: Array<{ value: string; label: string }>
@@ -167,8 +188,10 @@ defineEmits<{
   close: []
   save: []
   toggleAdvanced: []
-  oauthLogin: []
-  oauthRevoke: []
+  // RFC-062: providerId tells the handler which OAuth flow to dispatch
+  // (anthropic-claude-code reuses local creds, openai-chatgpt opens auth URL).
+  oauthLogin: [providerId?: string]
+  oauthRevoke: [providerId?: string]
 }>()
 </script>
 

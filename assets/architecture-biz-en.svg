@@ -36,14 +36,15 @@
   <text x="480" y="288" text-anchor="middle" font-size="11" font-weight="500" fill="#665245">Reason · Plan · Execute</text>
   <text x="480" y="304" text-anchor="middle" font-size="9" fill="#9b7d6c">ReAct + Plan-Execute</text>
 
-  <!-- ===== Top: User Surfaces ===== -->
-  <rect x="310" y="82" width="340" height="68" rx="14" fill="url(#warm)" stroke="#d9cec2" stroke-width="1" filter="url(#shadow)"/>
-  <rect x="310" y="82" width="340" height="3" rx="1.5" fill="url(#primary)"/>
+  <!-- ===== Top: User Surfaces (5 items) ===== -->
+  <rect x="270" y="82" width="420" height="68" rx="14" fill="url(#warm)" stroke="#d9cec2" stroke-width="1" filter="url(#shadow)"/>
+  <rect x="270" y="82" width="420" height="3" rx="1.5" fill="url(#primary)"/>
   <text x="480" y="108" text-anchor="middle" font-size="13" font-weight="700" fill="#d96d46">User Surfaces</text>
-  <text x="355" y="136" text-anchor="middle" font-size="10" fill="#665245">Web Console</text>
-  <text x="440" y="136" text-anchor="middle" font-size="10" fill="#665245">Desktop</text>
-  <text x="520" y="136" text-anchor="middle" font-size="10" fill="#665245">IM Channels</text>
-  <text x="605" y="136" text-anchor="middle" font-size="10" fill="#665245">API</text>
+  <text x="312" y="136" text-anchor="middle" font-size="10" fill="#665245">Web Console</text>
+  <text x="396" y="136" text-anchor="middle" font-size="10" fill="#665245">Desktop</text>
+  <text x="480" y="136" text-anchor="middle" font-size="10" fill="#665245">Webchat</text>
+  <text x="564" y="136" text-anchor="middle" font-size="10" fill="#665245">IM (8)</text>
+  <text x="648" y="136" text-anchor="middle" font-size="10" fill="#665245">API</text>
   <line x1="480" y1="150" x2="480" y2="208" stroke="#d96d46" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.5"/>
   <polygon points="475,206 480,214 485,206" fill="#d96d46" opacity="0.6"/>
 
@@ -52,32 +53,38 @@
   <rect x="40" y="210" width="4" height="140" rx="2" fill="url(#accent)"/>
   <text x="140" y="240" text-anchor="middle" font-size="13" font-weight="700" fill="#184a45">Knowledge</text>
   <text x="140" y="264" text-anchor="middle" font-size="10" fill="#665245">LLM Wiki KB</text>
-  <text x="140" y="282" text-anchor="middle" font-size="10" fill="#665245">Structured Digestion</text>
-  <text x="140" y="300" text-anchor="middle" font-size="10" fill="#665245">Memory Extraction</text>
-  <text x="140" y="318" text-anchor="middle" font-size="10" fill="#665245">Workspace Context</text>
-  <text x="140" y="336" text-anchor="middle" font-size="9" fill="#9b7d6c">Shape it, don't just store it</text>
+  <text x="140" y="282" text-anchor="middle" font-size="10" fill="#665245">Structured + Backlinks</text>
+  <text x="140" y="300" text-anchor="middle" font-size="10" fill="#665245">Citations + Soft Archive</text>
+  <text x="140" y="318" text-anchor="middle" font-size="10" fill="#665245">Lazy ingest · On-demand</text>
+  <text x="140" y="336" text-anchor="middle" font-size="9" fill="#9b7d6c">A library, not a vector store</text>
   <line x1="240" y1="280" x2="408" y2="280" stroke="#184a45" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.5"/>
   <polygon points="406,275 414,280 406,285" fill="#184a45" opacity="0.6"/>
 
-  <!-- ===== Right: Tools & Skills ===== -->
-  <rect x="720" y="210" width="200" height="140" rx="14" fill="url(#warm)" stroke="#d9cec2" stroke-width="1" filter="url(#shadow)"/>
-  <rect x="916" y="210" width="4" height="140" rx="2" fill="url(#primary)"/>
-  <text x="820" y="240" text-anchor="middle" font-size="13" font-weight="700" fill="#d96d46">Tools &amp; Skills</text>
-  <text x="820" y="264" text-anchor="middle" font-size="10" fill="#665245">Built-in Tool Suite</text>
-  <text x="820" y="282" text-anchor="middle" font-size="10" fill="#665245">MCP Protocol</text>
-  <text x="820" y="300" text-anchor="middle" font-size="10" fill="#665245">Skill Packages + Hub</text>
-  <text x="820" y="318" text-anchor="middle" font-size="10" fill="#665245">Guard + Approval</text>
-  <text x="820" y="336" text-anchor="middle" font-size="9" fill="#9b7d6c">Capability needs boundaries</text>
-  <line x1="552" y1="280" x2="720" y2="280" stroke="#d96d46" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.5"/>
-  <polygon points="554,275 546,280 554,285" fill="#d96d46" opacity="0.6"/>
+  <!-- ===== Right Top: Tools & Skills ===== -->
+  <rect x="720" y="210" width="200" height="65" rx="14" fill="url(#warm)" stroke="#d9cec2" stroke-width="1" filter="url(#shadow)"/>
+  <rect x="916" y="210" width="4" height="65" rx="2" fill="url(#primary)"/>
+  <text x="820" y="232" text-anchor="middle" font-size="13" font-weight="700" fill="#d96d46">Tools &amp; Skills</text>
+  <text x="820" y="252" text-anchor="middle" font-size="10" fill="#665245">Built-in + MCP + Skills</text>
+  <text x="820" y="266" text-anchor="middle" font-size="9" fill="#9b7d6c">ClawHub Marketplace</text>
+  <line x1="552" y1="242" x2="720" y2="242" stroke="#d96d46" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.5"/>
+  <polygon points="554,237 546,242 554,247" fill="#d96d46" opacity="0.6"/>
 
-  <!-- ===== Bottom Left: Memory ===== -->
+  <!-- ===== Right Bottom: Security & Approval ===== -->
+  <rect x="720" y="285" width="200" height="65" rx="14" fill="url(#warm)" stroke="#d9cec2" stroke-width="1" filter="url(#shadow)"/>
+  <rect x="916" y="285" width="4" height="65" rx="2" fill="url(#accent)"/>
+  <text x="820" y="307" text-anchor="middle" font-size="13" font-weight="700" fill="#184a45">Security &amp; Approval</text>
+  <text x="820" y="327" text-anchor="middle" font-size="10" fill="#665245">Tool Guard + Approval Flow</text>
+  <text x="820" y="341" text-anchor="middle" font-size="9" fill="#9b7d6c">Agentic, not autonomous</text>
+  <line x1="552" y1="317" x2="720" y2="317" stroke="#184a45" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.5"/>
+  <polygon points="554,312 546,317 554,322" fill="#184a45" opacity="0.6"/>
+
+  <!-- ===== Bottom Left: Memory · Dreaming ===== -->
   <rect x="160" y="400" width="200" height="100" rx="14" fill="url(#warm)" stroke="#d9cec2" stroke-width="1" filter="url(#shadow)"/>
   <rect x="160" y="496" width="200" height="4" rx="2" fill="url(#accent)"/>
-  <text x="260" y="428" text-anchor="middle" font-size="13" font-weight="700" fill="#184a45">Memory</text>
-  <text x="260" y="452" text-anchor="middle" font-size="10" fill="#665245">Short-term Context</text>
-  <text x="260" y="470" text-anchor="middle" font-size="10" fill="#665245">Extraction + Consolidation</text>
-  <text x="260" y="488" text-anchor="middle" font-size="9" fill="#9b7d6c">Memory should compound</text>
+  <text x="260" y="428" text-anchor="middle" font-size="13" font-weight="700" fill="#184a45">Memory · Dreaming</text>
+  <text x="260" y="452" text-anchor="middle" font-size="10" fill="#665245">Short-term + Extraction</text>
+  <text x="260" y="470" text-anchor="middle" font-size="10" fill="#665245">Nightly consolidation</text>
+  <text x="260" y="488" text-anchor="middle" font-size="9" fill="#9b7d6c">It works while you sleep</text>
   <line x1="320" y1="400" x2="452" y2="340" stroke="#184a45" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.4"/>
   <polygon points="449,336 456,342 447,344" fill="#184a45" opacity="0.5"/>
 
@@ -91,10 +98,11 @@
   <line x1="640" y1="400" x2="508" y2="340" stroke="#d96d46" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.4"/>
   <polygon points="513,344 504,342 511,336" fill="#d96d46" opacity="0.5"/>
 
-  <!-- ===== Bottom Center: Models ===== -->
+  <!-- ===== Bottom Center: Provider Pool + Failover ===== -->
   <rect x="370" y="420" width="220" height="64" rx="12" fill="url(#accent)" filter="url(#shadow)"/>
-  <text x="480" y="448" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Model Layer</text>
-  <text x="480" y="468" text-anchor="middle" font-size="10" fill="#dce8e4">Cloud + Local · 14+ Providers</text>
+  <text x="480" y="442" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Provider Pool · Failover</text>
+  <text x="480" y="460" text-anchor="middle" font-size="10" fill="#dce8e4">Cloud + Local · 14+ providers</text>
+  <text x="480" y="475" text-anchor="middle" font-size="9" fill="#dce8e4">Health Tracker · Auto-switch</text>
   <line x1="480" y1="420" x2="480" y2="352" stroke="#184a45" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.5"/>
   <polygon points="475,354 480,346 485,354" fill="#184a45" opacity="0.6"/>
 

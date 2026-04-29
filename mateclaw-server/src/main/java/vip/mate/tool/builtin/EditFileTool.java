@@ -33,6 +33,7 @@ public class EditFileTool {
 
     private final vip.mate.i18n.I18nService i18n;
 
+    @vip.mate.tool.ConcurrencyUnsafe("in-place file edit — must not race with reads/writes on the same path")
     @Tool(description = "Edit file content via find-and-replace. Finds exact match of old_text and replaces with new_text. "
             + "Returns structured JSON with filePath, replacements count. "
             + "Requires user approval. Replaces first occurrence by default; set replaceAll=true for all.")

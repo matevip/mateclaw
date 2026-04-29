@@ -1,5 +1,6 @@
 package vip.mate.channel;
 
+import vip.mate.channel.health.ChannelHealth;
 import vip.mate.workspace.conversation.model.MessageContentPart;
 
 import java.time.Duration;
@@ -114,6 +115,19 @@ public interface ChannelAdapter {
     }
 
     /**
+     * RFC-063r §2.10: extended overload that accepts a
+     * {@link DeliveryOptions} Parameter Object carrying optional hints
+     * (thread id, multi-bot account id, future ext fields).
+     *
+     * <p>Default implementation delegates to {@link #proactiveSend(String, String)},
+     * dropping hints — concrete adapters (Slack, Telegram) override this
+     * variant to read {@code threadId} and route into the threading API.
+     */
+    default void proactiveSend(String targetId, String content, DeliveryOptions options) {
+        proactiveSend(targetId, content);
+    }
+
+    /**
      * 当前渠道是否支持主动推送
      *
      * @return true 表示支持 proactiveSend
@@ -147,5 +161,25 @@ public interface ChannelAdapter {
      */
     default Duration stalenessThreshold() {
         return Duration.ofMinutes(60);
+    }
+
+    /**
+     * Real-time health snapshot of this adapter.
+     *
+     * <p>This is the source of truth the frontend "connected" green dot
+     * should bind to — {@code mate_channel.enabled} only records the
+     * user's intent to run the channel, not whether the underlying
+     * transport (WebSocket / webhook subscription / API token) is
+     * actually healthy.
+     *
+     * <p>Default returns {@code OUT_OF_SERVICE} when {@link #isRunning()}
+     * is false and {@code UP} otherwise. Concrete adapters override to
+     * surface RECONNECTING / DOWN with specific reasons (auth failure,
+     * staleness exceeded, etc).
+     */
+    default ChannelHealth health() {
+        return isRunning()
+                ? ChannelHealth.up(getChannelType(), null, java.time.Instant.now())
+                : ChannelHealth.outOfService(getChannelType(), null);
     }
 }

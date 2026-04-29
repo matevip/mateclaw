@@ -2,14 +2,36 @@
   <div class="raw-panel">
     <!-- Upload + Add text row -->
     <div class="upload-row">
-      <div class="upload-zone" @click="triggerFileInput" @dragover.prevent @drop.prevent="handleDrop">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <div
+        class="upload-zone"
+        :class="{ 'is-dragging': isDragging, 'is-uploading': uploadingFiles.length > 0 }"
+        @click="triggerFileInput"
+        @dragover.prevent
+        @dragenter.prevent="onDragEnter"
+        @dragleave.prevent="onDragLeave"
+        @drop.prevent="handleDrop"
+      >
+        <!-- Spinner while uploading -->
+        <svg v-if="uploadingFiles.length > 0" class="upload-spinner" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+        </svg>
+        <!-- Arrow-up icon in drag-over state -->
+        <svg v-else-if="isDragging" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="21"/>
+        </svg>
+        <!-- Default upload icon -->
+        <svg v-else width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
           <polyline points="17 8 12 3 7 8"/>
           <line x1="12" y1="3" x2="12" y2="15"/>
         </svg>
         <div class="upload-text">
-          <span class="upload-label">{{ t('wiki.dropFiles') }}</span>
+          <span class="upload-label">
+            <template v-if="uploadingFiles.length > 0">{{ t('wiki.uploading') }}</template>
+            <template v-else-if="isDragging">{{ t('wiki.dropToUpload') }}</template>
+            <template v-else>{{ t('wiki.dropFiles') }}</template>
+          </span>
           <span class="upload-hint">.txt, .md, .pdf, .docx</span>
         </div>
       </div>
@@ -50,12 +72,66 @@
     <!-- Raw materials list -->
     <div class="raw-list">
       <h4 class="raw-list-title">
-        {{ t('wiki.rawMaterials') }} ({{ store.rawMaterials.length }})
+        {{ t('wiki.rawMaterials') }} ({{ store.rawMaterials.length + uploadingFiles.length }})
       </h4>
-      <div v-if="store.rawMaterials.length === 0" class="empty-hint">
+      <div v-if="store.rawMaterials.length === 0 && uploadingFiles.length === 0" class="empty-hint">
         {{ t('wiki.noRawMaterials') }}
       </div>
-      <div v-for="raw in store.rawMaterials" :key="raw.id" class="raw-item">
+
+      <!-- Optimistic uploading items shown at the top -->
+      <div
+        v-for="uf in uploadingFiles"
+        :key="uf.tempId"
+        class="raw-item raw-item--uploading"
+      >
+        <div class="raw-item-row">
+          <div class="raw-item-info">
+            <span class="raw-item-title">{{ uf.name }}</span>
+          </div>
+          <div class="raw-item-meta">
+            <span v-if="uf.status === 'error'" class="status-badge failed">{{ t('wiki.status.failed') }}</span>
+            <span v-else class="status-badge uploading">{{ t('wiki.status.uploading') }}</span>
+            <span
+              v-if="uf.status === 'error' && uf.errorMsg"
+              class="error-hint" :title="uf.errorMsg"
+            >{{ uf.errorMsg }}</span>
+          </div>
+          <div class="raw-item-actions">
+            <!-- Dismiss error item -->
+            <button
+              v-if="uf.status === 'error'"
+              class="btn-icon btn-icon-danger"
+              :title="t('common.delete')"
+              @click="removeUploadingFile(uf.tempId)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <!-- HTTP upload progress bar -->
+        <div v-if="uf.status !== 'error'" class="raw-progress">
+          <div class="raw-progress-track">
+            <div
+              class="raw-progress-fill"
+              :class="{ indeterminate: uf.httpPct === 0 }"
+              :style="uf.httpPct > 0 ? { width: uf.httpPct + '%' } : {}"
+            ></div>
+          </div>
+          <span class="raw-progress-label">
+            {{ uf.httpPct > 0 ? t('wiki.progress.uploading', { pct: uf.httpPct }) : t('wiki.progress.preparing') }}
+          </span>
+        </div>
+      </div>
+
+      <div
+        v-for="raw in store.rawMaterials"
+        :key="raw.id"
+        class="raw-item"
+        :class="{ 'raw-item--active': store.selectedRawId === raw.id }"
+        @click="toggleRawFilter(raw.id)"
+      >
         <div class="raw-item-row">
           <div class="raw-item-info">
             <span class="raw-item-title">{{ raw.title }}</span>
@@ -64,6 +140,10 @@
           <div class="raw-item-meta">
             <span class="status-badge" :class="raw.processingStatus">
               {{ t(`wiki.status.${raw.processingStatus}`) }}
+            </span>
+            <span v-if="raw.pageCount != null && raw.pageCount > 0" class="page-count-chip">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              {{ raw.pageCount }}
             </span>
             <span
               v-if="raw.errorMessage && (raw.processingStatus === 'failed' || raw.processingStatus === 'partial')"
@@ -74,7 +154,16 @@
           </div>
           <div class="raw-item-actions">
             <button
-              v-if="raw.processingStatus === 'failed' || raw.processingStatus === 'completed' || raw.processingStatus === 'partial'"
+              v-if="raw.processingStatus === 'partial'"
+              class="btn-icon btn-icon-resume" :title="t('wiki.resume')"
+              @click="reprocess(raw.id)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+                <polygon points="6 4 20 12 6 20 6 4"/>
+              </svg>
+            </button>
+            <button
+              v-else-if="raw.processingStatus === 'failed' || raw.processingStatus === 'completed'"
               class="btn-icon" :title="t('wiki.reprocess')"
               @click="reprocess(raw.id)"
             >
@@ -82,6 +171,13 @@
                 <polyline points="23 4 23 10 17 10"/>
                 <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
               </svg>
+            </button>
+            <button
+              v-if="raw.processingStatus !== 'uploading'"
+              class="btn-icon" :title="t('wiki.download')"
+              @click="downloadRaw(raw)"
+            >
+              <el-icon :size="14"><Download /></el-icon>
             </button>
             <button class="btn-icon btn-icon-danger" :title="t('common.delete')" @click="deleteRaw(raw.id)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -91,7 +187,23 @@
             </button>
           </div>
         </div>
-        <div v-if="raw.processingStatus === 'processing'" class="raw-progress">
+        <!-- RFC-033: Job stage bar — show when job has progressed past 'queued' or reached terminal -->
+        <JobStageBar
+          v-if="rawJobs[raw.id] && (rawJobs[raw.id].stage !== 'queued' || rawJobs[raw.id].status !== 'queued')"
+          :stage="rawJobs[raw.id].stage"
+          :status="rawJobs[raw.id].status"
+          :current-model="rawJobs[raw.id].currentModelName ?? (rawJobs[raw.id].currentModelId ? `Model #${rawJobs[raw.id].currentModelId}` : undefined)"
+          :is-fallback-active="rawJobs[raw.id].currentModelId != null && rawJobs[raw.id].currentModelId !== rawJobs[raw.id].primaryModelId"
+          :error-code="rawJobs[raw.id].errorCode ?? undefined"
+          :error-message="rawJobs[raw.id].errorMessage ?? undefined"
+          :done="rawJobs[raw.id].done ?? raw.progressDone"
+          :total="rawJobs[raw.id].total ?? raw.progressTotal"
+          :started-at="rawJobs[raw.id].startedAt ?? undefined"
+          @reprocess="reprocess(raw.id)"
+          @repair="handleLocalRepair(raw.id)"
+        />
+        <!-- Original progress bar: shown during processing when job data is not active -->
+        <div v-else-if="raw.processingStatus === 'processing'" class="raw-progress">
           <div class="raw-progress-track">
             <div
               class="raw-progress-fill"
@@ -143,10 +255,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { ElMessage } from 'element-plus'
+import { Download } from '@element-plus/icons-vue'
 import { useWikiStore } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
+import JobStageBar from './JobStageBar.vue'
+import type { WikiProcessingJob } from '@/composables/useWikiJobPoller'
 
 const { t } = useI18n()
 const store = useWikiStore()
@@ -160,7 +276,7 @@ let fallbackTimer: number | null = null
 let activeKbId: number | null = null
 
 const hasProcessing = computed(() =>
-  store.rawMaterials.some(r => r.processingStatus === 'processing')
+  store.rawMaterials.some(r => r.processingStatus === 'processing' || r.processingStatus === 'pending')
 )
 
 function applyProgressEvent(payload: any) {
@@ -206,7 +322,8 @@ function openSse(kbId: number) {
           raw.progressTotal = data.totalPages
         }
       }
-      // 完成事件后，再做一次轻量 list 拉取确保其他字段（pageCount 等）同步
+      // Clear stale job entry so JobStageBar hides
+      delete rawJobs[data.rawId]
       if (store.currentKB) store.fetchRawMaterials(store.currentKB.id)
     } catch { /* ignore */ }
   })
@@ -215,11 +332,13 @@ function openSse(kbId: number) {
       const data = JSON.parse(ev.data)
       const raw = store.rawMaterials.find(r => r.id === data.rawId)
       if (raw) raw.processingStatus = 'failed'
+      // Clear stale job entry
+      delete rawJobs[data.rawId]
       if (store.currentKB) store.fetchRawMaterials(store.currentKB.id)
     } catch { /* ignore */ }
   })
   es.onerror = () => {
-    // 浏览器 EventSource 会自动重连；这里仅 log
+    // Browser EventSource auto-reconnects; just log
     // console.debug('Wiki SSE error/reconnect', kbId)
   }
 }
@@ -236,9 +355,9 @@ watch(
   () => [hasProcessing.value, store.currentKB?.id] as const,
   ([active, kbId]) => {
     if (active && kbId != null) {
-      // SSE 主通道
+      // SSE main channel
       if (activeKbId !== kbId) openSse(kbId)
-      // 60s 兜底拉取
+      // 60s fallback polling
       if (fallbackTimer == null) {
         fallbackTimer = window.setInterval(() => {
           if (store.currentKB) store.fetchRawMaterials(store.currentKB.id)
@@ -263,12 +382,124 @@ onBeforeUnmount(() => {
   }
 })
 
+// RFC-033: Job polling per raw material
+const rawJobs = reactive<Record<number, WikiProcessingJob>>({})
+let jobPoller: ReturnType<typeof setTimeout> | null = null
+
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'partial', 'cancelled'])
+
+async function pollJobs() {
+  if (!store.currentKB) return
+  const kbId = store.currentKB.id
+  const processingRaws = store.rawMaterials.filter(
+    r => r.processingStatus === 'processing' || r.processingStatus === 'pending'
+  )
+  let anyTerminal = false
+  for (const raw of processingRaws) {
+    try {
+      const res: any = await wikiApi.getWikiJobs(kbId, raw.id)
+      const list = res.data || res || []
+      if (list.length > 0) {
+        const job = list[0]
+        rawJobs[raw.id] = job
+        if (TERMINAL_STATUSES.has(job.status)) {
+          anyTerminal = true
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  // When any job reaches terminal, refresh raw materials to sync status badges
+  if (anyTerminal) {
+    await store.fetchRawMaterials(kbId)
+  }
+  // Continue polling while there are still processing/pending raws
+  const stillActive = store.rawMaterials.some(
+    r => r.processingStatus === 'processing' || r.processingStatus === 'pending'
+  )
+  if (stillActive) {
+    jobPoller = setTimeout(pollJobs, 3000)
+  }
+}
+
+watch(hasProcessing, (active) => {
+  if (active) pollJobs()
+  else if (jobPoller) { clearTimeout(jobPoller); jobPoller = null }
+}, { immediate: true })
+
+async function handleLocalRepair(rawId: number) {
+  if (!store.currentKB) return
+  // For local repair, we'd need a page slug. For now, reprocess the raw material.
+  await reprocess(rawId)
+}
+
 const showAddText = ref(false)
 const textTitle = ref('')
 const textContent = ref('')
 const dirPath = ref(store.currentKB?.sourceDirectory || '')
 const scanning = ref(false)
 const scanResult = ref<{ scanned: number; added: number; skipped: number } | null>(null)
+
+// ─── Drag-over state ──────────────────────────────────────────────────────────
+// Use a counter to handle nested dragenter/dragleave without flickering.
+const isDragging = ref(false)
+let dragCounter = 0
+
+function onDragEnter() {
+  dragCounter++
+  isDragging.value = true
+}
+
+function onDragLeave() {
+  dragCounter--
+  if (dragCounter <= 0) {
+    dragCounter = 0
+    isDragging.value = false
+  }
+}
+
+// ─── Optimistic upload items ──────────────────────────────────────────────────
+interface UploadingFile {
+  tempId: string
+  name: string
+  httpPct: number
+  status: 'uploading' | 'error'
+  errorMsg?: string
+}
+
+const uploadingFiles = ref<UploadingFile[]>([])
+let tempIdCounter = 0
+
+function addUploadingFile(name: string): UploadingFile {
+  const item: UploadingFile = {
+    tempId: `upload-${++tempIdCounter}`,
+    name,
+    httpPct: 0,
+    status: 'uploading',
+  }
+  uploadingFiles.value.push(item)
+  return item
+}
+
+function removeUploadingFile(tempId: string) {
+  const idx = uploadingFiles.value.findIndex(f => f.tempId === tempId)
+  if (idx >= 0) uploadingFiles.value.splice(idx, 1)
+}
+
+// ─── Upload helpers ───────────────────────────────────────────────────────────
+async function uploadFile(kbId: number, file: File) {
+  const item = addUploadingFile(file.name)
+  try {
+    await store.uploadRawFile(kbId, file, (pct) => {
+      item.httpPct = pct
+    })
+    // Success: real item was added to store.rawMaterials, remove the optimistic placeholder
+    removeUploadingFile(item.tempId)
+  } catch (err: any) {
+    item.status = 'error'
+    item.errorMsg = err?.response?.data?.message || err?.message || t('wiki.uploadFailed', { name: file.name })
+    ElMessage.error(t('wiki.uploadFailed', { name: file.name }))
+  }
+}
 
 function triggerFileInput() {
   fileInput.value?.click()
@@ -277,17 +508,19 @@ function triggerFileInput() {
 async function handleFileSelect(event: Event) {
   const input = event.target as HTMLInputElement
   if (!input.files || !store.currentKB) return
-  for (const file of Array.from(input.files)) {
-    await store.uploadRawFile(store.currentKB.id, file)
-  }
+  const kbId = store.currentKB.id
+  // Upload all files concurrently
+  await Promise.all(Array.from(input.files).map(f => uploadFile(kbId, f)))
   input.value = ''
 }
 
 async function handleDrop(event: DragEvent) {
+  // Reset drag state
+  dragCounter = 0
+  isDragging.value = false
   if (!event.dataTransfer?.files || !store.currentKB) return
-  for (const file of Array.from(event.dataTransfer.files)) {
-    await store.uploadRawFile(store.currentKB.id, file)
-  }
+  const kbId = store.currentKB.id
+  await Promise.all(Array.from(event.dataTransfer.files).map(f => uploadFile(kbId, f)))
 }
 
 async function handleAddText() {
@@ -300,8 +533,21 @@ async function handleAddText() {
 
 async function reprocess(rawId: number) {
   if (!store.currentKB) return
-  await wikiApi.reprocessRaw(store.currentKB.id, rawId)
-  await store.fetchRawMaterials(store.currentKB.id)
+  const kbId = store.currentKB.id
+  await wikiApi.reprocessRaw(kbId, rawId)
+  // Immediately mark local state as processing so SSE connects and progress bar shows
+  const raw = store.rawMaterials.find(r => r.id === rawId)
+  if (raw) {
+    raw.processingStatus = 'processing'
+    raw.progressDone = 0
+    raw.progressTotal = 0
+  }
+  // Clear stale job entry
+  delete rawJobs[rawId]
+  await store.fetchRawMaterials(kbId)
+  // Delayed re-fetch to catch final status if processing finishes before SSE connects
+  setTimeout(() => { store.fetchRawMaterials(kbId) }, 5000)
+  setTimeout(() => { store.fetchRawMaterials(kbId) }, 15000)
 }
 
 async function deleteRaw(rawId: number) {
@@ -310,10 +556,50 @@ async function deleteRaw(rawId: number) {
   await store.fetchRawMaterials(store.currentKB.id)
 }
 
+async function downloadRaw(raw: { id: number; title?: string }) {
+  if (!store.currentKB) return
+  try {
+    // The http interceptor returns the raw body for non-R-shaped responses,
+    // so this resolves directly to the Blob (no .data unwrap needed).
+    const blob = (await wikiApi.downloadRaw(store.currentKB.id, raw.id)) as unknown as Blob
+    let filename = raw.title && raw.title.trim().length > 0 ? raw.title : `raw-${raw.id}`
+    if (!filename.includes('.')) filename += '.txt'
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    // Revoke on next tick — some browsers cancel the in-flight download if we
+    // revoke synchronously before the click handler returns.
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    ElMessage.error(`${t('wiki.downloadFailed')}: ${msg}`)
+  }
+}
+
 async function processAll() {
   if (!store.currentKB) return
-  await wikiApi.processKB(store.currentKB.id)
-  await store.fetchRawMaterials(store.currentKB.id)
+  const kbId = store.currentKB.id
+  await wikiApi.processKB(kbId)
+  // Mark all pending materials as processing so SSE connects
+  store.rawMaterials
+    .filter(r => r.processingStatus === 'pending')
+    .forEach(r => { r.processingStatus = 'processing'; r.progressDone = 0; r.progressTotal = 0 })
+  await store.fetchRawMaterials(kbId)
+  setTimeout(() => { store.fetchRawMaterials(kbId) }, 5000)
+}
+
+function toggleRawFilter(rawId: number) {
+  if (!store.currentKB) return
+  const kbId = store.currentKB.id
+  if (store.selectedRawId === rawId) {
+    store.clearRawFilter(kbId)
+  } else {
+    store.filterPagesByRaw(kbId, rawId)
+  }
 }
 
 async function handleScanDir() {
@@ -321,9 +607,9 @@ async function handleScanDir() {
   scanning.value = true
   scanResult.value = null
   try {
-    // 先保存目录路径
+    // Save directory path first
     await wikiApi.setSourceDirectory(store.currentKB.id, dirPath.value.trim())
-    // 触发扫描
+    // Trigger scan
     const result = await store.scanDirectory(store.currentKB.id)
     scanResult.value = result
   } catch (e: any) {
@@ -364,26 +650,52 @@ async function handleScanDir() {
   border-radius: 16px;
   padding: 18px 20px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
   display: flex;
   align-items: center;
   gap: 12px;
   color: var(--mc-text-tertiary);
 }
 .upload-zone:hover { border-color: var(--mc-primary); background: var(--mc-primary-bg); }
+.upload-zone.is-dragging {
+  border-color: var(--mc-primary);
+  background: var(--mc-primary-bg);
+  box-shadow: 0 0 0 3px rgba(217,119,87,0.15);
+  color: var(--mc-primary);
+}
+.upload-zone.is-uploading {
+  border-color: var(--mc-primary);
+  background: var(--mc-primary-bg);
+  cursor: default;
+  pointer-events: none;
+}
 .upload-zone svg { flex-shrink: 0; }
 .upload-text { display: flex; flex-direction: column; gap: 2px; }
 .upload-label { font-size: 14px; color: var(--mc-text-secondary); }
 .upload-hint { font-size: 12px; color: var(--mc-text-tertiary); }
 .add-text-btn { flex-shrink: 0; }
 
+/* Spinner animation for uploading state */
+.upload-spinner {
+  flex-shrink: 0;
+  animation: spin 1s linear infinite;
+  color: var(--mc-primary);
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
 /* Raw list */
 .raw-list { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
 .raw-list-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--mc-text-tertiary); margin-bottom: 4px; }
 .empty-hint { text-align: center; padding: 24px 0; font-size: 14px; color: var(--mc-text-tertiary); }
 
-.raw-item { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: linear-gradient(180deg, var(--mc-bg-elevated), var(--mc-bg-muted)); border: 1px solid var(--mc-border-light); border-radius: 14px; font-size: 13px; transition: border-color 0.15s, transform 0.15s; }
+.raw-item { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: linear-gradient(180deg, var(--mc-bg-elevated), var(--mc-bg-muted)); border: 1px solid var(--mc-border-light); border-radius: 14px; font-size: 13px; transition: border-color 0.15s, transform 0.15s; cursor: pointer; }
 .raw-item:hover { border-color: var(--mc-border); transform: translateY(-1px); }
+.raw-item--active { border-color: var(--mc-primary) !important; background: var(--mc-primary-bg) !important; transform: translateY(-1px); }
+.raw-item--uploading { cursor: default; opacity: 0.85; }
+.raw-item--uploading:hover { transform: none; border-color: var(--mc-border-light); }
 .raw-item-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
 .raw-item-info { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
@@ -392,6 +704,7 @@ async function handleScanDir() {
 .raw-item-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .raw-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .error-hint { font-size: 11px; color: var(--mc-danger); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-count-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 500; color: var(--mc-text-secondary); background: var(--mc-bg-sunken); border-radius: 9999px; padding: 2px 7px; }
 
 /* Two-phase digest progress bar (RFC-012 M2 v2 UI) */
 .raw-progress { display: flex; align-items: center; gap: 10px; padding-top: 2px; }
@@ -414,10 +727,13 @@ async function handleScanDir() {
 .btn-icon { width: 30px; height: 30px; border: 1px solid var(--mc-border-light); background: var(--mc-bg-elevated); cursor: pointer; border-radius: 8px; color: var(--mc-text-secondary); transition: all 0.15s; display: flex; align-items: center; justify-content: center; }
 .btn-icon:hover { background: var(--mc-bg-sunken); color: var(--mc-primary); border-color: var(--mc-border); }
 .btn-icon-danger:hover { background: var(--mc-danger-bg); color: var(--mc-danger); border-color: var(--mc-danger); }
+.btn-icon-resume { color: var(--mc-primary); border-color: var(--mc-primary); background: var(--mc-primary-bg); }
+.btn-icon-resume:hover { background: var(--mc-primary); color: #fff; border-color: var(--mc-primary); }
 
 /* Status badges */
 .status-badge { font-size: 10px; padding: 2px 8px; border-radius: 9999px; text-transform: uppercase; font-weight: 500; letter-spacing: 0.02em; }
 .status-badge.pending { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
+.status-badge.uploading { background: rgba(59, 130, 246, 0.12); color: #3b82f6; }
 .status-badge.processing { background: var(--mc-primary-bg); color: var(--mc-primary); }
 .status-badge.completed { background: rgba(90, 138, 90, 0.15); color: var(--mc-success); }
 .status-badge.partial { background: rgba(217, 119, 87, 0.15); color: var(--mc-primary); }

@@ -5,14 +5,17 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import vip.mate.skill.model.SkillEntity;
+import vip.mate.skill.repository.SkillMapper;
 import vip.mate.skill.runtime.model.ResolvedSkill;
 import vip.mate.skill.workspace.SkillWorkspaceManager;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -38,6 +41,7 @@ public class SkillPackageResolver {
     private final SkillDependencyChecker dependencyChecker;
     private final ObjectMapper objectMapper;
     private final SkillWorkspaceManager workspaceManager;
+    private final SkillMapper skillMapper;
 
     /**
      * 解析技能实体为运行时技能包（完整流程）
@@ -72,7 +76,73 @@ public class SkillPackageResolver {
         // 4. 综合判定 runtimeAvailable
         resolveRuntimeAvailability(resolved);
 
+        // 5. RFC-042 §2.3 — persist the scan outcome so the admin UI can show
+        //    findings after a restart (previously they lived only in memory).
+        persistScanOutcome(entity, resolved);
+
         return resolved;
+    }
+
+    /**
+     * Write back the latest scan status / findings JSON / timestamp when
+     * they differ from what's already on the row. Keeps the DB in sync
+     * without re-writing on every idempotent refresh.
+     *
+     * <p>Diff-based so a fresh resolve loop across N enabled skills is
+     * effectively free when nothing has changed on disk. Errors here are
+     * non-fatal — the scan result is already attached to {@code resolved},
+     * so the UI will still see it for this request.
+     */
+    private void persistScanOutcome(SkillEntity entity, ResolvedSkill resolved) {
+        if (entity == null || entity.getId() == null) return;
+
+        String newStatus = deriveScanStatus(resolved);
+        String newJson = serializeFindings(resolved.getSecurityFindings());
+        boolean statusChanged = !Objects.equals(entity.getSecurityScanStatus(), newStatus);
+        boolean findingsChanged = !Objects.equals(entity.getSecurityScanResult(), newJson);
+
+        if (!statusChanged && !findingsChanged) {
+            return;
+        }
+
+        try {
+            SkillEntity update = new SkillEntity();
+            update.setId(entity.getId());
+            update.setSecurityScanStatus(newStatus);
+            update.setSecurityScanResult(newJson);
+            update.setSecurityScanTime(LocalDateTime.now());
+            skillMapper.updateById(update);
+            // Keep the in-memory entity coherent with the DB so the next
+            // resolve in the same tick doesn't redundantly write again.
+            entity.setSecurityScanStatus(newStatus);
+            entity.setSecurityScanResult(newJson);
+            entity.setSecurityScanTime(update.getSecurityScanTime());
+        } catch (Exception e) {
+            log.warn("Failed to persist scan outcome for skill '{}': {}", entity.getName(), e.getMessage());
+        }
+    }
+
+    /**
+     * Collapse the resolver's rich security state back into the {@code
+     * PASSED / FAILED / null} tri-state used on the row.
+     */
+    private String deriveScanStatus(ResolvedSkill resolved) {
+        if (resolved.isSecurityBlocked()) return "FAILED";
+        List<ResolvedSkill.SecurityFinding> findings = resolved.getSecurityFindings();
+        if (findings != null && !findings.isEmpty()) return "PASSED"; // scanned and found non-blocking issues
+        // No block, no findings — treat as scanned-clean (still PASSED so
+        // listEnabledSkills() doesn't treat it as never-scanned).
+        return "PASSED";
+    }
+
+    private String serializeFindings(List<ResolvedSkill.SecurityFinding> findings) {
+        if (findings == null || findings.isEmpty()) return null;
+        try {
+            return objectMapper.writeValueAsString(findings);
+        } catch (Exception e) {
+            log.debug("Failed to serialize findings: {}", e.getMessage());
+            return null;
+        }
     }
 
     // ==================== 阶段 1：内容解析 ====================

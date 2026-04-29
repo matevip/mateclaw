@@ -20,7 +20,11 @@ public enum FinishReason {
     ERROR_FALLBACK("error_fallback"),
 
     /** 用户主动停止 */
-    STOPPED("stopped");
+    STOPPED("stopped"),
+
+    /** RFC-052: a tool with returnDirect=true short-circuited the loop;
+     *  result was delivered to the user without re-entering the LLM. */
+    RETURN_DIRECT("return_direct");
 
     private final String value;
 

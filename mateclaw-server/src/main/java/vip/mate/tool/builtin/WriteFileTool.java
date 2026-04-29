@@ -33,6 +33,7 @@ public class WriteFileTool {
 
     private final vip.mate.i18n.I18nService i18n;
 
+    @vip.mate.tool.ConcurrencyUnsafe("file write — must serialize with reads/writes on overlapping paths")
     @Tool(description = "Write content to a file. Overwrites if exists, creates if not (auto-creates parent directories). "
             + "Returns structured JSON with filePath, bytesWritten. "
             + "Requires user approval.")

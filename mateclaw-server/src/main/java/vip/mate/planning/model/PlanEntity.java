@@ -49,7 +49,6 @@ public class PlanEntity {
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updateTime;
 
-    @TableLogic
     private Integer deleted;
 
     /** 子计划列表（非数据库字段，查询时填充） */

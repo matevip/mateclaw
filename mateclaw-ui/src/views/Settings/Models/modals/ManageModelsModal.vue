@@ -51,8 +51,12 @@
                 <input type="checkbox" :value="model.id" :checked="selectedNewModelIds.includes(model.id)" @change="$emit('toggleModel', model.id)" />
                 <span class="discover-model-name">{{ model.name }}</span>
                 <span class="discover-model-id">{{ model.id }}</span>
-                <span v-if="model.probeOk === true" class="probe-badge probe-ok" title="Verified reachable">
-                  ✓ verified
+                <span
+                  v-if="model.probeOk === true"
+                  class="probe-badge probe-ok"
+                  :title="t('settings.model.discovery.probeVerifiedTitle')"
+                >
+                  ✓ {{ t('settings.model.discovery.probeVerified') }}
                 </span>
               </label>
             </div>
@@ -70,11 +74,11 @@
                  why they are not offered in the "add selected" list -->
             <div v-if="discoveredUnavailable.length > 0" class="discover-unavailable">
               <div class="discover-unavailable-title">
-                ⚠ {{ discoveredUnavailable.length }} discovered model(s) failed the reachability probe and were not listed above:
+                {{ t('settings.model.discovery.probeFailedBanner', { count: discoveredUnavailable.length }) }}
               </div>
               <div v-for="model in discoveredUnavailable" :key="model.id" class="discover-unavailable-item">
                 <span class="discover-model-id">{{ model.id }}</span>
-                <span class="discover-unavailable-reason">{{ model.probeError || 'not reachable' }}</span>
+                <span class="discover-unavailable-reason">{{ model.probeError || t('settings.model.discovery.probeUnreachable') }}</span>
               </div>
             </div>
           </div>
