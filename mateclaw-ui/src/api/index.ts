@@ -232,6 +232,13 @@ export const channelApi = {
   health: (id: string | number) => http.get(`/channels/${id}/health`),
   /** Batch health for all channels in current workspace. */
   healthAll: () => http.get('/channels/health'),
+  /**
+   * Wizard Step 2 — validate a draft config without persisting.
+   * Returns a VerificationResult: { ok, skipped, durationMs, headline,
+   * identity, invalidField, hint }.
+   */
+  preflight: (channelType: string, configJson: string) =>
+    http.post('/channels/preflight', { channelType, configJson }),
   // 微信 iLink Bot QR 码登录
   weixinQrcode: () => http.get('/channels/webhook/weixin/qrcode'),
   weixinQrcodeStatus: (qrcode: string) =>

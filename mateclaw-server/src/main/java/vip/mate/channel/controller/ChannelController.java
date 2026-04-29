@@ -1,17 +1,24 @@
 package vip.mate.channel.controller;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.channel.ChannelManager;
 import vip.mate.channel.model.ChannelEntity;
 import vip.mate.channel.service.ChannelService;
+import vip.mate.channel.verifier.ChannelVerifierRegistry;
+import vip.mate.channel.verifier.VerificationRequest;
+import vip.mate.channel.verifier.VerificationResult;
 import vip.mate.audit.service.AuditEventService;
 import vip.mate.common.result.R;
 import vip.mate.exception.MateClawException;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -23,6 +30,7 @@ import java.util.Map;
  *
  * @author MateClaw Team
  */
+@Slf4j
 @Tag(name = "渠道管理")
 @RestController
 @RequestMapping("/api/v1/channels")
@@ -32,6 +40,8 @@ public class ChannelController {
     private final ChannelService channelService;
     private final ChannelManager channelManager;
     private final AuditEventService auditEventService;
+    private final ChannelVerifierRegistry verifierRegistry;
+    private final ObjectMapper objectMapper;
 
     @RequireWorkspaceRole("viewer")
     @Operation(summary = "获取渠道列表")
@@ -178,6 +188,34 @@ public class ChannelController {
                 })
                 .toList());
     }
+
+    @RequireWorkspaceRole("admin")
+    @Operation(summary = "Pre-flight: validate draft channel config without persisting")
+    @PostMapping("/preflight")
+    public R<VerificationResult> preflight(
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+            @RequestBody PreflightRequest body) {
+        long ws = workspaceId != null ? workspaceId : 1L;
+        Map<String, Object> config = parseConfigJson(body.configJson());
+        return verifierRegistry.find(body.channelType())
+                .map(v -> R.ok(v.verify(new VerificationRequest(body.channelType(), config, ws))))
+                .orElseGet(() -> R.ok(VerificationResult.skipped(
+                        "No verifier registered for channel type '" + body.channelType()
+                                + "' — skipping live check.")));
+    }
+
+    private Map<String, Object> parseConfigJson(String json) {
+        if (json == null || json.isBlank()) return Collections.emptyMap();
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {});
+        } catch (Exception e) {
+            log.debug("preflight: invalid configJson, treating as empty: {}", e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
+
+    /** Wizard Step 2 payload — channel type + draft configJson, no entity yet. */
+    public record PreflightRequest(String channelType, String configJson) {}
 
     private void verifyResourceWorkspace(Long resourceWorkspaceId, Long headerWorkspaceId) {
         long requestedWs = headerWorkspaceId != null ? headerWorkspaceId : 1L;

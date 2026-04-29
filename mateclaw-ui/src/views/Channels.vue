@@ -85,7 +85,11 @@
     </div>
 
     <!-- Edit modal: async-loaded the first time it's opened, so the route
-         chunk doesn't carry the modal's ~30KB form/auth UI on initial load. -->
+         chunk doesn't carry the modal's ~30KB form/auth UI on initial load.
+         Used for editing existing channels and for OAuth-style channel types
+         (weixin/wecom/dingtalk/feishu) whose existing scan flows are the
+         verification — those continue to live in the legacy modal until
+         migrated per RFC-084. -->
     <ChannelEditModal
       v-if="showModal"
       v-model="showModal"
@@ -95,6 +99,22 @@
       :default-name="modalDefaults.name"
       @save="handleSave"
       @add-new-weixin="handleAddNewWeixin"
+    />
+
+    <!-- RFC-084 onboarding wizard: paste-token channel types use the new
+         3-step Configure → Verify → Ready flow. Type picker decides which
+         is shown when the user starts a new channel. -->
+    <ChannelTypePicker
+      v-if="showTypePicker"
+      v-model="showTypePicker"
+      @pick="onTypePicked"
+    />
+    <ChannelOnboardingWizard
+      v-if="showWizard && wizardType"
+      v-model="showWizard"
+      :channel-type="wizardType"
+      :agents="agents"
+      @created="onWizardCreated"
     />
   </div>
 </template>
@@ -109,6 +129,8 @@ import type { Channel, Agent } from '@/types'
 // Async-loaded modal: separate chunk, only fetched when the user first clicks
 // "create" or "edit". The /channels initial load is a list page only.
 const ChannelEditModal = defineAsyncComponent(() => import('@/components/channels/ChannelEditModal.vue'))
+const ChannelTypePicker = defineAsyncComponent(() => import('@/components/channels/ChannelTypePicker.vue'))
+const ChannelOnboardingWizard = defineAsyncComponent(() => import('@/components/channels/ChannelOnboardingWizard.vue'))
 
 const { t } = useI18n()
 
@@ -117,6 +139,25 @@ const agents = ref<Agent[]>([])
 const showModal = ref(false)
 const editingChannel = ref<Channel | null>(null)
 const modalDefaults = ref<{ type?: string; name?: string }>({})
+
+// RFC-084 onboarding wizard state. The picker is the entry for "+ New
+// Channel"; based on the picked type, we either open the new wizard
+// (paste-token types) or fall back to the legacy modal (OAuth/QR types
+// whose existing flows already cover Configure + Verify in one step).
+const showTypePicker = ref(false)
+const showWizard = ref(false)
+const wizardType = ref<string>('')
+
+// Channel types that the new 3-step wizard handles end-to-end. All four
+// OAuth-style flows (wecom popup-SDK, weixin/dingtalk/feishu QR scans) now
+// run inside the wizard — see OAUTH_STYLE_TYPES in
+// ChannelOnboardingWizard.vue. The legacy modal stays only for editing
+// existing channels (where 3-step would feel like ceremony).
+const WIZARD_TYPES = new Set([
+  'telegram', 'discord', 'slack', 'qq',
+  'web', 'webchat', 'webhook',
+  'wecom', 'weixin', 'dingtalk', 'feishu',
+])
 
 const channelStatusMap = ref<Record<string | number, {
   connectionState: string
@@ -280,9 +321,28 @@ function getConnectionTooltip(channel: Channel): string {
 // ==================== Modal control ====================
 
 function openCreateModal() {
+  // RFC-084: New channel always starts with the type picker so the wizard
+  // can specialize Step 1 to the picked service. Editing an existing
+  // channel still goes straight to the legacy modal via openEditModal.
   editingChannel.value = null
   modalDefaults.value = {}
-  showModal.value = true
+  showTypePicker.value = true
+}
+
+function onTypePicked(type: string) {
+  if (WIZARD_TYPES.has(type)) {
+    wizardType.value = type
+    showWizard.value = true
+  } else {
+    // Fall back to legacy modal for OAuth/QR types until they're migrated.
+    modalDefaults.value = { type }
+    showModal.value = true
+  }
+}
+
+async function onWizardCreated(_channel: Channel) {
+  await loadChannels()
+  await loadStatus()
 }
 
 function openEditModal(channel: Channel) {
