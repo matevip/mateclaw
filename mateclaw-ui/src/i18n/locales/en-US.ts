@@ -1985,6 +1985,13 @@ export default {
       header: 'Overview',
       empty: 'No memory content yet',
       userEdited: 'User edited',
+      files: {
+        memory: 'Memory',
+        profile: 'Profile',
+        soul: 'Soul',
+        userFacts: 'User facts',
+        references: 'References',
+      },
     },
     time: {
       justNow: 'just now',

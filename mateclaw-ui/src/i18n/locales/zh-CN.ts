@@ -1995,6 +1995,13 @@ export default {
       header: '概述',
       empty: '暂无记忆内容',
       userEdited: '用户编辑',
+      files: {
+        memory: '记忆',
+        profile: '档案',
+        soul: '灵魂',
+        userFacts: '用户事实',
+        references: '参考资料',
+      },
     },
     time: {
       justNow: '刚刚',

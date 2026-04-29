@@ -4,10 +4,10 @@
     <div class="file-nav">
       <button v-for="f in files" :key="f.filename"
         class="file-nav-btn" :class="{ active: currentFile === f.filename }"
+        :title="f.filename"
         @click="loadFile(f.filename)">
         <span class="file-nav-icon">{{ fileIcon(f.filename) }}</span>
-        <span class="file-nav-name">{{ f.filename }}</span>
-        <span class="file-nav-size">{{ formatSize(f.fileSize) }}</span>
+        <span class="file-nav-name">{{ fileLabel(f.filename) }}</span>
       </button>
     </div>
 
@@ -64,7 +64,7 @@
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
-import { http } from '@/api'
+import { http, agentContextApi } from '@/api'
 
 const props = defineProps<{ agentId: number }>()
 const { t } = useI18n()
@@ -84,14 +84,15 @@ watch(() => props.agentId, () => { loadFileList() }, { immediate: true })
 
 async function loadFileList() {
   try {
-    const res = await http.get(`/agents/${props.agentId}/workspace/files`)
+    const res: any = await agentContextApi.listFiles(props.agentId)
     const allFiles: FileInfo[] = res.data || []
-    // Show memory-relevant files: MEMORY.md, PROFILE.md, SOUL.md, structured/*.md
-    files.value = allFiles.filter((f: FileInfo) =>
+    // Memory-relevant files only: MEMORY.md, PROFILE.md, SOUL.md, structured/*.md
+    const filtered = allFiles.filter((f: FileInfo) =>
       ['MEMORY.md', 'PROFILE.md', 'SOUL.md'].includes(f.filename) ||
       f.filename.startsWith('structured/')
     )
-    // Auto-load MEMORY.md
+    // Order by importance: brain → persona → extracted facts (alpha within group)
+    files.value = filtered.sort((a, b) => fileRank(a.filename) - fileRank(b.filename) || a.filename.localeCompare(b.filename))
     if (files.value.some(f => f.filename === 'MEMORY.md')) {
       loadFile('MEMORY.md')
     } else if (files.value.length > 0) {
@@ -105,7 +106,7 @@ async function loadFile(filename: string) {
   loading.value = true
   editingIdx.value = -1
   try {
-    const res = await http.get(`/agents/${props.agentId}/workspace/files/${encodeURIComponent(filename)}`)
+    const res: any = await agentContextApi.getFile(props.agentId, filename)
     const content: string = res.data?.content || ''
     sections.value = parseSections(content)
   } catch { sections.value = [] }
@@ -174,33 +175,59 @@ function fileIcon(filename: string): string {
   if (filename === 'MEMORY.md') return '🧠'
   if (filename === 'PROFILE.md') return '👤'
   if (filename === 'SOUL.md') return '💫'
+  if (filename === 'structured/user.md') return '📋'
+  if (filename === 'structured/reference.md') return '🔗'
   if (filename.startsWith('structured/')) return '📋'
   return '📄'
 }
 
-function formatSize(bytes: number): string {
-  if (!bytes) return '0B'
-  if (bytes < 1024) return bytes + 'B'
-  return (bytes / 1024).toFixed(1) + 'KB'
+// Rank for display order: 0 = primary brain, 1 = persona, 2 = extracted facts.
+function fileRank(filename: string): number {
+  if (filename === 'MEMORY.md') return 0
+  if (filename === 'PROFILE.md' || filename === 'SOUL.md') return 1
+  return 2
+}
+
+// Friendly label — hides directory paths and the .md extension from the user.
+function fileLabel(filename: string): string {
+  const key = ({
+    'MEMORY.md': 'memory',
+    'PROFILE.md': 'profile',
+    'SOUL.md': 'soul',
+    'structured/user.md': 'userFacts',
+    'structured/reference.md': 'references',
+  } as Record<string, string>)[filename]
+  if (key) {
+    const i18nKey = `memory.memoryBrowser.files.${key}`
+    const translated = t(i18nKey)
+    if (translated !== i18nKey) return translated
+  }
+  // Fallback: strip path prefix and .md extension.
+  const base = filename.includes('/') ? filename.slice(filename.lastIndexOf('/') + 1) : filename
+  return base.replace(/\.md$/i, '')
 }
 </script>
 
 <style scoped>
-/* File nav */
+/* File nav — segmented pills, no file-system noise */
 .file-nav {
-  display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px;
+  display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px;
 }
 .file-nav-btn {
-  display: flex; align-items: center; gap: 4px;
-  padding: 5px 10px; border: 1px solid var(--mc-border); border-radius: 8px;
-  background: transparent; font-size: 12px; color: var(--mc-text-secondary);
-  cursor: pointer; transition: all 0.12s;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border: 1px solid transparent; border-radius: 999px;
+  background: var(--mc-bg-sunken); font-size: 12.5px; font-weight: 500;
+  color: var(--mc-text-secondary); cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.file-nav-btn:hover { border-color: var(--mc-primary); color: var(--mc-text-primary); }
-.file-nav-btn.active { background: var(--mc-primary-bg); border-color: var(--mc-primary); color: var(--mc-text-primary); }
-.file-nav-icon { font-size: 14px; }
-.file-nav-name { font-weight: 500; }
-.file-nav-size { color: var(--mc-text-tertiary); font-size: 10px; }
+.file-nav-btn:hover { color: var(--mc-text-primary); background: var(--mc-bg-elevated); }
+.file-nav-btn.active {
+  background: var(--mc-primary-bg);
+  border-color: var(--mc-primary);
+  color: var(--mc-text-primary);
+}
+.file-nav-icon { font-size: 14px; line-height: 1; }
+.file-nav-name { letter-spacing: 0.1px; }
 
 /* Section cards */
 .section-list { display: flex; flex-direction: column; gap: 10px; }
