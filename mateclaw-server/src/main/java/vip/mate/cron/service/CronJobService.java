@@ -93,6 +93,10 @@ public class CronJobService implements ApplicationRunner {
         scheduler.setThreadNamePrefix("cron-job-");
         scheduler.initialize();
 
+        // RFC-083: scheduler is process-global by design — load every enabled
+        // job across all workspaces. Do NOT filter by workspace_id here,
+        // otherwise jobs in workspace B stop firing whenever the active UI
+        // workspace is A. Workspace isolation lives in the CRUD paths only.
         List<CronJobEntity> enabledJobs = cronJobMapper.selectList(
                 new LambdaQueryWrapper<CronJobEntity>()
                         .eq(CronJobEntity::getEnabled, true));
@@ -114,11 +118,12 @@ public class CronJobService implements ApplicationRunner {
 
     // ==================== CRUD ====================
 
-    public List<CronJobDTO> list() {
+    public List<CronJobDTO> list(Long workspaceId) {
         // RFC-063r §2.14: use the variant that aggregates the most-recent
         // delivery_status from mate_cron_job_run so the list page can
         // render the "最近投递" badge without a per-row N+1 query.
-        List<CronJobEntity> entities = cronJobMapper.selectListWithDeliveryStatus();
+        // RFC-083: scoped to the caller's workspace.
+        List<CronJobEntity> entities = cronJobMapper.selectListWithDeliveryStatus(workspaceId);
 
         // 批量加载 Agent 名称
         List<Long> agentIds = entities.stream()
@@ -152,10 +157,13 @@ public class CronJobService implements ApplicationRunner {
                 .collect(Collectors.toList());
     }
 
-    public CronJobDTO getById(Long id) {
+    public CronJobDTO getById(Long id, Long workspaceId) {
         // RFC-063r §2.14: detail page shows lastDeliveryStatus too — same
         // subquery shape, restricted to one id.
-        CronJobEntity entity = cronJobMapper.selectByIdWithDeliveryStatus(id);
+        // RFC-083: scoped to the caller's workspace; cross-workspace ID access
+        // surfaces as not_found (same shape as deleted) so workspace existence
+        // is not enumerable.
+        CronJobEntity entity = cronJobMapper.selectByIdWithDeliveryStatus(id, workspaceId);
         if (entity == null) {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
@@ -168,12 +176,15 @@ public class CronJobService implements ApplicationRunner {
         return dto;
     }
 
-    public CronJobDTO create(CronJobDTO dto) {
+    public CronJobDTO create(CronJobDTO dto, Long workspaceId) {
         validateDto(dto);
         // toSpringCron 校验表达式合法性，结果复用于后续 calcNextRunTime 和 register
         String springCron = toSpringCron(dto.getCronExpression());
 
         CronJobEntity entity = dto.toEntity();
+        // RFC-083: workspace stamped server-side from X-Workspace-Id; never
+        // trust a client-supplied value (DTO.toEntity intentionally drops it).
+        entity.setWorkspaceId(workspaceId);
         if (entity.getTimezone() == null) entity.setTimezone("Asia/Shanghai");
         if (entity.getTaskType() == null) entity.setTaskType("text");
         if (entity.getEnabled() == null) entity.setEnabled(true);
@@ -186,11 +197,13 @@ public class CronJobService implements ApplicationRunner {
             register(entity);
         }
 
-        return getById(entity.getId());
+        return getById(entity.getId(), workspaceId);
     }
 
-    public CronJobDTO update(Long id, CronJobDTO dto) {
-        CronJobEntity existing = cronJobMapper.selectById(id);
+    public CronJobDTO update(Long id, CronJobDTO dto, Long workspaceId) {
+        // RFC-083: scoped lookup — cross-workspace updates 404 the same as
+        // deleted rows.
+        CronJobEntity existing = cronJobMapper.selectByIdAndWorkspace(id, workspaceId);
         if (existing == null) {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
@@ -222,11 +235,11 @@ public class CronJobService implements ApplicationRunner {
             schedulerLock.unlock();
         }
 
-        return getById(id);
+        return getById(id, workspaceId);
     }
 
-    public void delete(Long id) {
-        CronJobEntity entity = cronJobMapper.selectById(id);
+    public void delete(Long id, Long workspaceId) {
+        CronJobEntity entity = cronJobMapper.selectByIdAndWorkspace(id, workspaceId);
         if (entity == null) {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
@@ -239,8 +252,8 @@ public class CronJobService implements ApplicationRunner {
         cronJobMapper.deleteById(id);
     }
 
-    public void toggle(Long id, Boolean enabled) {
-        CronJobEntity entity = cronJobMapper.selectById(id);
+    public void toggle(Long id, Boolean enabled, Long workspaceId) {
+        CronJobEntity entity = cronJobMapper.selectByIdAndWorkspace(id, workspaceId);
         if (entity == null) {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
@@ -267,8 +280,8 @@ public class CronJobService implements ApplicationRunner {
         }
     }
 
-    public void runNow(Long id) {
-        CronJobEntity entity = cronJobMapper.selectById(id);
+    public void runNow(Long id, Long workspaceId) {
+        CronJobEntity entity = cronJobMapper.selectByIdAndWorkspace(id, workspaceId);
         if (entity == null) {
             throw new MateClawException("err.cron.not_found", "定时任务不存在: " + id);
         }
@@ -309,7 +322,8 @@ public class CronJobService implements ApplicationRunner {
                         }
                     }), trigger);
             scheduledTasks.put(job.getId(), future);
-            log.info("[CronJob] Registered job {} ({}), cron={}, tz={}", job.getId(), job.getName(),
+            log.info("[CronJob] Registered job {} ({}) ws={}, cron={}, tz={}",
+                    job.getId(), job.getName(), job.getWorkspaceId(),
                     job.getCronExpression(), job.getTimezone());
         } finally {
             schedulerLock.unlock();

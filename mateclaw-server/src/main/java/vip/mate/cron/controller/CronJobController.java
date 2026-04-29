@@ -24,55 +24,75 @@ public class CronJobController {
 
     private final CronJobService cronJobService;
 
+    /**
+     * RFC-083: every endpoint reads {@code X-Workspace-Id} (the frontend
+     * axios interceptor already injects it). Service-layer filtering is
+     * required because {@link vip.mate.config.WorkspaceAccessInterceptor}
+     * skips its membership check entirely for global {@code admin} users —
+     * relying on the interceptor alone leaks cron jobs across workspaces.
+     */
+    private static final long DEFAULT_WORKSPACE_ID = 1L;
+
     @Operation(summary = "获取定时任务列表")
     @GetMapping
     @RequireWorkspaceRole("viewer")
-    public R<List<CronJobDTO>> list() {
-        return R.ok(cronJobService.list());
+    public R<List<CronJobDTO>> list(
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        return R.ok(cronJobService.list(resolve(workspaceId)));
     }
 
     @Operation(summary = "获取定时任务详情")
     @GetMapping("/{id}")
     @RequireWorkspaceRole("viewer")
-    public R<CronJobDTO> get(@PathVariable Long id) {
-        return R.ok(cronJobService.getById(id));
+    public R<CronJobDTO> get(@PathVariable Long id,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        return R.ok(cronJobService.getById(id, resolve(workspaceId)));
     }
 
     @Operation(summary = "创建定时任务")
     @PostMapping
     @RequireWorkspaceRole("member")
-    public R<CronJobDTO> create(@RequestBody CronJobDTO dto) {
-        return R.ok(cronJobService.create(dto));
+    public R<CronJobDTO> create(@RequestBody CronJobDTO dto,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        return R.ok(cronJobService.create(dto, resolve(workspaceId)));
     }
 
     @Operation(summary = "更新定时任务")
     @PutMapping("/{id}")
     @RequireWorkspaceRole("member")
-    public R<CronJobDTO> update(@PathVariable Long id, @RequestBody CronJobDTO dto) {
-        return R.ok(cronJobService.update(id, dto));
+    public R<CronJobDTO> update(@PathVariable Long id, @RequestBody CronJobDTO dto,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        return R.ok(cronJobService.update(id, dto, resolve(workspaceId)));
     }
 
     @Operation(summary = "删除定时任务")
     @DeleteMapping("/{id}")
     @RequireWorkspaceRole("admin")
-    public R<Void> delete(@PathVariable Long id) {
-        cronJobService.delete(id);
+    public R<Void> delete(@PathVariable Long id,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        cronJobService.delete(id, resolve(workspaceId));
         return R.ok();
     }
 
     @Operation(summary = "启用/禁用定时任务")
     @PutMapping("/{id}/toggle")
     @RequireWorkspaceRole("member")
-    public R<Void> toggle(@PathVariable Long id, @RequestParam boolean enabled) {
-        cronJobService.toggle(id, enabled);
+    public R<Void> toggle(@PathVariable Long id, @RequestParam boolean enabled,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        cronJobService.toggle(id, enabled, resolve(workspaceId));
         return R.ok();
     }
 
     @Operation(summary = "立即执行定时任务")
     @PostMapping("/{id}/run")
     @RequireWorkspaceRole("member")
-    public R<Void> runNow(@PathVariable Long id) {
-        cronJobService.runNow(id);
+    public R<Void> runNow(@PathVariable Long id,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        cronJobService.runNow(id, resolve(workspaceId));
         return R.ok();
+    }
+
+    private static long resolve(Long headerWorkspaceId) {
+        return headerWorkspaceId != null ? headerWorkspaceId : DEFAULT_WORKSPACE_ID;
     }
 }

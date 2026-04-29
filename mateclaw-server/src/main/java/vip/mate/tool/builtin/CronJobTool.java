@@ -81,7 +81,11 @@ public class CronJobTool {
             // reflection until PR-2 adds them to CronJobDTO + CronJobEntity.
             propagateChannelBinding(dto, origin);
 
-            CronJobDTO created = cronJobService.create(dto);
+            // RFC-083: stamp workspace from the originating ChatOrigin so the
+            // cron job is created in the agent's current workspace; fall back
+            // to the default workspace when origin is unscoped (legacy paths).
+            Long workspaceId = origin.workspaceId() != null ? origin.workspaceId() : 1L;
+            CronJobDTO created = cronJobService.create(dto, workspaceId);
 
             JSONObject result = new JSONObject();
             result.set("success", true);
@@ -101,9 +105,12 @@ public class CronJobTool {
 
     @Tool(description = "List all scheduled tasks (cron jobs) for the current agent. "
             + "Returns task name, cron expression, next run time, enabled status, and last run time.")
-    public String list_cron_jobs() {
+    public String list_cron_jobs(@Nullable ToolContext ctx) {
         try {
-            List<CronJobDTO> jobs = cronJobService.list();
+            // RFC-083: scope to the originating workspace so an agent only
+            // sees the cron jobs of the workspace it's running in.
+            Long workspaceId = workspaceFromContext(ctx);
+            List<CronJobDTO> jobs = cronJobService.list(workspaceId);
             JSONArray arr = new JSONArray();
             for (CronJobDTO job : jobs) {
                 JSONObject obj = new JSONObject();
@@ -132,10 +139,13 @@ public class CronJobTool {
             + "Use list_cron_jobs first to find the job ID.")
     public String toggle_cron_job(
             @ToolParam(description = "Job ID (number)") Long jobId,
-            @ToolParam(description = "true to enable, false to disable") Boolean enabled) {
+            @ToolParam(description = "true to enable, false to disable") Boolean enabled,
+            @Nullable ToolContext ctx) {
         try {
-            cronJobService.toggle(jobId, enabled);
-            CronJobDTO updated = cronJobService.getById(jobId);
+            // RFC-083: scope toggle to the originating workspace.
+            Long workspaceId = workspaceFromContext(ctx);
+            cronJobService.toggle(jobId, enabled, workspaceId);
+            CronJobDTO updated = cronJobService.getById(jobId, workspaceId);
             JSONObject result = new JSONObject();
             result.set("success", true);
             result.set("jobId", jobId);
@@ -153,11 +163,14 @@ public class CronJobTool {
     @Tool(description = "Delete a scheduled task by its job ID. This action requires user approval. "
             + "Use list_cron_jobs first to find the job ID.")
     public String delete_cron_job(
-            @ToolParam(description = "Job ID (number) to delete") Long jobId) {
+            @ToolParam(description = "Job ID (number) to delete") Long jobId,
+            @Nullable ToolContext ctx) {
         try {
-            CronJobDTO job = cronJobService.getById(jobId);
+            // RFC-083: scope delete to the originating workspace.
+            Long workspaceId = workspaceFromContext(ctx);
+            CronJobDTO job = cronJobService.getById(jobId, workspaceId);
             String jobName = job.getName();
-            cronJobService.delete(jobId);
+            cronJobService.delete(jobId, workspaceId);
             JSONObject result = new JSONObject();
             result.set("success", true);
             result.set("deleted", jobName);
@@ -173,6 +186,17 @@ public class CronJobTool {
         result.set("success", false);
         result.set("error", message);
         return JSONUtil.toJsonPrettyStr(result);
+    }
+
+    /**
+     * RFC-083: resolve the workspace ID from the originating ChatOrigin so
+     * cron-tool reads/writes are scoped to the agent's current workspace.
+     * Falls back to the default workspace (1) when origin is unscoped — same
+     * behaviour as the controller-layer {@code resolve()} helper.
+     */
+    private Long workspaceFromContext(@Nullable ToolContext ctx) {
+        ChatOrigin origin = ChatOrigin.from(ctx);
+        return origin != null && origin.workspaceId() != null ? origin.workspaceId() : 1L;
     }
 
     /**

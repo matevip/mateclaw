@@ -18,6 +18,9 @@ public class CronJobEntity {
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;
 
+    /** Workspace ID this cron job belongs to (RFC-083 / V62; existing rows default to 1). */
+    private Long workspaceId;
+
     /** 任务名称 */
     private String name;
 

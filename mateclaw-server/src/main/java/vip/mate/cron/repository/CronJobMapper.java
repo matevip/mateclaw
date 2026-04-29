@@ -17,13 +17,16 @@ import java.util.List;
 public interface CronJobMapper extends BaseMapper<CronJobEntity> {
 
     /**
-     * RFC-063r §2.14: list cron jobs together with their most-recent
-     * delivery status / error (subquery against {@code mate_cron_job_run}).
+     * RFC-063r §2.14 + RFC-083: list cron jobs in the given workspace together
+     * with their most-recent delivery status / error (subquery against
+     * {@code mate_cron_job_run}).
      *
      * <p>Both H2 and MySQL accept {@code LIMIT 1} inside a correlated
      * subquery, so the same SQL is portable across the two profiles. Index
      * coverage: {@code mate_cron_job_run(cron_job_id, started_at)} (created
-     * by V1 baseline migration) makes the subquery cheap.
+     * by V1 baseline migration) makes the subquery cheap; V62 adds
+     * {@code idx_cron_job_workspace(workspace_id, deleted)} for the outer
+     * filter.
      *
      * <p>Filters out logically-deleted rows and orders by create_time DESC
      * to mirror the existing {@code list()} ordering.
@@ -37,14 +40,16 @@ public interface CronJobMapper extends BaseMapper<CronJobEntity> {
                     WHERE r.cron_job_id = j.id
                     ORDER BY r.started_at DESC LIMIT 1) AS last_delivery_error
             FROM mate_cron_job j
-            WHERE j.deleted = 0
+            WHERE j.deleted = 0 AND j.workspace_id = #{workspaceId}
             ORDER BY j.create_time DESC
             """)
-    List<CronJobEntity> selectListWithDeliveryStatus();
+    List<CronJobEntity> selectListWithDeliveryStatus(@Param("workspaceId") Long workspaceId);
 
     /**
-     * RFC-063r §2.14: per-job variant for the detail page. Same subquery
-     * pattern, restricted to a single id.
+     * RFC-063r §2.14 + RFC-083: per-job variant for the detail page. Same
+     * subquery pattern, restricted to a single id within the given workspace
+     * (cross-workspace access returns null → caller throws not_found, matching
+     * the "deleted" shape so workspace existence isn't enumerable).
      */
     @Select("""
             SELECT j.*,
@@ -55,7 +60,17 @@ public interface CronJobMapper extends BaseMapper<CronJobEntity> {
                     WHERE r.cron_job_id = j.id
                     ORDER BY r.started_at DESC LIMIT 1) AS last_delivery_error
             FROM mate_cron_job j
-            WHERE j.id = #{id} AND j.deleted = 0
+            WHERE j.id = #{id} AND j.deleted = 0 AND j.workspace_id = #{workspaceId}
             """)
-    CronJobEntity selectByIdWithDeliveryStatus(@Param("id") Long id);
+    CronJobEntity selectByIdWithDeliveryStatus(@Param("id") Long id,
+                                               @Param("workspaceId") Long workspaceId);
+
+    /**
+     * RFC-083: workspace-scoped lookup for write paths (update / delete /
+     * toggle / runNow). Skips the delivery-status subquery — those paths
+     * don't need it and pay for the correlated lookup otherwise.
+     */
+    @Select("SELECT * FROM mate_cron_job WHERE id = #{id} AND deleted = 0 AND workspace_id = #{workspaceId}")
+    CronJobEntity selectByIdAndWorkspace(@Param("id") Long id,
+                                         @Param("workspaceId") Long workspaceId);
 }

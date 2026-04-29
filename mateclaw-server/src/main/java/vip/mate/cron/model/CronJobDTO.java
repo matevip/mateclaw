@@ -13,6 +13,8 @@ import java.time.LocalDateTime;
 public class CronJobDTO {
 
     private Long id;
+    /** Out-only: workspace ID stamped by the server from X-Workspace-Id (RFC-083). */
+    private Long workspaceId;
     private String name;
     private String cronExpression;
     private String timezone;
@@ -54,6 +56,7 @@ public class CronJobDTO {
     public static CronJobDTO from(CronJobEntity entity) {
         CronJobDTO dto = new CronJobDTO();
         dto.setId(entity.getId());
+        dto.setWorkspaceId(entity.getWorkspaceId());
         dto.setName(entity.getName());
         dto.setCronExpression(entity.getCronExpression());
         dto.setTimezone(entity.getTimezone());
