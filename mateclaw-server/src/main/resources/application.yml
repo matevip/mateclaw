@@ -109,6 +109,8 @@ mateclaw:
     hub:
       base-url: https://clawhub.ai
       search-path: /api/v1/search
+      skills-path: /api/v1/skills
+      download-path: /api/v1/download
       http-timeout: 15
       http-retries: 3
   plugin:
