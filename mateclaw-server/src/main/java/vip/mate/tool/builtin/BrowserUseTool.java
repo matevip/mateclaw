@@ -83,8 +83,12 @@ public class BrowserUseTool {
         Default is headless. Use headed=true with action=start for a visible window.
         Typical flow: start → open(url) → snapshot → click/type → stop.
         If start fails, run action=diagnose for a full report of what's missing and how to fix it.
-        When web_search is unavailable (no Serper/Tavily API key), use this tool to fetch content directly:
-        e.g. action=open url=https://news.google.com/search?q=... then action=snapshot to read the page.
+
+        SCOPE — use this tool ONLY for tasks that require driving a real browser:
+        clicking, typing into forms, taking screenshots, executing JS in page context, or
+        interacting with sites that need a logged-in session. For plain web search or
+        retrieving public page content, prefer the `search` tool — do not call `browser_use`
+        as a search alternative.
 
         Supported actions:
         - start: Launch a new browser (tries system Chrome, system Edge, then Playwright bundled). Optional headed=true.
@@ -154,6 +158,12 @@ public class BrowserUseTool {
     /**
      * 获取或创建共享 Playwright 实例（双重检查锁定）。
      * 首次调用约 1-2s（启动 Node.js），后续调用 ~0ms。
+     *
+     * <p>Issue #40: Playwright.create() spawns a Node.js driver subprocess by extracting
+     * a bundled binary to a temp directory. On Windows this can fail when the user profile
+     * path contains non-ASCII characters or when antivirus quarantines the extracted exe.
+     * We wrap the failure with a message that points the LLM/user at action=diagnose so
+     * they don't get a bare stack trace.
      */
     private Playwright getOrCreatePlaywright() {
         Playwright pw = sharedPlaywright;
@@ -167,7 +177,17 @@ public class BrowserUseTool {
             }
             log.info("[BrowserUse] Creating shared Playwright instance...");
             long start = System.currentTimeMillis();
-            pw = Playwright.create();
+            try {
+                pw = Playwright.create();
+            } catch (Throwable t) {
+                String os = System.getProperty("os.name", "?");
+                log.error("[BrowserUse] Playwright.create() failed on {}: {}", os, t.getMessage(), t);
+                throw new PlaywrightException(
+                        "Failed to start Playwright driver on " + os + ": " + t.getMessage()
+                                + ". Common causes on Windows: (a) user profile path contains non-ASCII chars,"
+                                + " (b) antivirus blocked the extracted driver exe, (c) %TEMP% is on a read-only volume."
+                                + " Run action=diagnose for a full report.", t);
+            }
             sharedPlaywright = pw;
             log.info("[BrowserUse] Playwright instance created in {}ms", System.currentTimeMillis() - start);
             return pw;

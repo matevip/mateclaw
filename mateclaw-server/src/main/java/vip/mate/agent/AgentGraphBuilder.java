@@ -926,21 +926,26 @@ public class AgentGraphBuilder {
                 If you try to read a PDF/Office file with read_file, you will get binary garbage or an error.
                 """.formatted(entity.getId());
 
-        String searchGuidance = "";
-        if (builtinSearchEnabled) {
-            searchGuidance = """
+        // Web-search vs browser_use priority guidance — emitted unconditionally so the rule
+        // also reaches OpenAI-compatible / Anthropic / Gemini / DeepSeek / Ollama agents that
+        // do not have builtin search. Issue #40: without this rule the model treats
+        // browser_use as a search tool and gets stuck in a Playwright launch loop on Windows.
+        String searchGuidance = """
 
                 ## Web Search Capability
 
-                You have **dual search capability**:
-                1. **Built-in search** (preferred): Your responses automatically incorporate live web search results from the model provider. For most queries, answer directly — your response already includes real-time search data.
-                2. **search tool** (supplementary): Available as a fallback. Supports advanced parameters: `freshness` (day/week/month/year), `language` (zh-CN/en), `count` (1-10).
-
-                ### Priority Rules
-                - **Default**: Answer directly using built-in search. Do NOT say you cannot search — your replies already include live results.
-                - **Use search tool** ONLY when: you need precise time filtering (e.g., user asks for "yesterday's news" → call search with freshness=day), specific language results, or your built-in results feel insufficient.
-                - **NEVER** call both browser_use and search tool for the same query.
+                ### Tool Priority
+                - For plain web search or fetching public page content, call the `search` tool. It supports advanced parameters: `freshness` (day/week/month/year), `language` (zh-CN/en), `count` (1-10).
+                - Call `browser_use` ONLY when you need to interact with a page (click, fill forms, screenshot, run JS, follow a logged-in flow). Do NOT use `browser_use` as a search alternative.
+                - **NEVER** call both `browser_use` and `search` for the same query.
                 - When searching for news, use the standard format: `📰 [Category] Title — Source | Time + Summary`, up to 5 results per category.
+                """;
+        if (builtinSearchEnabled) {
+            searchGuidance += """
+
+                ### Built-in Search (preferred when available)
+                Your responses automatically incorporate live web search results from the model provider. For most queries, answer directly — your reply already includes real-time search data. Do NOT say you cannot search.
+                Use the `search` tool ONLY when you need precise time filtering (e.g., "yesterday's news" → freshness=day), a specific language, or when built-in results feel insufficient.
                 """;
         }
 

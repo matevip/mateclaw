@@ -206,9 +206,25 @@ public class BrowserLauncher {
             return null;
         }
 
+        // Issue #40 — On Windows (and macOS) Chrome refuses to spawn a second instance against
+        // the default user-data-dir if the user already has Chrome open: the new chrome.exe just
+        // forwards its argv to the running instance and exits, so stderr never prints
+        // "DevTools listening on ...". An isolated profile dir avoids that conflict and is also
+        // what the openfang launcher does.
+        Path userDataDir;
+        try {
+            userDataDir = Files.createTempDirectory("mateclaw-cdp-profile-");
+        } catch (Exception e) {
+            trace.add(Attempt.fail(Strategy.EXTERNAL_CDP, browserBin.toString(),
+                    System.currentTimeMillis() - t0,
+                    "failed to create isolated user-data-dir: " + e.getMessage()));
+            return null;
+        }
+
         List<String> command = new ArrayList<>();
         command.add(browserBin.toString());
         command.add("--remote-debugging-port=0");
+        command.add("--user-data-dir=" + userDataDir.toAbsolutePath());
         command.add("--no-first-run");
         command.add("--no-default-browser-check");
         command.add("--disable-extensions");
@@ -241,6 +257,7 @@ public class BrowserLauncher {
         try {
             proc = pb.start();
         } catch (Exception e) {
+            deleteQuietly(userDataDir);
             trace.add(Attempt.fail(Strategy.EXTERNAL_CDP, browserBin + " --remote-debugging-port",
                     System.currentTimeMillis() - t0, "spawn failed: " + e.getMessage()));
             return null;
@@ -251,6 +268,7 @@ public class BrowserLauncher {
             wsUrl = readDevToolsUrl(proc, props.getCdpTimeoutSeconds());
         } catch (Exception e) {
             proc.destroyForcibly();
+            deleteQuietly(userDataDir);
             trace.add(Attempt.fail(Strategy.EXTERNAL_CDP, browserBin.toString(),
                     System.currentTimeMillis() - t0, e.getMessage()));
             return null;
@@ -264,15 +282,38 @@ public class BrowserLauncher {
                     ? browser.newContext()
                     : browser.contexts().get(0);
             Page page = context.pages().isEmpty() ? context.newPage() : context.pages().get(0);
+            // The temp profile dir is owned by the spawned Chrome for the lifetime of the
+            // browser; clean up when the JVM exits since we don't track per-session shutdown
+            // here. (BrowserUseTool stops the browser explicitly on stop, so the JVM hook is
+            // a backstop for crashes.)
+            registerProfileDirCleanup(userDataDir);
             long elapsed = System.currentTimeMillis() - t0;
             trace.add(Attempt.ok(Strategy.EXTERNAL_CDP, browserBin + " + connectOverCDP(" + cdpBase + ")", elapsed));
             return Result.success(browser, context, page, true, cdpBase, Strategy.EXTERNAL_CDP, trace);
         } catch (Exception e) {
             proc.destroyForcibly();
+            deleteQuietly(userDataDir);
             trace.add(Attempt.fail(Strategy.EXTERNAL_CDP, "connectOverCDP(" + cdpBase + ")",
                     System.currentTimeMillis() - t0, e.getMessage()));
             return null;
         }
+    }
+
+    private static void deleteQuietly(Path dir) {
+        if (dir == null) return;
+        try {
+            if (!Files.exists(dir)) return;
+            try (var stream = Files.walk(dir)) {
+                stream.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private static void registerProfileDirCleanup(Path dir) {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> deleteQuietly(dir),
+                "mateclaw-cdp-profile-cleanup"));
     }
 
     // ==================== Helpers ====================
@@ -312,7 +353,7 @@ public class BrowserLauncher {
         return args;
     }
 
-    /** Platform-specific candidate paths — same list openfang uses. */
+    /** Platform-specific candidate paths — same list openfang uses, extended for issue #40. */
     public static List<Path> systemBrowserCandidates() {
         List<Path> paths = new ArrayList<>();
         if (IS_WINDOWS) {
@@ -328,6 +369,27 @@ public class BrowserLauncher {
             if (local != null && !local.isBlank()) {
                 paths.add(Path.of(local, "Google", "Chrome", "Application", "chrome.exe"));
                 paths.add(Path.of(local, "Microsoft", "Edge", "Application", "msedge.exe"));
+                // Chinese Chromium-based browsers — they ignore Playwright's "chrome" channel
+                // detection but launch fine via executablePath. They tend to install per-user.
+                paths.add(Path.of(local, "360ChromeX", "Chrome", "Application", "360ChromeX.exe"));
+                paths.add(Path.of(local, "360Chrome", "Chrome", "Application", "360chrome.exe"));
+                paths.add(Path.of(local, "360se6", "Application", "360se.exe"));
+                paths.add(Path.of(local, "Tencent", "QQBrowser", "QQBrowser.exe"));
+                paths.add(Path.of(local, "sogouexplorer", "SogouExplorer.exe"));
+            }
+            // Issue #40: many users install Chrome/Edge to a non-system drive (D:, E:, ...).
+            // Scan only mounted drives to avoid spurious 5s "no media" timeouts on empty letters.
+            for (java.io.File drive : java.io.File.listRoots()) {
+                String letter = drive.getPath();
+                if (letter == null || letter.isBlank()) continue;
+                if (!drive.exists()) continue;
+                String upper = letter.toUpperCase(Locale.ROOT);
+                if (upper.startsWith("C:")) continue; // already covered by ProgramFiles env vars
+                for (String pfDir : new String[]{"Program Files", "Program Files (x86)"}) {
+                    paths.add(Path.of(letter, pfDir, "Google", "Chrome", "Application", "chrome.exe"));
+                    paths.add(Path.of(letter, pfDir, "Microsoft", "Edge", "Application", "msedge.exe"));
+                    paths.add(Path.of(letter, pfDir, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"));
+                }
             }
         } else if (IS_MAC) {
             paths.add(Path.of("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"));
