@@ -162,32 +162,33 @@ public class SkillRuntimeService {
             return "";
         }
 
-        // Issue #46 prompt rewrite. Three deliberate choices vs. the old
-        // version, all driven by observed LLM mis-calls (e.g. calling
-        // "RedisOps" directly as a tool):
-        //   1. Lead with an explicit warning that skills are NOT callable.
-        //      Primacy bias — putting it first is what makes it stick.
-        //   2. Use the actual camelCase tool names (readSkillFile /
-        //      runSkillScript). The old text said `read_skill_file` /
-        //      `run_skill_script`, which don't exist in the tool registry,
-        //      so even an LLM trying to comply couldn't find them.
-        //   3. Concrete worked example: "to use RedisOps, START with
-        //      readSkillFile(...)". Abstract instructions reliably lose
-        //      to a worked example in tool-use prompting.
-        //   4. Render the listing as a markdown table with the call pattern
-        //      explicit, instead of `- **Name** — desc` which looks
-        //      identical to a tool list and primes the model to call
-        //      the name directly.
+        // Issue #46 + #49 prompt rewrite. Stop-gap until RFC-090 lands the
+        // proper `type` enum and inlines `type: prompt` skill bodies into the
+        // system prompt directly. Today every skill is announced via this
+        // catalog and the LLM has to pull SKILL.md on demand. Two failure
+        // modes have been observed:
+        //   #46 — LLM treated the skill name as a tool ("tool_use{name=
+        //         RedisOps}"), so we lead with an explicit "NOT callable"
+        //         warning and surface the actual tool names readSkillFile /
+        //         runSkillScript.
+        //   #49 — On a docs-only skill (SKILL.md, no scripts/ dir), the LLM
+        //         tried to invoke a non-existent scripts/ file and never
+        //         followed SKILL.md's text guidance. The previous wording
+        //         "usually that means calling runSkillScript(...)" actively
+        //         pushed it that way. Fix: tell the model the two shapes
+        //         exist, mark each row's shape, and forbid invoking scripts
+        //         on docs-only skills.
         StringBuilder sb = new StringBuilder();
         sb.append("\n\n## Available Skills\n\n");
         sb.append("⚠️  **Skills are documentation packages, NOT directly callable tools.**\n");
         sb.append("Calling a skill name as a tool (e.g. tool_use{name=\"RedisOps\"}) will fail with \"Tool not found\". ");
-        sb.append("To use a skill, follow this two-step pattern:\n\n");
-        sb.append("1. Read its SKILL.md to learn how it works:\n");
+        sb.append("To use a skill:\n\n");
+        sb.append("1. ALWAYS first read its SKILL.md to learn how it works:\n");
         sb.append("   `readSkillFile(skillName=\"<name>\", filePath=\"SKILL.md\")`\n");
-        sb.append("2. Follow what SKILL.md tells you — usually that means calling:\n");
-        sb.append("   `runSkillScript(skillName=\"<name>\", scriptPath=\"scripts/<file>\")` or\n");
-        sb.append("   `readSkillFile(skillName=\"<name>\", filePath=\"references/<file>\")`\n\n");
+        sb.append("2. Then follow what SKILL.md says. Skills come in two shapes — check the **Shape** column below:\n");
+        sb.append("   - **docs only** — no `scripts/` directory exists. SKILL.md is the entire instruction set; follow its text guidance directly. Do NOT call `runSkillScript` on these — the script does not exist and the call will fail.\n");
+        sb.append("   - **scripts + docs** — `scripts/` is present. SKILL.md will name the script to run; invoke it with `runSkillScript(skillName=\"<name>\", scriptPath=\"scripts/<file>\")`.\n");
+        sb.append("   Either shape may also expose supplementary docs via `readSkillFile(skillName=\"<name>\", filePath=\"references/<file>\")`.\n\n");
 
         // Concrete example anchored to the first enabled skill so the LLM
         // sees a real name it just read in the listing below.
@@ -198,14 +199,22 @@ public class SkillRuntimeService {
         sb.append("### Enabled skills\n");
         sb.append("Pass these names as the `skillName=` argument to `readSkillFile` / `runSkillScript`. ");
         sb.append("Do **not** call them as tools.\n\n");
-        sb.append("| Skill name | Description |\n");
-        sb.append("|------------|-------------|\n");
+        sb.append("| Skill name | Shape | Description |\n");
+        sb.append("|------------|-------|-------------|\n");
         for (ResolvedSkill skill : activeSkills) {
+            // `scripts` is populated by SkillDirectoryScanner — empty map both
+            // for "scripts/ directory absent" and "directory present but empty".
+            // Either way, runSkillScript has nothing to call, so we report the
+            // skill as docs-only. (Database-fallback skills also land here
+            // because SkillPackageResolver.resolveFromDatabase sets it to
+            // Map.of().) RFC-090's `type` field will replace this heuristic.
+            boolean hasScripts = skill.getScripts() != null && !skill.getScripts().isEmpty();
+            String shape = hasScripts ? "scripts + docs" : "docs only";
             sb.append("| `").append(skill.getName()).append("`");
             if (skill.getIcon() != null && !skill.getIcon().isBlank()) {
                 sb.append(" ").append(skill.getIcon());
             }
-            sb.append(" | ");
+            sb.append(" | ").append(shape).append(" | ");
             if (skill.getDescription() != null && !skill.getDescription().isBlank()) {
                 String desc = skill.getDescription();
                 if (desc.length() > 200) {
