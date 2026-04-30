@@ -1,10 +1,17 @@
 import { computed, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { modelApi } from '@/api'
 import type { ProviderInfo } from '@/types'
 import { safeParseJson } from '@/utils/safeJson'
 import { chatModelToProtocol, protocolToChatModel } from '@/utils/modelProtocol'
+
+// Provider IDs are used as path segments in DELETE / config endpoints.
+// Slashes / spaces / # / ? would make `{providerId}` PathVariable miss
+// the controller and fall through to the static-resource handler
+// (see issue #39: "No static resource api/v1/models/custom-providers/...").
+// Keep this in sync with the backend if a server-side guard is added.
+const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/
 
 interface ListDeps {
   loadProviders: () => Promise<void>
@@ -136,7 +143,19 @@ export function useProviderForm(deps: ListDeps) {
     advancedOpen.value = false
   }
 
-  async function saveProvider() {
+  async function saveProvider(): Promise<boolean> {
+    // RFC-074 / issue #39: provider id becomes a URL path segment, so a slash
+    // or other unsafe char makes the row impossible to delete later. Validate
+    // before hitting the API on the create path; editing is exempt because the
+    // id field is hidden and the existing value is reused untouched.
+    if (!editingProvider.value) {
+      const id = providerForm.id.trim()
+      if (!id || !PROVIDER_ID_PATTERN.test(id)) {
+        ElMessage.error(t('settings.model.providerIdInvalid'))
+        return false
+      }
+      providerForm.id = id
+    }
     const kwargs = safeParseJson(providerForm.generateKwargsText)
     if (providerForm.enableSearch) {
       kwargs.enableSearch = true
@@ -183,6 +202,7 @@ export function useProviderForm(deps: ListDeps) {
     }
     closeProviderModal()
     await Promise.all([deps.loadProviders(), deps.loadActiveModel()])
+    return true
   }
 
   /**

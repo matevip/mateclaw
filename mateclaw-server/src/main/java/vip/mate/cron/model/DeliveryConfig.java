@@ -18,13 +18,41 @@ import vip.mate.agent.context.ChannelTarget;
 public record DeliveryConfig(
         @Nullable String targetId,
         @Nullable String threadId,
-        @Nullable String accountId
+        @Nullable String accountId,
+        /**
+         * The IM senderId of the user who created this cron job. Used by
+         * {@code CronConversationResolver} to find that user's existing
+         * channel session — matching by {@code targetId} alone is fragile
+         * because adapters that use a {@code replyToken} (DingTalk
+         * sessionWebhook etc.) store the token as session.targetId while
+         * the cron tool captures the message {@code chatId/senderId} as
+         * deliveryConfig.targetId. The two never match, the lookup always
+         * misses, and IM cron output never reaches the channel mirror
+         * conversation. Carrying senderId fixes that without coupling the
+         * resolver to per-channel reply-target conventions.
+         * <p>Nullable for backwards compat with rows written before this
+         * field was added (V62 baseline).
+         */
+        @Nullable String userId
 ) {
+
+    /** 3-arg legacy constructor preserved so older deserialized rows still work. */
+    public DeliveryConfig(@Nullable String targetId,
+                          @Nullable String threadId,
+                          @Nullable String accountId) {
+        this(targetId, threadId, accountId, null);
+    }
 
     /** Convert from the {@link ChannelTarget} carried on a {@code ChatOrigin}. */
     public static DeliveryConfig from(@Nullable ChannelTarget t) {
         if (t == null) return null;
-        return new DeliveryConfig(t.targetId(), t.threadId(), t.accountId());
+        return new DeliveryConfig(t.targetId(), t.threadId(), t.accountId(), null);
+    }
+
+    /** Convert from {@link ChannelTarget} + the requester's senderId. */
+    public static DeliveryConfig from(@Nullable ChannelTarget t, @Nullable String userId) {
+        if (t == null) return null;
+        return new DeliveryConfig(t.targetId(), t.threadId(), t.accountId(), userId);
     }
 
     /** Convert back to a {@link ChannelTarget} for ChatOrigin reconstruction. */

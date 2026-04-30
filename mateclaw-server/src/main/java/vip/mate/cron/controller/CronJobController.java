@@ -7,6 +7,8 @@ import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
 import vip.mate.cron.model.CronJobDTO;
 import vip.mate.cron.service.CronJobService;
+import vip.mate.dashboard.model.ActiveCronRunVO;
+import vip.mate.dashboard.service.CronJobRunService;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
 import java.util.List;
@@ -23,6 +25,7 @@ import java.util.List;
 public class CronJobController {
 
     private final CronJobService cronJobService;
+    private final CronJobRunService cronJobRunService;
 
     /**
      * RFC-083: every endpoint reads {@code X-Workspace-Id} (the frontend
@@ -90,6 +93,20 @@ public class CronJobController {
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         cronJobService.runNow(id, resolve(workspaceId));
         return R.ok();
+    }
+
+    /**
+     * Lightweight poll target for the chat console. Returns the cron job runs
+     * currently in {@code running} state for the given conversation, so the
+     * UI can render a "executing…" placeholder bubble between T1 (run row
+     * inserted) and T2 (assistant message persisted).
+     */
+    @Operation(summary = "查询会话下正在执行的定时任务运行")
+    @GetMapping("/active-runs")
+    @RequireWorkspaceRole("viewer")
+    public R<List<ActiveCronRunVO>> activeRuns(
+            @RequestParam("conversationId") String conversationId) {
+        return R.ok(cronJobRunService.listActiveByConversation(conversationId));
     }
 
     private static long resolve(Long headerWorkspaceId) {

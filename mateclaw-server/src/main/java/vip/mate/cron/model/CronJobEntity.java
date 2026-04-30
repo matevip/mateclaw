@@ -33,10 +33,17 @@ public class CronJobEntity {
     /** 关联 Agent ID */
     private Long agentId;
 
-    /** 任务类型：text | agent */
+    /**
+     * 任务类型：
+     * <ul>
+     *   <li>{@code text} — single-turn LLM chat (uses {@code triggerMessage})</li>
+     *   <li>{@code agent} — Plan-Execute (uses {@code requestBody})</li>
+     *   <li>{@code reminder} — direct push of {@code triggerMessage}, no LLM call</li>
+     * </ul>
+     */
     private String taskType;
 
-    /** 触发消息（task_type=text 时使用） */
+    /** 触发消息（task_type=text 或 reminder 时使用） */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String triggerMessage;
 

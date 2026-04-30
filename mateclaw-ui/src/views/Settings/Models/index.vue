@@ -336,8 +336,11 @@ function onCardOAuthLogin(provider: ProviderInfo) {
 
 async function onSaveProvider() {
   try {
-    await saveProvider()
-    showSavedTip(t('settings.model.providerSaved'))
+    const saved = await saveProvider()
+    // Issue #39: saveProvider() returns false when client-side validation
+    // (e.g. provider id format) blocks the request — it has already shown
+    // its own ElMessage.error, so don't follow up with a "saved" toast.
+    if (saved) showSavedTip(t('settings.model.providerSaved'))
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : t('settings.messages.saveFailed'))
   }

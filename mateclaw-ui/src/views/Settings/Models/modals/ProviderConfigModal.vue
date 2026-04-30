@@ -9,7 +9,12 @@
         <div class="form-grid">
           <div class="form-group" v-if="!editingProvider">
             <label class="form-label">{{ t('settings.model.fields.providerId') }}</label>
-            <input v-model="form.id" class="form-input" />
+            <input
+              v-model="form.id"
+              class="form-input mono"
+              :placeholder="t('settings.model.providerIdPlaceholder')"
+            />
+            <div class="field-hint">{{ t('settings.model.providerIdHint') }}</div>
           </div>
           <div class="form-group" v-if="!editingProvider">
             <label class="form-label">{{ t('settings.model.fields.providerName') }}</label>

@@ -276,6 +276,19 @@ public abstract class BaseAgent {
             return null;
         }
 
+        // Stage 0: drop cron-run header rows (system role + "📋 " prefix)
+        // inserted by CronJobLifecycleService.startRun. These are UI dividers
+        // for the unified tasks_<wsId> view and the IM channel-session
+        // mirror — they carry no semantic context for the LLM. Without this
+        // skip, every subsequent IM turn would feed the model unsolicited
+        // SystemMessage rows like "📋 每日新闻 · 定时触发 · 2026-04-30T10:55"
+        // and bloat the prompt with scheduler metadata.
+        if ("system".equals(entity.getRole())
+                && entity.getContent() != null
+                && entity.getContent().startsWith("📋 ")) {
+            return null;
+        }
+
         // Stage 1: drop approval-placeholder assistant messages
         if ("assistant".equals(entity.getRole()) && isApprovalPlaceholder(entity.getContent())) {
             log.debug("[{}] Filtering approval placeholder from history: msgId={}",

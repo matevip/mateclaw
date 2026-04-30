@@ -8,6 +8,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vip.mate.exception.MateClawException;
+import vip.mate.i18n.I18nService;
+import vip.mate.workspace.conversation.model.ConversationEntity;
+import vip.mate.workspace.conversation.repository.ConversationMapper;
 import vip.mate.workspace.core.model.WorkspaceEntity;
 import vip.mate.workspace.core.model.WorkspaceMemberEntity;
 import vip.mate.workspace.core.repository.WorkspaceMapper;
@@ -28,6 +31,8 @@ public class WorkspaceService {
 
     private final WorkspaceMapper workspaceMapper;
     private final WorkspaceMemberMapper memberMapper;
+    private final ConversationMapper conversationMapper;
+    private final I18nService i18n;
 
     /** 默认工作区 slug */
     public static final String DEFAULT_SLUG = "default";
@@ -91,8 +96,35 @@ public class WorkspaceService {
         member.setRole("owner");
         memberMapper.insert(member);
 
+        // Seed the per-workspace tasks conversation so cron output (now routed
+        // there by CronConversationResolver) shows up in the sidebar from day
+        // one. The V65 migration handles existing workspaces; this hook covers
+        // workspaces created post-upgrade.
+        seedTasksConversation(entity.getId());
+
         log.info("Created workspace: {} (slug={}, owner={})", entity.getName(), entity.getSlug(), creatorUserId);
         return entity;
+    }
+
+    private void seedTasksConversation(Long workspaceId) {
+        if (workspaceId == null) return;
+        ConversationEntity tasks = new ConversationEntity();
+        tasks.setConversationId("tasks_" + workspaceId);
+        tasks.setTitle(i18n != null ? i18n.msg("cron.tasks_conversation.title") : "📋 Scheduled Tasks");
+        tasks.setUsername("system");
+        tasks.setMessageCount(0);
+        tasks.setLastActiveTime(java.time.LocalDateTime.now());
+        tasks.setStreamStatus("idle");
+        tasks.setWorkspaceId(workspaceId);
+        try {
+            conversationMapper.insert(tasks);
+        } catch (Exception e) {
+            // Non-fatal: workspace creation succeeds even if the seed fails;
+            // the conversation will be lazy-created on the first cron save
+            // since saveMessage upserts the conversation row.
+            log.warn("[WorkspaceService] Failed to seed tasks conversation for workspace {}: {}",
+                    workspaceId, e.getMessage());
+        }
     }
 
     public WorkspaceEntity update(WorkspaceEntity entity) {

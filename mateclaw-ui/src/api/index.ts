@@ -287,8 +287,15 @@ export const modelApi = {
   updateProviderConfig: (providerId: string, data: any) =>
     http.put(`/models/${providerId}/config`, data),
   createCustomProvider: (data: any) => http.post('/models/custom-providers', data),
-  deleteCustomProvider: (providerId: string) =>
-    http.delete(`/models/custom-providers/${providerId}`),
+  // Issue #39: fall back to a query-param endpoint when the providerId can't
+  // safely sit in a path segment (slash / space / etc.) — those rows would
+  // otherwise be undeletable because Spring's {providerId} doesn't span "/".
+  deleteCustomProvider: (providerId: string) => {
+    const safe = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(providerId)
+    return safe
+      ? http.delete(`/models/custom-providers/${providerId}`)
+      : http.delete('/models/custom-providers', { params: { providerId } })
+  },
   addProviderModel: (providerId: string, data: any) =>
     http.post(`/models/${providerId}/models`, data),
   removeProviderModel: (providerId: string, modelId: string) =>
@@ -433,6 +440,8 @@ export const cronJobApi = {
   toggle: (id: string | number, enabled: boolean) =>
     http.put(`/cron-jobs/${id}/toggle`, null, { params: { enabled } }),
   runNow: (id: string | number) => http.post(`/cron-jobs/${id}/run`),
+  activeRuns: (conversationId: string) =>
+    http.get('/cron-jobs/active-runs', { params: { conversationId } }),
 }
 
 // ==================== Wiki Knowledge Base ====================

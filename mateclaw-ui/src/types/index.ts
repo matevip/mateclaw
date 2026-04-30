@@ -781,7 +781,7 @@ export interface CronJob {
   timezone: string
   agentId: string | number
   agentName?: string
-  taskType: 'text' | 'agent'
+  taskType: 'text' | 'agent' | 'reminder'
   triggerMessage?: string
   requestBody?: string
   enabled: boolean

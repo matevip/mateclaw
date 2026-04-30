@@ -112,6 +112,21 @@ public class ModelConfigController {
         return R.ok();
     }
 
+    /**
+     * Issue #39 fallback: query-param variant for provider IDs that cannot be
+     * expressed as a single path segment (slashes, spaces, etc.). The path
+     * variant above is the primary entry point — this exists so users with
+     * already-persisted invalid IDs can still clean up their data, since
+     * Spring's {@code {providerId}} doesn't match across {@code /} and the
+     * dispatcher would otherwise fall through to the static-resource handler.
+     */
+    @Operation(summary = "删除自定义 Provider（查询参数变体，兼容含特殊字符的旧 ID）")
+    @DeleteMapping("/custom-providers")
+    public R<Void> deleteCustomProviderByQuery(@RequestParam("providerId") String providerId) {
+        modelProviderService.deleteCustomProvider(providerId);
+        return R.ok();
+    }
+
     @Operation(summary = "向 Provider 添加模型")
     @PostMapping("/{providerId}/models")
     public R<ProviderInfoDTO> addProviderModel(@PathVariable String providerId,

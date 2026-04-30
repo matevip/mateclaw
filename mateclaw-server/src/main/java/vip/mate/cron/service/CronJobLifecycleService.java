@@ -13,6 +13,7 @@ import vip.mate.cron.delivery.CronJobCompletedEvent;
 import vip.mate.cron.model.CronJobEntity;
 import vip.mate.dashboard.model.CronJobRunEntity;
 import vip.mate.dashboard.repository.CronJobRunMapper;
+import vip.mate.i18n.I18nService;
 import vip.mate.memory.event.ConversationCompletionPublisher;
 import vip.mate.workspace.conversation.ConversationService;
 
@@ -47,6 +48,7 @@ public class CronJobLifecycleService {
     private final ConversationService conversationService;
     private final ConversationCompletionPublisher completionPublisher;
     private final ApplicationEventPublisher events;
+    private final I18nService i18n;
 
     /**
      * T1 — short transaction: persist a run row in {@code running} state,
@@ -57,23 +59,48 @@ public class CronJobLifecycleService {
      * @param triggerType {@code scheduled} (cron tick) or {@code manual} (runNow)
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public CronJobRunEntity startRun(CronJobEntity job, String userMessage, String triggerType) {
+    public CronJobRunEntity startRun(CronJobEntity job, String userMessage, String triggerType,
+                                     String conversationId) {
         CronJobRunEntity run = new CronJobRunEntity();
         run.setCronJobId(job.getId());
-        run.setConversationId("cron_" + job.getId());
+        run.setConversationId(conversationId);
         run.setStatus("running");
         run.setTriggerType(triggerType != null ? triggerType : "scheduled");
         run.setStartedAt(LocalDateTime.now());
         run.setDeliveryStatus("NONE");
         runMapper.insert(run);
 
+        // Cron-run header (system role) so users browsing the unified
+        // tasks_<wsId> conversation can tell which job's run starts here.
+        // Renderable as a divider card on the frontend; LLM history reads
+        // skip system messages so this doesn't pollute future prompts.
+        conversationService.saveMessage(conversationId, "system",
+                buildHeader(job, run));
+
         // Persist the user message before the LLM call so history reads
         // see a coherent (user → assistant) ordering even if the agent
         // throws mid-run.
         if (userMessage != null && !userMessage.isBlank()) {
-            conversationService.saveMessage(run.getConversationId(), "user", userMessage);
+            conversationService.saveMessage(conversationId, "user", userMessage);
         }
         return run;
+    }
+
+    /**
+     * Format a cron-run header row. Pattern is parsed by the frontend
+     * MessageBubble which renders it as a labeled divider when role=system.
+     * Format: "📋 [{jobName}] {triggerType} · {timestamp}"
+     */
+    private String buildHeader(CronJobEntity job, CronJobRunEntity run) {
+        String triggerKey = "manual".equalsIgnoreCase(run.getTriggerType())
+                ? "cron.run_header.manual" : "cron.run_header.scheduled";
+        String triggerLabel = i18n != null ? i18n.msg(triggerKey)
+                : ("manual".equalsIgnoreCase(run.getTriggerType()) ? "manual" : "scheduled");
+        String fallbackTitle = i18n != null ? i18n.msg("cron.tasks_conversation.title") : "Scheduled Tasks";
+        return String.format("📋 %s · %s · %s",
+                job.getName() != null ? job.getName() : fallbackTitle,
+                triggerLabel,
+                run.getStartedAt());
     }
 
     /**
@@ -100,8 +127,9 @@ public class CronJobLifecycleService {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void finishRunAndPublish(CronJobEntity job, CronJobRunEntity run,
-                                    String userMessage, AssistantMessage result) {
-        String convId = "cron_" + job.getId();
+                                    String userMessage, AssistantMessage result,
+                                    String conversationId) {
+        String convId = conversationId != null ? conversationId : run.getConversationId();
         String text = result != null && result.getText() != null ? result.getText() : "";
 
         runMapper.update(null, new LambdaUpdateWrapper<CronJobRunEntity>()

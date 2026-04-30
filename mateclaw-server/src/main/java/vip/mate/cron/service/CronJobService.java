@@ -467,7 +467,9 @@ public class CronJobService implements ApplicationRunner {
             throw new MateClawException("err.cron.expression_required", "Cron 表达式不能为空");
         }
         String taskType = dto.getTaskType() != null ? dto.getTaskType() : "text";
-        if ("text".equals(taskType) && (dto.getTriggerMessage() == null || dto.getTriggerMessage().isBlank())) {
+        // 'text' (LLM chat) and 'reminder' (direct push) both rely on triggerMessage.
+        if (("text".equals(taskType) || "reminder".equals(taskType))
+                && (dto.getTriggerMessage() == null || dto.getTriggerMessage().isBlank())) {
             throw new MateClawException("err.cron.trigger_required", "触发消息不能为空");
         }
         if ("agent".equals(taskType) && (dto.getRequestBody() == null || dto.getRequestBody().isBlank())) {
