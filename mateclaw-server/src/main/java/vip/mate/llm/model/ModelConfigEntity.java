@@ -55,6 +55,13 @@ public class ModelConfigEntity {
      */
     private String modelType;
 
+    /**
+     * Declared modalities the chat model can natively consume, JSON array of lowercase
+     * names, e.g. {@code ["vision","video","audio"]}. {@code null} or blank → defer to
+     * {@link vip.mate.llm.service.ModelCapabilityService} built-in heuristics.
+     */
+    private String modalities;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

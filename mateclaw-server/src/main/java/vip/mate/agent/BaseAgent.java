@@ -10,6 +10,7 @@ import org.springframework.core.io.FileSystemResource;
 import org.springframework.util.MimeType;
 import reactor.core.publisher.Flux;
 import vip.mate.approval.ApprovalPlaceholderUtil;
+import vip.mate.llm.service.ModelCapabilityService;
 import vip.mate.workspace.conversation.ConversationService;
 import vip.mate.workspace.conversation.model.MessageContentPart;
 import vip.mate.workspace.conversation.model.MessageEntity;
@@ -18,7 +19,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -56,6 +59,13 @@ public abstract class BaseAgent {
 
     /** 模型名称 */
     protected String modelName;
+
+    /**
+     * Modalities the chat model can natively consume (resolved at agent build time
+     * by {@link vip.mate.llm.service.ModelCapabilityService}). Empty set = unknown model,
+     * fall back to text-only behavior. See issue #44.
+     */
+    protected Set<ModelCapabilityService.Modality> modelCapabilities = EnumSet.noneOf(ModelCapabilityService.Modality.class);
 
     /** 采样温度 */
     protected Double temperature;
@@ -483,15 +493,11 @@ public abstract class BaseAgent {
 
     /**
      * 判断当前模型是否支持视频输入。
-     * 仅已知支持视频分析的视觉模型（Qwen-VL、GPT-4o、Gemini 等）才注入视频 Media。
+     * 由 {@link ModelCapabilityService} 在 agent 构建时解析并注入到
+     * {@link #modelCapabilities}，per-model 粒度（区分如 glm-4v vs glm-4v-plus）。
      */
     private boolean modelSupportsVideo() {
-        if (modelName == null) return false;
-        String n = modelName.toLowerCase();
-        return (n.contains("qwen") && n.contains("vl"))
-                || n.contains("gpt-4o")
-                || n.contains("gemini")
-                || (n.contains("glm") && n.contains("v"));
+        return modelCapabilities.contains(ModelCapabilityService.Modality.VIDEO);
     }
 
     /**
@@ -501,6 +507,10 @@ public abstract class BaseAgent {
     protected UserMessage buildUserMessage(MessageEntity message, String renderedContent) {
         List<MessageContentPart> parts = conversationService.parseMessageParts(message);
         List<Media> mediaList = new ArrayList<>();
+        // Reasons for attachments that the model cannot consume — surfaced to the agent
+        // via the user message text so it does not hallucinate a tool call to read them.
+        // See issue #44.
+        List<String> skippedAttachments = new ArrayList<>();
         boolean videoSupported = modelSupportsVideo();
 
         for (MessageContentPart part : parts) {
@@ -522,6 +532,7 @@ public abstract class BaseAgent {
             if (isImage && contentType.contains("svg")) {
                 log.debug("[{}] Skipping SVG attachment (not supported by multimodal API): {}",
                         agentName, part.getFileName());
+                skippedAttachments.add(part.getFileName() + "(SVG 格式，多模态 API 不支持)");
                 continue;
             }
 
@@ -529,6 +540,7 @@ public abstract class BaseAgent {
             if (isVideo && !videoSupported) {
                 log.debug("[{}] Skipping video attachment (model '{}' does not support video): {}",
                         agentName, modelName, part.getFileName());
+                skippedAttachments.add(part.getFileName() + "(当前模型未声明视频能力)");
                 continue;
             }
 
@@ -536,6 +548,7 @@ public abstract class BaseAgent {
             if (isVideo && part.getFileSize() != null && part.getFileSize() > MAX_VIDEO_SIZE_BYTES) {
                 log.warn("[{}] Skipping oversized video attachment ({}MB > 20MB): {}",
                         agentName, part.getFileSize() / (1024 * 1024), part.getFileName());
+                skippedAttachments.add(part.getFileName() + "(视频超过 20MB 大小限制)");
                 continue;
             }
 
@@ -547,6 +560,7 @@ public abstract class BaseAgent {
             if (mediaPath == null) {
                 log.warn("[{}] {} file not found for attachment: {}, path: {}, mediaId: {}",
                         agentName, isVideo ? "Video" : "Image", part.getFileName(), part.getPath(), part.getMediaId());
+                skippedAttachments.add(part.getFileName() + "(文件未找到)");
                 continue;
             }
             try {
@@ -558,14 +572,22 @@ public abstract class BaseAgent {
             } catch (Exception e) {
                 log.warn("[{}] Failed to create Media for {} {}: {}",
                         agentName, isVideo ? "video" : "image", part.getFileName(), e.getMessage());
+                skippedAttachments.add(part.getFileName() + "(媒体加载失败)");
             }
         }
 
+        String finalText = renderedContent;
+        if (!skippedAttachments.isEmpty()) {
+            finalText = (renderedContent == null ? "" : renderedContent)
+                    + "\n\n[系统提示] 以下附件未传入模型：" + String.join("、", skippedAttachments)
+                    + "。请直接告知用户具体原因，不要尝试用其他工具读取这些文件。";
+        }
+
         if (mediaList.isEmpty()) {
-            return new UserMessage(renderedContent);
+            return new UserMessage(finalText);
         }
         return UserMessage.builder()
-                .text(renderedContent)
+                .text(finalText)
                 .media(mediaList)
                 .build();
     }

@@ -100,6 +100,7 @@ public class AgentGraphBuilder {
     private final ConversationService conversationService;
     private final ModelConfigService modelConfigService;
     private final ModelProviderService modelProviderService;
+    private final vip.mate.llm.service.ModelCapabilityService modelCapabilityService;
     private final PlanningService planningService;
     private final ToolGuardService toolGuardService;
     private final vip.mate.tool.guard.service.ToolGuardConfigService toolGuardConfigService;
@@ -235,6 +236,8 @@ public class AgentGraphBuilder {
         agent.systemPrompt = enhancedPrompt;
         agent.maxIterations = maxIter;
         agent.modelName = runtimeModel.getModelName();
+        agent.modelCapabilities = modelCapabilityService.resolve(
+                runtimeModel.getModelName(), runtimeModel.getModalities());
         agent.runtimeProviderId = provider != null ? provider.getProviderId() : "";
         agent.temperature = runtimeModel.getTemperature();
         agent.maxTokens = runtimeModel.getMaxTokens();
