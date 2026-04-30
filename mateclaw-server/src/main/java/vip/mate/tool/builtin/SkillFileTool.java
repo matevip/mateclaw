@@ -148,9 +148,16 @@ public class SkillFileTool {
     }
 
     @Tool(description = """
-        列出所有当前可用的技能（Skills），包括名称、图标和描述。
-        使用此工具查看系统中有哪些已启用且可运行的技能。
-        注意：这里列出的是技能（Skills），不是 Agent。如需列出可用 Agent，请使用 listAvailableAgents。
+        List all currently available Skills (documentation packages).
+
+        IMPORTANT: Skills are NOT directly callable as tools. Each name
+        returned here is a `skillName` argument, not a tool name. To use
+        a skill, call `readSkillFile(skillName="<name>", filePath="SKILL.md")`
+        first to read its instructions, then follow what SKILL.md tells you.
+        Calling a skill name as a tool will fail with "Tool not found".
+
+        Note: this returns Skills (vendor-installable docs), not Agents.
+        For Agents, use `listAvailableAgents`.
 
         Returns: A formatted list of active skills with name, icon, and description.
         """)
@@ -160,27 +167,35 @@ public class SkillFileTool {
         List<ResolvedSkill> activeSkills = runtimeService.getActiveSkills();
 
         if (activeSkills.isEmpty()) {
-            return "当前没有可用的技能（Skills）。";
+            return "No skills are currently available.";
         }
 
-        StringBuilder sb = new StringBuilder("可用技能（Skills）列表：\n\n");
+        // Issue #46: render as a table with the call pattern stated up front,
+        // instead of a `- **Name** — desc` list that primes the LLM to call
+        // the names directly as tools.
+        StringBuilder sb = new StringBuilder();
+        sb.append("⚠️  These are Skills (documentation packages), NOT directly callable tools.\n");
+        sb.append("To use any of them, call:\n");
+        sb.append("  readSkillFile(skillName=\"<name from below>\", filePath=\"SKILL.md\")\n");
+        sb.append("then follow what SKILL.md tells you (typically `runSkillScript`).\n\n");
+        sb.append("| Skill name | Description |\n");
+        sb.append("|------------|-------------|\n");
         for (ResolvedSkill skill : activeSkills) {
-            sb.append("- **").append(skill.getName()).append("**");
+            sb.append("| `").append(skill.getName()).append("`");
             if (skill.getIcon() != null && !skill.getIcon().isBlank()) {
                 sb.append(" ").append(skill.getIcon());
             }
+            sb.append(" | ");
             if (skill.getDescription() != null && !skill.getDescription().isBlank()) {
                 String desc = skill.getDescription();
                 if (desc.length() > 200) {
                     desc = desc.substring(0, 200) + "...";
                 }
-                sb.append(" — ").append(desc);
+                sb.append(desc.replace("|", "\\|").replace("\n", " "));
             }
-            sb.append("\n");
+            sb.append(" |\n");
         }
-
-        sb.append("\n共 ").append(activeSkills.size()).append(" 个可用技能。");
-        sb.append("\n\n使用 `readSkillFile` 读取技能详情，使用 `runSkillScript` 执行技能脚本。");
+        sb.append("\nTotal: ").append(activeSkills.size()).append(" skill(s).");
         return sb.toString();
     }
 

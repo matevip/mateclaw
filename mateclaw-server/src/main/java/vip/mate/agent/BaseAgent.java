@@ -228,17 +228,36 @@ public abstract class BaseAgent {
             }
         }
 
-        // Tail guard: a few providers reject prompts whose history ends with an
-        // assistant message. Anthropic Claude returns 400 "does not support
-        // assistant message prefill"; DeepSeek thinking mode requires the
-        // last assistant turn's reasoning_content (which we may not have).
-        // The trailing-user-dedup above can already produce an assistant tail
-        // when the immediately-prior turn was an error / placeholder that got
-        // dropped by stage 1 / 1.5 of sanitizeForLlm. Strip remaining assistant
-        // tails defensively — the current user message is fed in separately as
-        // the final prompt by the caller, so dropping these assistant entries
-        // never loses information the LLM needs.
-        while (!messages.isEmpty() && messages.get(messages.size() - 1) instanceof AssistantMessage) {
+        // Tail guard — orphan-user strip (issue #47).
+        //
+        // Invariant: every caller of buildConversationHistory appends the
+        // current user message AFTER this history (BaseAgent.buildClient
+        // via .user(), StateGraphReActAgent / StateGraphPlanExecuteAgent
+        // via messages.add(buildCurrentUserMessage)). So the final prompt is
+        //   [system, ...history, current_user]
+        // and is *always* terminated by a user message. That means a trailing
+        // assistant in history is FINE for every provider we support — it
+        // produces the correct [..., user, assistant, current_user] alternation
+        // (OpenAI, Anthropic, DeepSeek regular/thinking, Gemini, Qwen, …).
+        //
+        // The actual hazard is the opposite: a trailing USER in history.
+        // That happens when the immediately-prior turn's assistant message
+        // was dropped by Stage 1 (approval placeholder) or Stage 1.5 (errored
+        // turn / "[错误] " row), or never persisted at all (turn interrupted
+        // before doOnComplete saved the assistant). In that case the history
+        // ends with an orphan unanswered user, and appending the current user
+        // produces TWO consecutive user messages. Most providers concatenate
+        // those and answer both — leaking the orphan question's answer
+        // alongside the current answer. (This was the symptom reported in
+        // issue #47, originally caused by a tail guard that stripped trailing
+        // ASSISTANT messages instead of trailing USER ones — a direction-
+        // reversed version of this loop.)
+        //
+        // Stripping orphan users is safe: the user re-asked or asked a new
+        // question; the orphan turn produced no answer the model can build
+        // on. We lose a small amount of conversational context in exchange
+        // for clean alternation across every provider.
+        while (!messages.isEmpty() && messages.get(messages.size() - 1) instanceof UserMessage) {
             messages.remove(messages.size() - 1);
         }
         return messages;

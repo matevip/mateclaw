@@ -310,6 +310,10 @@ public class AgentGraphBuilder {
                     primaryModelConfig != null ? primaryModelConfig.getProvider() : null,
                     providerPool);
             ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
+            // Issue #46: enable skill-aware "Tool not found" hint so when the
+            // LLM mis-calls a skill name as a tool, the response tells it
+            // the right invocation pattern instead of a dead-end error.
+            executor.setSkillRuntimeService(skillRuntimeService);
             PlanGenerationNode planGenerationNode = new PlanGenerationNode(chatModel, planningService, streamingHelper, conversationWindowManager, toolSet);
             StepExecutionNode stepExecutionNode = new StepExecutionNode(chatModel, toolSet, executor, planningService, streamTracker, reasoningEffort, streamingHelper, conversationWindowManager);
             PlanSummaryNode planSummaryNode = new PlanSummaryNode(chatModel, planningService, streamingHelper);
@@ -437,6 +441,10 @@ public class AgentGraphBuilder {
                     primaryModelConfig != null ? primaryModelConfig.getProvider() : null,
                     providerPool);
             ToolExecutionExecutor executor = new ToolExecutionExecutor(toolSet, toolGuardService, approvalService, streamTracker, toolTimeoutProperties, toolResultStorage, toolConcurrencyRegistry);
+            // Issue #46: enable skill-aware "Tool not found" hint so when the
+            // LLM mis-calls a skill name as a tool, the response tells it
+            // the right invocation pattern instead of a dead-end error.
+            executor.setSkillRuntimeService(skillRuntimeService);
             // PR-1.2 (RFC-049 L1-B): propagate the bound model's capability so ReasoningNode
             // can gate the ThinkingLevelHolder override explicitly, rather than inferring
             // capability from reasoningEffort == null.

@@ -162,29 +162,61 @@ public class SkillRuntimeService {
             return "";
         }
 
+        // Issue #46 prompt rewrite. Three deliberate choices vs. the old
+        // version, all driven by observed LLM mis-calls (e.g. calling
+        // "RedisOps" directly as a tool):
+        //   1. Lead with an explicit warning that skills are NOT callable.
+        //      Primacy bias — putting it first is what makes it stick.
+        //   2. Use the actual camelCase tool names (readSkillFile /
+        //      runSkillScript). The old text said `read_skill_file` /
+        //      `run_skill_script`, which don't exist in the tool registry,
+        //      so even an LLM trying to comply couldn't find them.
+        //   3. Concrete worked example: "to use RedisOps, START with
+        //      readSkillFile(...)". Abstract instructions reliably lose
+        //      to a worked example in tool-use prompting.
+        //   4. Render the listing as a markdown table with the call pattern
+        //      explicit, instead of `- **Name** — desc` which looks
+        //      identical to a tool list and primes the model to call
+        //      the name directly.
         StringBuilder sb = new StringBuilder();
-        sb.append("\n\n## Available Skills\n");
-        sb.append("以下技能已启用，你可以通过 skill runtime tools 使用它们：\n\n");
+        sb.append("\n\n## Available Skills\n\n");
+        sb.append("⚠️  **Skills are documentation packages, NOT directly callable tools.**\n");
+        sb.append("Calling a skill name as a tool (e.g. tool_use{name=\"RedisOps\"}) will fail with \"Tool not found\". ");
+        sb.append("To use a skill, follow this two-step pattern:\n\n");
+        sb.append("1. Read its SKILL.md to learn how it works:\n");
+        sb.append("   `readSkillFile(skillName=\"<name>\", filePath=\"SKILL.md\")`\n");
+        sb.append("2. Follow what SKILL.md tells you — usually that means calling:\n");
+        sb.append("   `runSkillScript(skillName=\"<name>\", scriptPath=\"scripts/<file>\")` or\n");
+        sb.append("   `readSkillFile(skillName=\"<name>\", filePath=\"references/<file>\")`\n\n");
 
+        // Concrete example anchored to the first enabled skill so the LLM
+        // sees a real name it just read in the listing below.
+        String exampleName = activeSkills.get(0).getName();
+        sb.append("Concrete example — to use the `").append(exampleName).append("` skill, START with:\n");
+        sb.append("  `readSkillFile(skillName=\"").append(exampleName).append("\", filePath=\"SKILL.md\")`\n\n");
+
+        sb.append("### Enabled skills\n");
+        sb.append("Pass these names as the `skillName=` argument to `readSkillFile` / `runSkillScript`. ");
+        sb.append("Do **not** call them as tools.\n\n");
+        sb.append("| Skill name | Description |\n");
+        sb.append("|------------|-------------|\n");
         for (ResolvedSkill skill : activeSkills) {
-            sb.append("- **").append(skill.getName()).append("**");
+            sb.append("| `").append(skill.getName()).append("`");
             if (skill.getIcon() != null && !skill.getIcon().isBlank()) {
                 sb.append(" ").append(skill.getIcon());
             }
+            sb.append(" | ");
             if (skill.getDescription() != null && !skill.getDescription().isBlank()) {
                 String desc = skill.getDescription();
                 if (desc.length() > 200) {
                     desc = desc.substring(0, 200) + "...";
                 }
-                sb.append(" — ").append(desc);
+                // Escape pipe and newline so a multi-line description doesn't
+                // break the table layout.
+                sb.append(desc.replace("|", "\\|").replace("\n", " "));
             }
-            sb.append("\n");
+            sb.append(" |\n");
         }
-
-        sb.append("\n### 如何使用技能\n");
-        sb.append("1. 使用 `read_skill_file` 工具读取技能内部文件（SKILL.md / references / scripts）\n");
-        sb.append("2. 使用 `run_skill_script` 工具执行技能脚本\n");
-        sb.append("3. 所有路径相对技能根目录解析，必须以 references/ 或 scripts/ 开头\n");
 
         return sb.toString();
     }

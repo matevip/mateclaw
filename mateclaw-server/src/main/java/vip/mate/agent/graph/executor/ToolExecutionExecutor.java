@@ -123,6 +123,18 @@ public class ToolExecutionExecutor {
     private final ToolResultStorage resultStorage;
     /** RFC-008 Phase 4 metadata-driven concurrency classifier; nullable for legacy constructors. */
     private final vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry;
+    /**
+     * Issue #46: when {@code toolCallbackMap} misses a name that the LLM
+     * called, we check whether it matches an active skill so we can
+     * return a precise hint instead of bare "Tool not found". Nullable —
+     * legacy constructors and tests may leave this unset, in which case
+     * the safety net falls through to the original error string.
+     */
+    private vip.mate.skill.runtime.SkillRuntimeService skillRuntimeService;
+
+    public void setSkillRuntimeService(vip.mate.skill.runtime.SkillRuntimeService s) {
+        this.skillRuntimeService = s;
+    }
 
     public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
                                   ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker) {
@@ -326,10 +338,11 @@ public class ToolExecutionExecutor {
             }
             ToolCallback callback = toolCallbackMap.get(toolName);
             if (callback == null) {
-                log.warn("[ToolExecutor] Tool not found: {}", toolName);
-                events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, "Tool not found: " + toolName, false));
+                String msg = skillAwareNotFoundMessage(toolName);
+                log.warn("[ToolExecutor] {}", msg);
+                events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, msg, false));
                 allResponses.add(new ToolResponseMessage.ToolResponse(
-                        toolCall.id(), toolName, "Tool not found: " + toolName));
+                        toolCall.id(), toolName, msg));
                 continue;
             }
 
@@ -402,9 +415,10 @@ public class ToolExecutionExecutor {
 
         ToolCallback callback = toolCallbackMap.get(toolName);
         if (callback == null) {
-            log.warn("[ToolExecutor] Pre-approved tool not found: {}", toolName);
-            events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, "Tool not found: " + toolName, false));
-            return new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, "Tool not found: " + toolName);
+            String msg = skillAwareNotFoundMessage(toolName);
+            log.warn("[ToolExecutor] Pre-approved {}", msg);
+            events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, msg, false));
+            return new ToolResponseMessage.ToolResponse(toolCall.id(), toolName, msg);
         }
 
         try {
@@ -815,6 +829,38 @@ public class ToolExecutionExecutor {
     private String extractPendingId(String approvalResponse) {
         // handleToolApproval 内部已经创建了 pending，这里只做标记
         return approvalResponse;
+    }
+
+    /**
+     * Issue #46 — when a tool callback miss happens, check whether the
+     * unrecognized name actually matches an active skill. If it does, return
+     * a precise hint telling the LLM the right invocation pattern instead
+     * of bare "Tool not found: X". Without this, an LLM that called e.g.
+     * {@code RedisOps} as a tool gets no recovery signal and either gives
+     * up or falls back to shell guessing.
+     *
+     * <p>Case-insensitive match because LLMs sometimes change the case of
+     * skill names mid-conversation.
+     */
+    private String skillAwareNotFoundMessage(String toolName) {
+        if (skillRuntimeService != null && toolName != null && !toolName.isBlank()) {
+            try {
+                boolean isSkill = skillRuntimeService.getActiveSkills().stream()
+                        .anyMatch(s -> s.getName() != null && s.getName().equalsIgnoreCase(toolName));
+                if (isSkill) {
+                    return String.format(
+                            "'%s' is a Skill, not a Tool — calling it as a tool fails. "
+                            + "To use it, FIRST call readSkillFile(skillName=\"%s\", filePath=\"SKILL.md\") "
+                            + "to read its instructions, THEN follow what SKILL.md tells you "
+                            + "(typically runSkillScript with a scripts/<file> path).",
+                            toolName, toolName);
+                }
+            } catch (Exception e) {
+                // Don't let a hint-side failure mask the original error.
+                log.debug("[ToolExecutor] skill-aware hint check failed: {}", e.getMessage());
+            }
+        }
+        return "Tool not found: " + toolName;
     }
 
     // ==================== 内部数据类 ====================
