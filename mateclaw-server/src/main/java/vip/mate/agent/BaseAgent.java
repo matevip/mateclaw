@@ -484,7 +484,12 @@ public abstract class BaseAgent {
         return switch (message.getRole()) {
             case "assistant" -> new AssistantMessage(renderedContent);
             case "system" -> new SystemMessage(renderedContent);
-            case "user" -> buildUserMessage(message, renderedContent);
+            // History user messages: text only. Re-injecting Media on every replay
+            // accumulates attachments across turns — many providers cap at 1 video
+            // per request (e.g. Zhipu GLM-5V returns code 1210). The current turn
+            // gets Media via buildCurrentUserMessage, which is the only path that
+            // should send raw bytes to the model.
+            case "user" -> buildUserMessage(message, renderedContent, false);
             default -> null;
         };
     }
@@ -500,11 +505,28 @@ public abstract class BaseAgent {
         return modelCapabilities.contains(ModelCapabilityService.Modality.VIDEO);
     }
 
+    private boolean modelSupportsVision() {
+        return modelCapabilities.contains(ModelCapabilityService.Modality.VISION);
+    }
+
     /**
      * 构建 UserMessage，支持 multimodal：如果消息包含图片/视频附件，直接注入 Spring AI Media 对象，
      * 让模型在 prompt 中直接看到媒体内容，不需要再调 MCP read_media_file 工具。
      */
     protected UserMessage buildUserMessage(MessageEntity message, String renderedContent) {
+        return buildUserMessage(message, renderedContent, true);
+    }
+
+    /**
+     * @param injectMedia when {@code false} (history replay), skip the Media-loading
+     *                    branch entirely and return text-only — providers like Zhipu
+     *                    GLM-5V cap at 1 video per request, so re-injecting historical
+     *                    attachments on every turn breaks the call.
+     */
+    protected UserMessage buildUserMessage(MessageEntity message, String renderedContent, boolean injectMedia) {
+        if (!injectMedia) {
+            return new UserMessage(renderedContent == null ? "" : renderedContent);
+        }
         List<MessageContentPart> parts = conversationService.parseMessageParts(message);
         List<Media> mediaList = new ArrayList<>();
         // Reasons for attachments that the model cannot consume — surfaced to the agent
@@ -512,6 +534,7 @@ public abstract class BaseAgent {
         // See issue #44.
         List<String> skippedAttachments = new ArrayList<>();
         boolean videoSupported = modelSupportsVideo();
+        boolean visionSupported = modelSupportsVision();
 
         for (MessageContentPart part : parts) {
             if (part == null) continue;
@@ -536,11 +559,19 @@ public abstract class BaseAgent {
                 continue;
             }
 
+            // 图片仅在模型支持视觉时注入；纯文本模型（如 GLM-5-Turbo / DeepSeek-V3）会被跳过
+            if (isImage && !visionSupported) {
+                log.debug("[{}] Skipping image attachment (model '{}' does not support vision): {}",
+                        agentName, modelName, part.getFileName());
+                skippedAttachments.add(part.getFileName() + "(当前模型 " + modelName + " 不支持图片输入)");
+                continue;
+            }
+
             // 视频仅在模型支持时注入，否则跳过（避免发送给非视觉模型导致 400 错误）
             if (isVideo && !videoSupported) {
                 log.debug("[{}] Skipping video attachment (model '{}' does not support video): {}",
                         agentName, modelName, part.getFileName());
-                skippedAttachments.add(part.getFileName() + "(当前模型未声明视频能力)");
+                skippedAttachments.add(part.getFileName() + "(当前模型 " + modelName + " 不支持视频输入)");
                 continue;
             }
 
@@ -579,8 +610,9 @@ public abstract class BaseAgent {
         String finalText = renderedContent;
         if (!skippedAttachments.isEmpty()) {
             finalText = (renderedContent == null ? "" : renderedContent)
-                    + "\n\n[系统提示] 以下附件未传入模型：" + String.join("、", skippedAttachments)
-                    + "。请直接告知用户具体原因，不要尝试用其他工具读取这些文件。";
+                    + "\n\n[系统提示] 以下附件未能传入当前模型：" + String.join("、", skippedAttachments)
+                    + "。\n请用对话语言清晰、友好地告诉用户：当前模型无法处理这类附件，建议切换到具备相应能力的多模态模型（图片需视觉模型，视频需视频理解模型）后重新上传。"
+                    + "不要调用任何工具（包括 ffmpeg、浏览器、文件读取等）尝试解析这些附件。";
         }
 
         if (mediaList.isEmpty()) {
