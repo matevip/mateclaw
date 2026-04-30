@@ -434,17 +434,22 @@ async function loadSkills() {
     const data = res.data || {}
     const records: Skill[] = Array.isArray(data.records) ? data.records : []
     skills.value = records
-    // Defensive total: if the backend pagination count is broken (seen with the
-    // old hardcoded-H2 MyBatisPlus interceptor on MySQL), infer a floor so the
-    // user can at least reach the next page. The real total overrides this.
+    // Trust the backend total when it's positive. Only fall back to an inferred
+    // floor when the backend reports 0 (broken pagination interceptor) — using
+    // Math.max unconditionally produced an off-by-one whenever total was an
+    // exact multiple of the page size (the last page is full but has no
+    // successor; issue #48).
     const reportedTotal = Number(data.total) || 0
-    const inferredMin = records.length >= query.size
-      ? query.page * query.size + 1  // at least one more page exists
-      : (query.page - 1) * query.size + records.length
-    total.value = Math.max(reportedTotal, inferredMin)
-    if (records.length > 0 && reportedTotal === 0) {
+    if (reportedTotal > 0) {
+      total.value = reportedTotal
+    } else if (records.length > 0) {
+      total.value = records.length >= query.size
+        ? query.page * query.size + 1
+        : (query.page - 1) * query.size + records.length
       // eslint-disable-next-line no-console
       console.warn('[SkillMarket] backend returned records but total=0; rebuild server JAR to pick up the DbType fix')
+    } else {
+      total.value = 0
     }
   } catch (e) {
     skills.value = []

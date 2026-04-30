@@ -96,8 +96,14 @@ public class SkillService {
             wrapper.eq(SkillEntity::getSecurityScanStatus, scanStatus.trim().toUpperCase());
         }
 
-        wrapper.orderByDesc(SkillEntity::getBuiltin)
-               .orderByDesc(SkillEntity::getCreateTime);
+        // Builtin first ('builtin' < 'dynamic' < 'mcp' alphabetically), then by
+        // name for a stable order. Sorting on skill_type instead of the
+        // `builtin` boolean because SkillInstaller leaves the boolean NULL on
+        // user-installed rows; sorting on name instead of create_time because
+        // the 20 seeded builtins share a near-identical create_time and looked
+        // random within the group (issue #48).
+        wrapper.orderByAsc(SkillEntity::getSkillType)
+               .orderByAsc(SkillEntity::getName);
 
         return skillMapper.selectPage(pageParam, wrapper);
     }
