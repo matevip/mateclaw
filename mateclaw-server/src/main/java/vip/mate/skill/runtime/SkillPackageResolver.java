@@ -1,5 +1,6 @@
 package vip.mate.skill.runtime;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -106,17 +107,24 @@ public class SkillPackageResolver {
         }
 
         try {
-            SkillEntity update = new SkillEntity();
-            update.setId(entity.getId());
-            update.setSecurityScanStatus(newStatus);
-            update.setSecurityScanResult(newJson);
-            update.setSecurityScanTime(LocalDateTime.now());
-            skillMapper.updateById(update);
+            // Whitelist via LambdaUpdateWrapper (issue #45): SkillEntity has
+            // several @TableField(updateStrategy = FieldStrategy.ALWAYS)
+            // columns (skill_content, config_json, source_code, name_zh,
+            // name_en, security_scan_result). Calling updateById with a
+            // partial entity would tell MyBatis Plus to write NULL to every
+            // ALWAYS column not set on the partial — wiping the imported
+            // skill content on every scan write-back.
+            LocalDateTime now = LocalDateTime.now();
+            skillMapper.update(null, new LambdaUpdateWrapper<SkillEntity>()
+                    .eq(SkillEntity::getId, entity.getId())
+                    .set(SkillEntity::getSecurityScanStatus, newStatus)
+                    .set(SkillEntity::getSecurityScanResult, newJson)
+                    .set(SkillEntity::getSecurityScanTime, now));
             // Keep the in-memory entity coherent with the DB so the next
             // resolve in the same tick doesn't redundantly write again.
             entity.setSecurityScanStatus(newStatus);
             entity.setSecurityScanResult(newJson);
-            entity.setSecurityScanTime(update.getSecurityScanTime());
+            entity.setSecurityScanTime(now);
         } catch (Exception e) {
             log.warn("Failed to persist scan outcome for skill '{}': {}", entity.getName(), e.getMessage());
         }
