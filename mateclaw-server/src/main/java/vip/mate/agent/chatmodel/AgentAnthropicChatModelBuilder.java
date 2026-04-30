@@ -86,7 +86,8 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
         String baseUrl = provider.getBaseUrl();
         RestClient.Builder restClientBuilder = applyHttpTimeouts(
                 restClientBuilderProvider.getIfAvailable(RestClient::builder));
-        WebClient.Builder webClientBuilder = webClientBuilderProvider.getIfAvailable(WebClient::builder);
+        WebClient.Builder webClientBuilder = applyHttpTimeoutsToWebClient(
+                webClientBuilderProvider.getIfAvailable(WebClient::builder));
 
         AnthropicApi.Builder builder = AnthropicApi.builder()
                 .apiKey(apiKey.trim())
@@ -199,5 +200,26 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
         JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
         rf.setReadTimeout(Duration.ofSeconds(180));
         return builder.requestFactory(rf);
+    }
+
+    /**
+     * Streaming counterpart of {@link #applyHttpTimeouts(RestClient.Builder)}.
+     * Without this, Spring AI's AnthropicApi would back its streaming chat
+     * call by a default WebClient with neither connect nor read timeout — a
+     * stalled provider could hang the agent thread indefinitely while the
+     * failover chain idles (no exception = no signal).
+     * <p>
+     * Mirrors AgentGraphBuilder.applyHttpTimeoutsToWebClient: same JDK
+     * HttpClient + JdkClientHttpConnector path, so the dependency surface
+     * doesn't pull in reactor-netty (excluded by this project's pom).
+     */
+    static WebClient.Builder applyHttpTimeoutsToWebClient(WebClient.Builder builder) {
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
+        org.springframework.http.client.reactive.JdkClientHttpConnector connector =
+                new org.springframework.http.client.reactive.JdkClientHttpConnector(httpClient);
+        connector.setReadTimeout(Duration.ofSeconds(180));
+        return builder.clientConnector(connector);
     }
 }

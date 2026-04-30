@@ -1066,7 +1066,8 @@ public class AgentGraphBuilder {
         String completionsPath = resolveOpenAiCompletionsPath(baseUrl, kwargs);
         RestClient.Builder restClientBuilder = applyHttpTimeouts(
                 restClientBuilderProvider.getIfAvailable(RestClient::builder));
-        WebClient.Builder webClientBuilder = webClientBuilderProvider.getIfAvailable(WebClient::builder);
+        WebClient.Builder webClientBuilder = applyHttpTimeoutsToWebClient(
+                webClientBuilderProvider.getIfAvailable(WebClient::builder));
 
         // Spring AI OpenAiApi 构造函数会先 set User-Agent 为 "spring-ai"，再 addAll 我们的 headers，
         // 导致自定义 User-Agent 被追加而非覆盖。因此对需要伪装客户端身份的 provider（如 kimi-code），
@@ -1429,6 +1430,31 @@ public class AgentGraphBuilder {
         JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
         rf.setReadTimeout(Duration.ofSeconds(180));
         return builder.requestFactory(rf);
+    }
+
+    /**
+     * Apply equivalent timeouts to the WebClient that backs OpenAI-compatible
+     * STREAMING calls (chat completions with {@code stream:true}). The
+     * RestClient version above only protects synchronous HTTP — without this,
+     * the streaming code path uses the default {@code WebClient} which has
+     * neither connect nor read timeout, so a stalled provider can hang the
+     * call forever (observed: a single volcengine-plan request held the agent
+     * thread for 9+ minutes with no error, until the user manually pressed
+     * Stop). That kept the failover chain idle because nothing threw.
+     * <p>
+     * Uses {@link JdkClientHttpConnector} with the same {@link HttpClient} we
+     * already use for the RestClient so the dependency surface stays clean
+     * (reactor-netty is not on this project's classpath — Spring's webflux
+     * starter is excluded by design).
+     */
+    private WebClient.Builder applyHttpTimeoutsToWebClient(WebClient.Builder builder) {
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
+        org.springframework.http.client.reactive.JdkClientHttpConnector connector =
+                new org.springframework.http.client.reactive.JdkClientHttpConnector(httpClient);
+        connector.setReadTimeout(Duration.ofSeconds(180));
+        return builder.clientConnector(connector);
     }
 
     /**
