@@ -340,9 +340,21 @@ const stats = computed(() => {
 
 /**
  * Identity-driven description. Shows what THIS bot is, not what the
- * channel type is. Falls back to channel.description (the type-level
- * blurb seeded by DatabaseBootstrapRunner) for legacy rows that haven't
- * been re-verified since RFC-084 landed.
+ * channel type is. Three-stage fallback so the middle of the card is
+ * never visually empty:
+ *
+ *   1. {@code identity.accountName} (+ optional team) — set by the
+ *      adapter once the channel is bound; produces "Connected as @bot
+ *      in TeamX". Most accurate / current.
+ *   2. {@code channel.description} — user-edited blurb from the modal,
+ *      or the seeded type-level description for the default Web row.
+ *   3. {@code channels.cardDesc.typeFallback[channelType]} — i18n
+ *      static string per channel type (dingtalk / wecom / …) so even
+ *      a brand-new user-created row has a sensible one-liner.
+ *
+ * If all three miss (unknown channelType, no description, no identity)
+ * we surface a "click Configure to add a description" hint so the
+ * empty space remains explainable.
  */
 function getChannelDescription(channel: Channel): string {
   const identity = channelStatusMap.value[channel.id]?.identity || {}
@@ -354,8 +366,27 @@ function getChannelDescription(channel: Channel): string {
   if (accountName) {
     return t('channels.cardDesc.connectedAs', { account: accountName })
   }
-  // Fall back to the seeded type-level description.
-  return channel.description || ''
+  if (channel.description && channel.description.trim()) {
+    return channel.description
+  }
+  return getTypeFallbackDescription(channel.channelType)
+}
+
+/**
+ * i18n type-level fallback for channels with no description and no
+ * identity yet. Returns the empty-state hint when the channelType
+ * isn't recognised in the i18n table (forward-compat for new types).
+ */
+function getTypeFallbackDescription(channelType?: string | null): string {
+  if (!channelType) return t('channels.cardDesc.empty')
+  const key = `channels.cardDesc.typeFallback.${channelType}`
+  const translated = t(key)
+  // vue-i18n returns the key itself when there's no translation;
+  // detect that and fall back to the generic empty-state copy.
+  if (!translated || translated === key) {
+    return t('channels.cardDesc.empty')
+  }
+  return translated
 }
 
 // ==================== Connection state helpers ====================
@@ -516,7 +547,10 @@ function getChannelIconPath(type: string) {
 
 /* Channel cards */
 .channel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
-.channel-card { padding: 20px; transition: all 0.15s; min-height: 238px; display: flex; flex-direction: column; }
+/* Card sized to content — header + 2-line desc + footer ≈ 160px. Grid
+   `align-items: stretch` keeps a row's cards visually aligned without
+   forcing the 80px of empty space the old 238px floor produced. */
+.channel-card { padding: 16px 18px 14px; transition: all 0.15s; display: flex; flex-direction: column; }
 .channel-card-skeleton { pointer-events: none; opacity: 0.85; }
 .channel-card:hover { border-color: var(--mc-primary-light); box-shadow: var(--mc-shadow-medium); transform: translateY(-2px); }
 .channel-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
@@ -538,15 +572,35 @@ function getChannelIconPath(type: string) {
 .conn-disconnected { color: var(--mc-text-tertiary); background: var(--mc-bg-sunken); }
 @keyframes pulse-reconnecting { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-.channel-desc { font-size: 13px; color: var(--mc-text-secondary); margin: 0 0 14px; line-height: 1.6; min-height: 42px; }
-.channel-footer { display: flex; gap: 6px; border-top: 1px solid var(--mc-border-light); padding-top: 12px; margin-top: auto; flex-wrap: wrap; }
+/* 2-line clamp with ellipsis. The fixed line count keeps a row's
+   cards visually balanced while ensuring a long type-fallback or a
+   user blurb never balloons the card. -webkit-line-clamp + -webkit-box
+   is the standard cross-browser combo (works in Chromium, Safari,
+   Firefox 68+). */
+.channel-desc {
+    font-size: 13px;
+    color: var(--mc-text-secondary);
+    margin: 0 0 12px;
+    line-height: 1.55;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Footer hugs the description directly — no `margin-top: auto`, so the
+   card collapses to its content height. The divider above the buttons
+   still gives visual separation without the old 60–80px gap. */
+.channel-footer { display: flex; gap: 6px; border-top: 1px solid var(--mc-border-light); padding-top: 10px; flex-wrap: wrap; }
 .card-btn { display: flex; align-items: center; gap: 4px; padding: 7px 11px; border: 1px solid var(--mc-border); background: var(--mc-bg-muted); border-radius: 10px; font-size: 12px; color: var(--mc-text-primary); cursor: pointer; transition: all 0.15s; font-weight: 600; }
 .card-btn:hover { background: var(--mc-bg-sunken); }
 .card-btn.danger:hover { background: var(--mc-danger-bg); border-color: var(--mc-danger); color: var(--mc-danger); }
 
 /* Compact add-another tail card — shown only when the user has at least
    one channel. The 0-channel hero owns the primary CTA in that case. */
-.add-card-compact { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 238px; padding: 20px; border: 2px dashed var(--mc-border); border-radius: 16px; cursor: pointer; background: transparent; transition: all 0.15s; font-family: inherit; }
+/* Match the new card-content height so the dashed "+ Add" tile aligns
+   in the grid row rather than towering over real channel cards. */
+.add-card-compact { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 158px; padding: 16px; border: 2px dashed var(--mc-border); border-radius: 16px; cursor: pointer; background: transparent; transition: all 0.15s; font-family: inherit; }
 .add-card-compact:hover { border-color: var(--mc-primary); background: var(--mc-primary-bg); }
 .add-icon-compact { font-size: 22px; color: var(--mc-text-tertiary); line-height: 1; }
 .add-label-compact { font-size: 14px; color: var(--mc-text-tertiary); font-weight: 600; }

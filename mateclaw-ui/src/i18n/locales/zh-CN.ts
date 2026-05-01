@@ -1743,6 +1743,24 @@ export default {
     cardDesc: {
       connectedAs: '已连接：{account}',
       connectedAsIn: '已连接：{account}（{team}）',
+      // Per-type fallback used when the row has no user-provided description
+      // and the adapter hasn't written identity_json yet. Keeps every card
+      // visually populated instead of leaving a blank middle area.
+      typeFallback: {
+        web: '默认 Web 控制台渠道，通过浏览器 SSE 流式交互',
+        dingtalk: '钉钉机器人渠道，通过 Outgoing Webhook / Stream 接收消息',
+        wecom: '企业微信应用渠道，接收并回复成员消息',
+        weixin: '微信公众号渠道，处理用户消息与事件回调',
+        feishu: '飞书 / Lark 渠道，通过事件订阅接收消息',
+        telegram: 'Telegram 机器人渠道，通过 long polling 接收',
+        slack: 'Slack Bot 渠道，通过 Events API 接收',
+        discord: 'Discord 机器人渠道，通过 Gateway 长连接',
+        qq: 'QQ / QQ 频道机器人渠道',
+        matrix: 'Matrix 房间渠道，通过 client-server API',
+        qqbot: 'QQ 频道机器人渠道（官方 API）',
+        yuanbao: '腾讯元宝渠道',
+      },
+      empty: '点「配置」可补充该渠道的描述',
     },
     catalog: {
       subtitle: '选一个服务接入，配置项稍后还能改。',

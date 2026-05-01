@@ -1731,6 +1731,24 @@ export default {
     cardDesc: {
       connectedAs: 'Connected as {account}',
       connectedAsIn: 'Connected as {account} in {team}',
+      // Per-type fallback used when the row has no user-provided description
+      // and the adapter hasn't written identity_json yet. Keeps every card
+      // visually populated instead of leaving a blank middle area.
+      typeFallback: {
+        web: 'Default web console channel, streaming via browser SSE.',
+        dingtalk: 'DingTalk bot channel, receiving messages via Outgoing Webhook / Stream.',
+        wecom: 'WeCom (Enterprise WeChat) app channel for member messaging.',
+        weixin: 'WeChat Official Account channel — handles user messages and event callbacks.',
+        feishu: 'Feishu / Lark channel via event subscriptions.',
+        telegram: 'Telegram bot channel via long polling.',
+        slack: 'Slack bot channel via the Events API.',
+        discord: 'Discord bot channel via the Gateway connection.',
+        qq: 'QQ / QQ Channel bot.',
+        matrix: 'Matrix room channel via the client-server API.',
+        qqbot: 'QQ Channel bot (official API).',
+        yuanbao: 'Tencent Yuanbao channel.',
+      },
+      empty: 'Click Configure to add a description for this channel.',
     },
     catalog: {
       subtitle: 'Pick a service to connect. You can change settings later.',
