@@ -2,15 +2,19 @@ package vip.mate.skill.runtime;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
+import vip.mate.skill.knowledge.WikiSkillWrapperToolFactory;
 import vip.mate.skill.manifest.SkillManifest;
 import vip.mate.skill.manifest.SkillManifestParser;
 import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.repository.SkillMapper;
 import vip.mate.skill.runtime.model.ResolvedSkill;
 import vip.mate.skill.workspace.SkillWorkspaceManager;
+import vip.mate.tool.ToolRegistry;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,7 +43,6 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class SkillPackageResolver {
 
     private final SkillFrontmatterParser frontmatterParser;
@@ -50,6 +53,49 @@ public class SkillPackageResolver {
     private final ObjectMapper objectMapper;
     private final SkillWorkspaceManager workspaceManager;
     private final SkillMapper skillMapper;
+    /**
+     * RFC-090 §14.4 — knowledge-skill wrapper tool factory.
+     * {@code @Lazy} because WikiSkillWrapperToolFactory pulls in Wiki
+     * services that lag this bean's construction order.
+     */
+    private final WikiSkillWrapperToolFactory wikiWrapperFactory;
+    /**
+     * {@code @Lazy} on ToolRegistry — same lazy-resolution loop as
+     * {@code SkillDependencyChecker}; without this we'd reach for the
+     * registry before its plugin tools have wired up.
+     */
+    private final ToolRegistry toolRegistry;
+
+    /**
+     * Tracks which wrapper-tool names we've already registered for
+     * each skill id, so re-resolves diff-update the registry cleanly
+     * (deregister stale + register current) without registering twice.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<Long, java.util.Set<String>> registeredWrappers
+            = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @Autowired
+    public SkillPackageResolver(SkillFrontmatterParser frontmatterParser,
+                                 SkillManifestParser manifestParser,
+                                 SkillDirectoryScanner directoryScanner,
+                                 SkillSecurityService securityService,
+                                 SkillDependencyChecker dependencyChecker,
+                                 ObjectMapper objectMapper,
+                                 SkillWorkspaceManager workspaceManager,
+                                 SkillMapper skillMapper,
+                                 @Lazy WikiSkillWrapperToolFactory wikiWrapperFactory,
+                                 @Lazy ToolRegistry toolRegistry) {
+        this.frontmatterParser = frontmatterParser;
+        this.manifestParser = manifestParser;
+        this.directoryScanner = directoryScanner;
+        this.securityService = securityService;
+        this.dependencyChecker = dependencyChecker;
+        this.objectMapper = objectMapper;
+        this.workspaceManager = workspaceManager;
+        this.skillMapper = skillMapper;
+        this.wikiWrapperFactory = wikiWrapperFactory;
+        this.toolRegistry = toolRegistry;
+    }
 
     /**
      * 解析技能实体为运行时技能包（完整流程）
@@ -397,10 +443,19 @@ public class SkillPackageResolver {
             SkillManifest manifest = manifestParser.parse(content);
             if (manifest == null) {
                 // No frontmatter at all: leave manifest null and let
-                // legacy callers continue using dependencyReady.
+                // legacy callers continue using dependencyReady. Also
+                // make sure no wrapper tools linger from a prior shape.
+                deregisterKnowledgeWrappers(resolved.getId());
                 return;
             }
             resolved.setManifest(manifest);
+
+            // RFC-090 §14.4 — for knowledge skills, resolve bind_kb
+            // and (re)register skill-scoped wrapper tools. This must
+            // happen *before* the feature evaluation below so the
+            // wrapper names are part of allowedTools when
+            // getEffectiveAllowedTools() runs.
+            applyKnowledgeWrappers(resolved, manifest);
 
             // Build requirement lookup for feature checks.
             Map<String, SkillManifest.RequirementDef> reqByKey = new LinkedHashMap<>();
@@ -440,6 +495,103 @@ public class SkillPackageResolver {
         } catch (Exception e) {
             log.warn("Manifest/feature evaluation failed for skill '{}': {}",
                     resolved.getName(), e.getMessage());
+        }
+    }
+
+    /**
+     * RFC-090 §14.4 — register / refresh / deregister wrapper tools
+     * for a single knowledge skill.
+     *
+     * <p>Behaviour:
+     * <ul>
+     *   <li>{@code type != knowledge} or skill disabled → deregister
+     *       any prior wrappers, leave {@code allowedTools} alone.</li>
+     *   <li>{@code bind_kb} unresolvable → deregister + emit warning;
+     *       feature evaluation will then mark the skill SETUP_NEEDED.</li>
+     *   <li>Otherwise: deregister prior set, register fresh, append
+     *       wrapper names to {@code manifest.allowedTools} so
+     *       {@code getEffectiveAllowedTools()} surfaces them.</li>
+     * </ul>
+     *
+     * <p>Wrappers are registered as plugin tools with an availability
+     * supplier that returns true while the entity stays enabled. That
+     * way a toggle-off doesn't require an explicit re-resolve to hide
+     * the tools — the supplier is evaluated each time the agent tool
+     * set is built.
+     */
+    private void applyKnowledgeWrappers(ResolvedSkill resolved, SkillManifest manifest) {
+        boolean isKnowledge = "knowledge".equalsIgnoreCase(manifest.getType())
+                && manifest.getKnowledge() != null
+                && manifest.getKnowledge().getBindKb() != null
+                && !manifest.getKnowledge().getBindKb().isBlank();
+        if (!isKnowledge || !resolved.isEnabled()) {
+            deregisterKnowledgeWrappers(resolved.getId());
+            return;
+        }
+
+        Long kbId = manifest.getKnowledge().getBoundKbId();
+        if (kbId == null) {
+            kbId = wikiWrapperFactory.resolveKbId(manifest.getKnowledge().getBindKb());
+            if (kbId == null) {
+                log.warn("Skill '{}' has type=knowledge but bind_kb '{}' did not resolve to a KB",
+                        resolved.getName(), manifest.getKnowledge().getBindKb());
+                deregisterKnowledgeWrappers(resolved.getId());
+                // Still surface the resolution failure as a missing
+                // requirement so the UI shows the skill as
+                // SETUP_NEEDED rather than READY-but-broken.
+                resolved.setMissingDependencies(java.util.List.of(
+                        "kb:" + manifest.getKnowledge().getBindKb()));
+                return;
+            }
+            manifest.getKnowledge().setBoundKbId(kbId);
+        }
+
+        // Fresh build to keep wrapper state in lockstep with the
+        // current kbId — if the user repointed bind_kb, the old
+        // wrappers must go.
+        deregisterKnowledgeWrappers(resolved.getId());
+
+        java.util.List<ToolCallback> wrappers = wikiWrapperFactory.buildWrappers(manifest, kbId);
+        if (wrappers.isEmpty()) {
+            return;
+        }
+        java.util.Set<String> registered = new java.util.LinkedHashSet<>();
+        Long entityId = resolved.getId();
+        for (ToolCallback cb : wrappers) {
+            String name = cb.getToolDefinition().name();
+            registered.add(name);
+            // Availability supplier: skill must still resolve to an
+            // enabled row. Worst case: a disable racing with a tool
+            // call simply returns "tool unavailable" for one turn.
+            toolRegistry.registerPluginTool(cb, () ->
+                    entityId != null && resolved.isEnabled());
+        }
+        if (entityId != null) {
+            registeredWrappers.put(entityId, registered);
+        }
+
+        // Make wrapper names visible to ResolvedSkill.getEffectiveAllowedTools.
+        // We *append* rather than replace so a knowledge skill can also
+        // declare extra allowed-tools alongside the auto-generated KB
+        // surface (Q9 in §10.2 答 ✅).
+        java.util.List<String> mergedAllowed = new java.util.ArrayList<>(
+                manifest.getAllowedTools() == null ? java.util.List.of() : manifest.getAllowedTools());
+        for (String wrapperName : wikiWrapperFactory.wrapperNames(manifest)) {
+            if (!mergedAllowed.contains(wrapperName)) mergedAllowed.add(wrapperName);
+        }
+        manifest.setAllowedTools(mergedAllowed);
+    }
+
+    private void deregisterKnowledgeWrappers(Long skillId) {
+        if (skillId == null) return;
+        java.util.Set<String> previous = registeredWrappers.remove(skillId);
+        if (previous == null || previous.isEmpty()) return;
+        for (String name : previous) {
+            try {
+                toolRegistry.unregisterPluginTool(name);
+            } catch (Exception e) {
+                log.debug("unregister wrapper {} failed: {}", name, e.getMessage());
+            }
         }
     }
 

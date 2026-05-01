@@ -78,6 +78,28 @@ public class SkillRuntimeService {
     }
 
     /**
+     * RFC-090 §14.1 — single source of truth for "is this resolved
+     * skill currently exposable to an agent". Both the global
+     * {@link #refreshActiveSkills()} cache and the per-agent
+     * {@link #buildSkillPromptEnhancement(Set)} branch route through
+     * here so the two views can never disagree.
+     *
+     * <p>Rules:
+     * <ol>
+     *   <li>row enabled, runtime resolved, not security-blocked — required</li>
+     *   <li>manifest present → at least one feature READY ({@code hasAnyActiveFeature})</li>
+     *   <li>manifest absent (legacy SKILL.md) → fall back to
+     *       {@code dependencyReady} so old skills behave unchanged</li>
+     * </ol>
+     */
+    public static boolean passesActiveGate(ResolvedSkill s) {
+        if (s == null) return false;
+        if (!s.isEnabled() || !s.isRuntimeAvailable() || s.isSecurityBlocked()) return false;
+        if (s.getManifest() == null) return s.isDependencyReady();
+        return s.hasAnyActiveFeature();
+    }
+
+    /**
      * 获取当前启用的技能列表（运行时视图）
      */
     public List<ResolvedSkill> getActiveSkills() {
@@ -101,15 +123,7 @@ public class SkillRuntimeService {
 
         List<ResolvedSkill> resolved = enabledSkills.stream()
             .map(packageResolver::resolve)
-            .filter(ResolvedSkill::isEnabled)
-            .filter(ResolvedSkill::isRuntimeAvailable)
-            .filter(s -> !s.isSecurityBlocked())
-            // RFC-090 §14.1 — features-aware gate. When a manifest is
-            // present, require at least one READY feature. Legacy skills
-            // (no manifest) fall back to the old dependencyReady boolean.
-            .filter(s -> s.getManifest() == null
-                    ? s.isDependencyReady()
-                    : s.hasAnyActiveFeature())
+            .filter(SkillRuntimeService::passesActiveGate)
             .collect(Collectors.toList());
 
         activeSkillsCache.put(CACHE_KEY, resolved);
@@ -169,15 +183,16 @@ public class SkillRuntimeService {
     public String buildSkillPromptEnhancement(Set<Long> boundSkillIds) {
         List<ResolvedSkill> activeSkills;
         if (boundSkillIds != null) {
-            // Per-agent 过滤：从全局 enabled skills 中按 ID 过滤
+            // Per-agent 过滤：从全局 enabled skills 中按 ID 过滤。RFC-090
+            // §14.1 — must use the same features-aware gate as
+            // refreshActiveSkills() so legacy dependencyReady drift
+            // doesn't silently let setup-needed manifest skills through
+            // (or hide partially-ready features that should be visible).
             List<SkillEntity> enabledSkills = skillService.listEnabledSkills();
             activeSkills = enabledSkills.stream()
                     .filter(s -> boundSkillIds.contains(s.getId()))
                     .map(packageResolver::resolve)
-                    .filter(ResolvedSkill::isEnabled)
-                    .filter(ResolvedSkill::isRuntimeAvailable)
-                    .filter(s -> !s.isSecurityBlocked())
-                    .filter(ResolvedSkill::isDependencyReady)
+                    .filter(SkillRuntimeService::passesActiveGate)
                     .collect(java.util.stream.Collectors.toList());
         } else {
             activeSkills = getActiveSkills();

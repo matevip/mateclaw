@@ -163,19 +163,39 @@ public class ResolvedSkill {
 
         Set<String> out = new LinkedHashSet<>();
         Set<String> active = activeFeatures == null ? Set.of() : activeFeatures;
-        boolean anyFeatureUsedInheritance = false;
+
+        // First pass: collect tools claimed by *any* feature that
+        // declares an explicit tool subset. Anything in this set is
+        // owned by a specific feature, so the inherit branch below must
+        // exclude these unless their owning feature is READY.
+        // RFC-090 §14.2 / §10.2 Q8 — the LLM must not see tools that
+        // belong to a SETUP_NEEDED / UNSUPPORTED feature.
+        Set<String> claimedByAnyFeature = new LinkedHashSet<>();
+        Set<String> claimedByActive = new LinkedHashSet<>();
         for (SkillManifest.FeatureDef f : manifest.getFeatures()) {
-            if (!active.contains(f.getId())) continue;
-            if (f.getTools() == null || f.getTools().isEmpty()) {
-                // Inherit manifest-level allowed-tools for any active
-                // feature that doesn't carve out a tool subset.
-                anyFeatureUsedInheritance = true;
-                continue;
-            }
-            out.addAll(f.getTools());
+            List<String> tools = f.getTools();
+            if (tools == null || tools.isEmpty()) continue;
+            claimedByAnyFeature.addAll(tools);
+            if (active.contains(f.getId())) claimedByActive.addAll(tools);
         }
-        if (anyFeatureUsedInheritance) {
-            out.addAll(base);
+        out.addAll(claimedByActive);
+
+        // Second pass: any READY feature with no explicit tool list
+        // means "inherit manifest-level allowed-tools" — but inheritance
+        // is *fenced*: it doesn't pull in tools that another feature
+        // already claimed (and isn't itself READY).
+        boolean anyInheritor = manifest.getFeatures().stream().anyMatch(
+                f -> active.contains(f.getId())
+                        && (f.getTools() == null || f.getTools().isEmpty()));
+        if (anyInheritor) {
+            for (String t : base) {
+                if (claimedByAnyFeature.contains(t) && !claimedByActive.contains(t)) {
+                    // This tool belongs to a feature that's not READY —
+                    // inheritance must NOT re-expose it.
+                    continue;
+                }
+                out.add(t);
+            }
         }
         return out;
     }

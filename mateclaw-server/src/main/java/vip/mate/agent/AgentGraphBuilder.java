@@ -151,17 +151,28 @@ public class AgentGraphBuilder {
         Set<String> boundTools = agentBindingService.getEffectiveToolNames(entity.getId());
         toolSet = toolSet.withAllowedToolsOnly(boundTools); // null = 全局默认
 
-        // 统一使用全局默认模型（AgentEntity.modelName 为历史残留字段，不参与运行时选择）
-        ModelConfigEntity runtimeModel;
+        // RFC-090 §9.2 调整 C — pick a primary model that satisfies
+        // the agent's bound-skill requires-model. Falls back to the
+        // global default when no preferred provider satisfies, so the
+        // existing "no default model" error path stays intact.
+        ModelConfigEntity globalDefault;
         try {
-            runtimeModel = modelConfigService.getDefaultModel();
+            globalDefault = modelConfigService.getDefaultModel();
         } catch (Exception e) {
             throw new MateClawException("err.agent.no_default_model", "无法构建 Agent：请先在「设置 → 模型」中配置并启用默认模型");
         }
-
-        // RFC-090 §9.2 调整 C — log a warning when the chosen primary model
-        // doesn't satisfy the union of bound skills' requires-model. This is
-        // diagnostics only; the chain order isn't rewritten yet.
+        ModelConfigEntity runtimeModel;
+        try {
+            runtimeModel = providerRouter.selectPrimary(entity.getId(), globalDefault);
+            if (runtimeModel == null) runtimeModel = globalDefault;
+        } catch (Exception e) {
+            log.debug("[ProviderRouter] primary selection failed, falling back to global default: {}",
+                    e.getMessage());
+            runtimeModel = globalDefault;
+        }
+        // Even after the upgrade, log a WARN when the chosen primary
+        // still doesn't satisfy needs (e.g. no preferred provider was
+        // capable). The diagnostic is observability-only.
         try {
             providerRouter.diagnosePrimary(entity.getId(), runtimeModel);
         } catch (Exception e) {
@@ -728,6 +739,16 @@ public class AgentGraphBuilder {
         if (!preferred.isEmpty()) {
             providers = reorderByPreferences(providers, preferred);
             log.debug("[LlmFailover] agent={} preferences={} -> chain head reordered", agentId, preferred);
+        }
+
+        // RFC-090 §9.2 调整 C — second-pass reorder: lift providers
+        // that satisfy the bound-skill capability set (vision / video /
+        // audio) ahead of those that don't. Stable otherwise so the
+        // user-preferred order still wins among capable providers.
+        try {
+            providers = new ArrayList<>(providerRouter.reorderForCapabilities(agentId, providers));
+        } catch (Exception e) {
+            log.debug("[ProviderRouter] chain reorder failed: {}", e.getMessage());
         }
 
         List<vip.mate.llm.failover.FallbackEntry> chain = new ArrayList<>();
