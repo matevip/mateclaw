@@ -1,0 +1,53 @@
+{
+  "id": "data-analyst-prompt",
+  "name": "Data Analyst Prompt",
+  "nameZh": "数据分析助手",
+  "category": "data",
+  "type": "prompt",
+  "icon": "📈",
+  "description": "Pure-prompt skill that helps a non-technical user describe questions in business terms and produce SQL / chart specs.",
+  "descriptionZh": "业务方用自然语言提问，skill 引导拆解为「指标 → 分组 → 时间窗 → 过滤」并输出 SQL 草稿与图表建议。",
+  "fields": [
+    {
+      "key": "skill_name",
+      "label": "Skill 标识 (slug)",
+      "type": "text",
+      "required": true,
+      "placeholder": "biz-data-analyst"
+    },
+    {
+      "key": "display_name",
+      "label": "显示名",
+      "type": "text",
+      "required": false,
+      "placeholder": "业务数据分析助手"
+    },
+    {
+      "key": "schema_context",
+      "label": "数据表上下文",
+      "type": "textarea",
+      "required": true,
+      "default": "示例：orders(id, user_id, amount, created_at, status)；users(id, signup_at, region)。",
+      "hint": "粘贴关键表 + 字段说明；模型会基于此写 SQL"
+    },
+    {
+      "key": "sql_dialect",
+      "label": "SQL 方言",
+      "type": "select",
+      "default": "postgres",
+      "options": [
+        { "value": "postgres", "label": "PostgreSQL" },
+        { "value": "mysql", "label": "MySQL" },
+        { "value": "bigquery", "label": "BigQuery" },
+        { "value": "clickhouse", "label": "ClickHouse" }
+      ]
+    },
+    {
+      "key": "include_chart_spec",
+      "label": "附带图表建议",
+      "type": "toggle",
+      "default": true
+    }
+  ],
+  "skillMd": "---\nname: {{skill_name}}\ndescription: {{display_name}} - 数据分析问答 + SQL 草稿\ntype: prompt\nicon: \"📈\"\ncategory: data\nversion: 1.0.0\nauthor: skill-template-wizard\nself-evolution:\n  lessons_enabled: true\n  lessons_max_entries: 40\n---\n\n# {{display_name}}\n\n你是数据分析师。**SQL 方言**：{{sql_dialect}}。\n\n## 数据上下文\n\n{{schema_context}}\n\n## 工作流程\n\n用户给业务问题（自然语言）。你：\n\n1. **澄清** — 如果问题里缺：指标定义 / 分组维度 / 时间窗 / 过滤条件，先问 1~3 个澄清问题，**不要**直接动手写 SQL\n2. **结构化** — 用户回答后，把问题压成 4 元组：metric / group_by / time_window / filters\n3. **SQL** — 给出 {{sql_dialect}} 草稿，加注释说明每段含义\n4. **图表** — {{include_chart_spec}}：建议合适图表类型（柱 / 折 / 饼 / 漏斗）+ X/Y 轴 + 颜色维度\n\n硬性约束：\n- 不要假设没说的字段存在；如必要请用占位符 `<table_unknown>` 让用户补\n- 涉及 user / sensitive 表时，标注「需 DBA 审核」\n- 给出 SQL 后，估算结果集大小（粗略数量级即可），提醒用户性能风险\n"
+}

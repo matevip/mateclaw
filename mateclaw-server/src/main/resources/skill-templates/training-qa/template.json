@@ -1,0 +1,52 @@
+{
+  "id": "training-qa",
+  "name": "Internal Training Q&A",
+  "nameZh": "内训知识问答",
+  "category": "data",
+  "type": "knowledge",
+  "icon": "🎓",
+  "description": "Q&A skill for company / team internal training material — onboarding, SOPs, product knowledge.",
+  "descriptionZh": "内训讲师 / HR / 产品经理可绑定内训资料库，让员工自助查询 SOP / 入职手册 / 产品规格。",
+  "fields": [
+    {
+      "key": "skill_name",
+      "label": "Skill 标识 (slug)",
+      "type": "text",
+      "required": true,
+      "placeholder": "onboarding-qa"
+    },
+    {
+      "key": "display_name_zh",
+      "label": "显示名 (中文)",
+      "type": "text",
+      "required": false,
+      "placeholder": "新人入职指南"
+    },
+    {
+      "key": "kb_slug",
+      "label": "Wiki KB",
+      "type": "kb-picker",
+      "required": true
+    },
+    {
+      "key": "topic_scope",
+      "label": "知识范围",
+      "type": "textarea",
+      "required": true,
+      "default": "公司内训资料：入职流程、岗位 SOP、产品规格说明。",
+      "hint": "用于 system prompt，让模型知道边界"
+    },
+    {
+      "key": "tone",
+      "label": "回答语气",
+      "type": "select",
+      "default": "friendly",
+      "options": [
+        { "value": "friendly", "label": "亲切友好" },
+        { "value": "concise", "label": "简洁高效" },
+        { "value": "formal", "label": "正式严谨" }
+      ]
+    }
+  ],
+  "skillMd": "---\nname: {{skill_name}}\ndescription: {{display_name_zh}} - 公司内训知识问答\ntype: knowledge\nicon: \"🎓\"\ncategory: data\nversion: 1.0.0\nauthor: skill-template-wizard\nknowledge:\n  bind_kb: {{kb_slug}}\n  retrieval: hybrid\n  top_k: 6\n  citation: optional\n  rerank: true\nself-evolution:\n  lessons_enabled: true\n  lessons_max_entries: 30\n---\n\n# {{display_name_zh}}\n\n你是公司内训助手。**知识范围**：{{topic_scope}}\n\n回答语气：{{tone}}。\n\n回答原则：\n- 优先用 KB 中的内容回答，并标注来源章节\n- 范围之外的问题：礼貌告知「这超出我的范围，请咨询 HR / 直属经理」\n- 找不到答案时，给出可能相关的章节列表，让用户判断\n"
+}

@@ -1,0 +1,56 @@
+{
+  "id": "crm-assistant",
+  "name": "CRM Assistant",
+  "nameZh": "CRM 助手",
+  "category": "data",
+  "type": "prompt",
+  "icon": "📇",
+  "description": "Pure-prompt skill that helps salespeople triage leads, write outreach drafts, and summarize past interactions.",
+  "descriptionZh": "销售 BD 用：基于客户档案与历史互动整理出 lead 优先级、外联草稿、跟进节点。",
+  "fields": [
+    {
+      "key": "skill_name",
+      "label": "Skill 标识 (slug)",
+      "type": "text",
+      "required": true,
+      "placeholder": "saas-bd-helper"
+    },
+    {
+      "key": "display_name",
+      "label": "显示名",
+      "type": "text",
+      "required": false,
+      "placeholder": "SaaS BD 助手"
+    },
+    {
+      "key": "industry_focus",
+      "label": "行业聚焦",
+      "type": "text",
+      "required": false,
+      "default": "B2B SaaS",
+      "placeholder": "B2B SaaS / 制造业 / 教育"
+    },
+    {
+      "key": "outreach_style",
+      "label": "外联风格",
+      "type": "select",
+      "default": "consultative",
+      "options": [
+        { "value": "consultative", "label": "顾问式（先问诊后开方）" },
+        { "value": "value_based", "label": "价值主导（直陈 ROI）" },
+        { "value": "warm", "label": "关系式（先建联，后谈生意）" }
+      ]
+    },
+    {
+      "key": "output_language",
+      "label": "草稿语言",
+      "type": "select",
+      "default": "zh",
+      "options": [
+        { "value": "zh", "label": "中文" },
+        { "value": "en", "label": "English" }
+      ]
+    }
+  ],
+  "skillMd": "---\nname: {{skill_name}}\ndescription: {{display_name}} - CRM lead triage & outreach drafting\ntype: prompt\nicon: \"📇\"\ncategory: data\nversion: 1.0.0\nauthor: skill-template-wizard\nself-evolution:\n  lessons_enabled: true\n---\n\n# {{display_name}}\n\n你是资深 BD 顾问。**行业**：{{industry_focus}}。**外联风格**：{{outreach_style}}。**输出语言**：{{output_language_label}}。\n\n核心能力：\n\n1. **Lead Triage** — 用户给一组 lead 信息（公司 / 角色 / 历史互动），按 ICP 匹配度 + 紧急度排出优先级，每条给出 1 句理由\n2. **Outreach Draft** — 根据用户背景写第一封外联邮件 / 短信，长度 80~150 字，开头自然不套话\n3. **Follow-up Plan** — 给出未来 7 天的跟进节点（每个节点：触发条件 + 动作 + 话术要点）\n\n约束：\n- 不要承诺产品没有的能力\n- 价格相关的承诺一律标注「需销售经理确认」\n- 公开数据来源（领英 / 财报）注明出处\n"
+}

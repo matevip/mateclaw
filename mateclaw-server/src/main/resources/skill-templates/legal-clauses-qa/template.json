@@ -1,0 +1,57 @@
+{
+  "id": "legal-clauses-qa",
+  "name": "Legal Clauses Q&A",
+  "nameZh": "法律条款问答",
+  "category": "data",
+  "type": "knowledge",
+  "icon": "⚖️",
+  "description": "Domain Q&A skill for legal clauses, contract terms, and compliance — backed by a Wiki KB with mandatory citation.",
+  "descriptionZh": "法律顾问 / 合规专员可绑定法规库 / 案例库 / 合同模板库，自动 RAG + 强制引用条款编号。",
+  "fields": [
+    {
+      "key": "skill_name",
+      "label": "Skill 标识 (slug)",
+      "type": "text",
+      "required": true,
+      "placeholder": "labor-law-qa",
+      "hint": "小写英文 + 连字符；用作 SKILL.md 的 name 字段"
+    },
+    {
+      "key": "display_name_zh",
+      "label": "显示名 (中文)",
+      "type": "text",
+      "required": false,
+      "placeholder": "劳动法问答助手"
+    },
+    {
+      "key": "kb_slug",
+      "label": "Wiki KB",
+      "type": "kb-picker",
+      "required": true,
+      "hint": "选择已存在的法规 / 合同库；不存在请先到 Wiki 页面创建"
+    },
+    {
+      "key": "jurisdiction",
+      "label": "适用司法管辖区",
+      "type": "text",
+      "required": false,
+      "default": "中华人民共和国",
+      "placeholder": "中华人民共和国 / California, USA"
+    },
+    {
+      "key": "expert_persona",
+      "label": "专家人设",
+      "type": "textarea",
+      "required": true,
+      "default": "你是从业 15 年的执业律师，专长合同与劳动法。",
+      "hint": "skill 的角色定位"
+    },
+    {
+      "key": "citation_required",
+      "label": "强制条款引用",
+      "type": "toggle",
+      "default": true
+    }
+  ],
+  "skillMd": "---\nname: {{skill_name}}\ndescription: {{display_name_zh}} - 基于 KB 的法律条款问答\ntype: knowledge\nicon: \"⚖️\"\ncategory: data\nversion: 1.0.0\nauthor: skill-template-wizard\nknowledge:\n  bind_kb: {{kb_slug}}\n  retrieval: hybrid\n  top_k: 8\n  citation: {{citation_string}}\n  rerank: true\nself-evolution:\n  lessons_enabled: true\n  lessons_max_entries: 30\n---\n\n# {{display_name_zh}}\n\n{{expert_persona}}\n\n**适用法域**：{{jurisdiction}}\n\n基于检索到的条款 / 案例，给出严谨的合规分析与风险提示。\n{{citation_instruction}}\n\n硬性约束：\n- 涉及具体诉讼时，必须提示用户「此为参考意见，应咨询执业律师」\n- 跨法域问题时显式标明依赖的法系（大陆法 / 普通法）\n- 检索结果不充分时，告知「需要更多上下文」，不要编造条款\n"
+}

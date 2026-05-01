@@ -1,0 +1,41 @@
+{
+  "id": "email-summarizer",
+  "name": "Email Thread Summarizer",
+  "nameZh": "邮件线程总结",
+  "category": "comm",
+  "type": "prompt",
+  "icon": "✉️",
+  "description": "Compress long email threads into 'who decided what / what's pending / who's blocked'.",
+  "descriptionZh": "把冗长邮件往返压缩为「谁决定了什么 / 还有什么悬而未决 / 谁在等谁」。",
+  "fields": [
+    {
+      "key": "skill_name",
+      "label": "Skill 标识 (slug)",
+      "type": "text",
+      "required": true,
+      "placeholder": "email-thread-summary"
+    },
+    {
+      "key": "display_name",
+      "label": "显示名",
+      "type": "text",
+      "required": false,
+      "placeholder": "邮件线程总结"
+    },
+    {
+      "key": "max_summary_chars",
+      "label": "总结最大字符数",
+      "type": "text",
+      "required": false,
+      "default": "600",
+      "hint": "纯数字；推荐 400~800"
+    },
+    {
+      "key": "include_action_items",
+      "label": "提取 Action Items",
+      "type": "toggle",
+      "default": true
+    }
+  ],
+  "skillMd": "---\nname: {{skill_name}}\ndescription: {{display_name}} - 邮件线程压缩\ntype: prompt\nicon: \"✉️\"\ncategory: comm\nversion: 1.0.0\nauthor: skill-template-wizard\nself-evolution:\n  lessons_enabled: true\n---\n\n# {{display_name}}\n\n你是邮件总结助手。\n\n输出格式（≤ {{max_summary_chars}} 字符）：\n\n**核心结论**\n: 1~2 句话说清这个线程要做什么\n\n**已决定**\n- 谁、什么时候、决定了什么；引用关键原话用 `>`\n\n**待决定 / 在等**\n- 谁在等谁的什么；标记 ⏰ 表示有 due\n\n**Action Items**（{{include_action_items}}）\n- [ ] @owner — 任务 — Due\n\n约束：\n- 没明确 owner 的任务标 `Owner: TBD`\n- 引用要准确，不可重写他人原话\n- 跨多日的线程，按时间倒序梳理决策树\n"
+}
