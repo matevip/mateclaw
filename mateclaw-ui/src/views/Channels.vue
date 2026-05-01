@@ -170,7 +170,8 @@
 <script setup lang="ts">
 import { ref, computed, defineAsyncComponent, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { channelApi, agentApi } from '@/api'
 import type { Channel, Agent } from '@/types'
 
@@ -473,11 +474,12 @@ async function handleSave(payload: Partial<Channel>) {
 // ==================== Toggle / delete ====================
 
 async function deleteChannel(id: string | number) {
-  try {
-    await ElMessageBox.confirm(t('channels.messages.deleteConfirm'), t('channels.messages.deleteTitle'), { type: 'warning' })
-  } catch {
-    return
-  }
+  const ok = await mcConfirm({
+    title: t('channels.messages.deleteTitle'),
+    message: t('channels.messages.deleteConfirm'),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await channelApi.delete(id)
     await loadChannels()

@@ -154,7 +154,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { acpApi } from '@/api/index'
 
 interface AcpEndpoint {
@@ -267,10 +268,12 @@ async function saveEndpoint() {
 }
 
 async function removeEndpoint(ep: AcpEndpoint) {
-  try {
-    await ElMessageBox.confirm(t('acp.deleteConfirm', { name: ep.name }),
-        t('acp.deleteTitle'), { type: 'warning' })
-  } catch { return }
+  const ok = await mcConfirm({
+    title: t('acp.deleteTitle'),
+    message: t('acp.deleteConfirm', { name: ep.name }),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await acpApi.delete(ep.id)
     await loadEndpoints()

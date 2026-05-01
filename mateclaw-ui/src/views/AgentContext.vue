@@ -205,7 +205,8 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { agentApi, agentContextApi } from '@/api/index'
 import type { Agent, WorkspaceFile } from '@/types/index'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
@@ -392,13 +393,12 @@ async function toggleFileEnabled(file: WorkspaceFile) {
 async function confirmDeleteFile() {
   if (!selectedFile.value) return
   const name = selectedFile.value.filename
-  try {
-    await ElMessageBox.confirm(
-      t('agentContext.deleteConfirm', { name }),
-      t('common.delete'),
-      { type: 'warning' }
-    )
-  } catch { return }
+  const ok = await mcConfirm({
+    title: t('common.delete'),
+    message: t('agentContext.deleteConfirm', { name }),
+    tone: 'danger',
+  })
+  if (!ok) return
 
   try {
     await agentContextApi.deleteFile(selectedAgentId.value, name)

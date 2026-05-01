@@ -1,6 +1,7 @@
 import { computed, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { modelApi } from '@/api'
 import type { ProviderInfo } from '@/types'
 import { safeParseJson } from '@/utils/safeJson'
@@ -228,19 +229,13 @@ export function useProviderForm(deps: ListDeps) {
   }
 
   async function deleteProvider(provider: ProviderInfo) {
-    try {
-      await ElMessageBox.confirm(
-        t('settings.model.deleteConfirm', { name: provider.name }),
-        t('common.confirm'),
-        {
-          type: 'warning',
-          confirmButtonText: t('common.delete'),
-          cancelButtonText: t('common.cancel'),
-        },
-      )
-    } catch {
-      return false
-    }
+    const ok = await mcConfirm({
+      title: t('common.confirm'),
+      message: t('settings.model.deleteConfirm', { name: provider.name }),
+      confirmText: t('common.delete'),
+      tone: 'danger',
+    })
+    if (!ok) return false
     await modelApi.deleteCustomProvider(provider.id)
     await deps.loadProviders()
     return true

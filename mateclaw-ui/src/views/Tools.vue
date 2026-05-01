@@ -130,7 +130,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { toolApi } from '@/api/index'
 import type { Tool } from '@/types/index'
 
@@ -186,7 +187,12 @@ async function saveTool() {
 }
 
 async function deleteTool(id: string | number) {
-  try { await ElMessageBox.confirm(t('tools.messages.deleteConfirm'), t('tools.messages.deleteTitle'), { type: 'warning' }) } catch { return }
+  const ok = await mcConfirm({
+    title: t('tools.messages.deleteTitle'),
+    message: t('tools.messages.deleteConfirm'),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await toolApi.delete(id)
     await loadTools()

@@ -340,7 +340,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { agentApi, agentBindingApi, modelApi, skillApi, toolApi, templateApi } from '@/api/index'
 import type { Agent } from '@/types/index'
 import SkillIcon from '@/components/common/SkillIcon.vue'
@@ -590,11 +591,12 @@ async function saveAgent() {
 }
 
 async function deleteAgent(agent: Agent) {
-  try {
-    await ElMessageBox.confirm(t('agents.messages.deleteConfirm'), t('agents.actions.delete'), { type: 'warning' })
-  } catch {
-    return
-  }
+  const ok = await mcConfirm({
+    title: t('agents.actions.delete'),
+    message: t('agents.messages.deleteConfirm'),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await agentApi.delete(agent.id)
     ElMessage.success(t('agents.messages.deleteSuccess'))

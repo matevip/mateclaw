@@ -315,7 +315,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { useCronJobStore } from '@/stores/useCronJobStore'
 import { useAgentStore } from '@/stores/useAgentStore'
 import type { CronJob } from '@/types/index'
@@ -438,12 +439,12 @@ async function saveJob() {
 }
 
 async function handleDelete(job: CronJob) {
-  try {
-    await ElMessageBox.confirm(
-      t('cronJobs.messages.deleteConfirm', { name: job.name }),
-      { type: 'warning' },
-    )
-  } catch { return }
+  const ok = await mcConfirm({
+    title: t('common.delete'),
+    message: t('cronJobs.messages.deleteConfirm', { name: job.name }),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await store.deleteJob(job.id)
     ElMessage.success(t('cronJobs.messages.deleteSuccess'))

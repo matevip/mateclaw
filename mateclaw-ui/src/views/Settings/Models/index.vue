@@ -178,7 +178,8 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { useRoute, useRouter } from 'vue-router'
 import type { ProviderInfo, ProviderModelInfo } from '@/types'
 import { useProviders } from './useProviders'
@@ -299,20 +300,13 @@ onMounted(async () => {
 })
 
 async function onDisableProvider(provider: ProviderInfo) {
-  // ElMessageBox throws on cancel — that's our cancel branch.
-  try {
-    await ElMessageBox.confirm(
-      t('settings.model.disableConfirm', { name: provider.name }),
-      t('common.confirm'),
-      {
-        type: 'warning',
-        confirmButtonText: t('settings.model.disable'),
-        cancelButtonText: t('common.cancel'),
-      },
-    )
-  } catch {
-    return
-  }
+  const ok = await mcConfirm({
+    title: t('common.confirm'),
+    message: t('settings.model.disableConfirm', { name: provider.name }),
+    confirmText: t('settings.model.disable'),
+    tone: 'danger',
+  })
+  if (!ok) return
   await disableProvider(provider.id)
 }
 
