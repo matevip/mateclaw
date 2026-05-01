@@ -175,6 +175,15 @@ public class SkillPackageResolver {
         // RFC-090 §14.6 — column projection from manifest (SoT).
         // Snapshot pre-projection values so we know which legacy columns
         // need a row-level update. Skipped when the manifest is null.
+        //
+        // Icon is a special case: the UI lets users pick a custom icon
+        // (emoji / pixelarticons / URL) per skill. If we unconditionally
+        // re-project the manifest icon every resolve, the user's pick
+        // gets silently reverted as soon as the runtime cache refreshes.
+        // So we only seed the icon from manifest when the row's icon is
+        // empty — meaning user-set icons stick, and clearing the icon
+        // ("no icon" in the picker) explicitly opts back into the
+        // manifest default on the next resolve.
         String newSkillType = entity.getSkillType();
         String newIcon = entity.getIcon();
         String newVersion = entity.getVersion();
@@ -182,7 +191,10 @@ public class SkillPackageResolver {
         if (resolved.getManifest() != null) {
             SkillManifest m = resolved.getManifest();
             if (m.getType() != null && !m.getType().isBlank()) newSkillType = m.getType();
-            if (m.getIcon() != null && !m.getIcon().isBlank()) newIcon = m.getIcon();
+            boolean rowIconBlank = entity.getIcon() == null || entity.getIcon().isBlank();
+            if (rowIconBlank && m.getIcon() != null && !m.getIcon().isBlank()) {
+                newIcon = m.getIcon();
+            }
             if (m.getVersion() != null && !m.getVersion().isBlank()) newVersion = m.getVersion();
             if (m.getAuthor() != null && !m.getAuthor().isBlank()) newAuthor = m.getAuthor();
         }

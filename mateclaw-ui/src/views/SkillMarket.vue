@@ -80,7 +80,11 @@
           >
             <div class="skill-header">
               <div class="skill-icon-wrap" :class="getSkillIconBg(skill.skillType)">
-                <span class="skill-icon">{{ skill.icon || getSkillIcon(skill.skillType) }}</span>
+                <SkillIcon
+                  :value="skill.icon"
+                  :fallback="getSkillIcon(skill.skillType)"
+                  :size="22"
+                />
               </div>
               <div class="skill-meta">
                 <h3 class="skill-name">{{ resolveSkillName(skill) }}</h3>
@@ -187,7 +191,9 @@
           <div class="mc-drawer-panel" :class="{ 'mc-drawer-panel--wide': editingBody }">
             <div class="mc-drawer-header">
               <div class="mc-drawer-header__meta">
-                <span class="mc-drawer-icon-shell">{{ detailSkill.icon || '🛠️' }}</span>
+                <span class="mc-drawer-icon-shell">
+                  <SkillIcon :value="detailSkill.icon" :size="24" />
+                </span>
                 <div>
                   <h3 class="mc-drawer-title">{{ resolveSkillName(detailSkill) }}</h3>
                   <p class="mc-drawer-subtitle">
@@ -283,7 +289,6 @@
             <div class="meta-chips">
               <span class="meta-chip"><span class="meta-chip-label">slug</span><code>{{ detailSkill.name }}</code></span>
               <span class="meta-chip"><span class="meta-chip-label">{{ t('skills.fields.type') }}</span>{{ detailSkill.skillType || '—' }}</span>
-              <span v-if="detailSkill.icon" class="meta-chip"><span class="meta-chip-label">{{ t('skills.fields.icon') }}</span>{{ detailSkill.icon }}</span>
               <span v-if="detailSkill.version" class="meta-chip"><span class="meta-chip-label">{{ t('skills.fields.version') }}</span>v{{ detailSkill.version }}</span>
               <span v-if="detailSkill.author" class="meta-chip"><span class="meta-chip-label">{{ t('skills.fields.author') }}</span>{{ detailSkill.author }}</span>
             </div>
@@ -316,6 +321,28 @@
             <p v-if="isVirtualSkill" class="detail-readonly-banner">{{ t('skills.detail.virtualReadonly') }}</p>
             <p v-else class="detail-hint">{{ t('skills.detail.displayOverridesHint') }}</p>
 
+            <!-- Icon row spans both modes — view shows the resolved
+                 glyph + label; edit turns the tile into a "pick"
+                 affordance that opens the picker. -->
+            <div class="identity-icon-row">
+              <SkillIcon :value="editingIdentity ? editForm.icon : detailSkill.icon" :size="40" class="identity-icon-preview" />
+              <div class="identity-icon-meta">
+                <span class="identity-icon-label">{{ t('skills.fields.icon') }}</span>
+                <code v-if="(editingIdentity ? editForm.icon : detailSkill.icon)" class="identity-icon-value">
+                  {{ editingIdentity ? editForm.icon : detailSkill.icon }}
+                </code>
+                <span v-else class="identity-icon-empty">{{ t('common.iconPicker.none') }}</span>
+              </div>
+              <button
+                v-if="editingIdentity"
+                type="button"
+                class="detail-edit-btn"
+                @click="openIconPickerFor('edit')"
+              >
+                {{ t('common.iconPicker.pickerOpen') }}
+              </button>
+            </div>
+
             <dl v-if="!editingIdentity" class="identity-grid">
               <div class="kv"><dt>{{ t('skills.fields.nameZh') }}</dt><dd>{{ detailSkill.nameZh || '—' }}</dd></div>
               <div class="kv"><dt>{{ t('skills.fields.nameEn') }}</dt><dd>{{ detailSkill.nameEn || '—' }}</dd></div>
@@ -340,6 +367,9 @@
                 <input v-model="editForm.description" class="form-input" :placeholder="t('skills.placeholders.description')" />
               </div>
             </div>
+            <p v-if="editingIdentity && manifestDeclaresIcon" class="detail-readonly-banner">
+              {{ t('common.iconPicker.reprojectionWarning') }}
+            </p>
           </div>
 
           <details class="detail-collapsible">
@@ -545,6 +575,24 @@
         </div>
         <div class="modal-body">
           <p class="modal-hint">{{ t('skills.modal.newSimpleHint') }}</p>
+          <!-- Icon picker affordance — tile up top, mirroring the
+               drawer's identity-icon-row so users see one consistent
+               pattern across create + edit. -->
+          <div class="identity-icon-row identity-icon-row--create">
+            <SkillIcon :value="newForm.icon" :size="40" class="identity-icon-preview" />
+            <div class="identity-icon-meta">
+              <span class="identity-icon-label">{{ t('skills.fields.icon') }}</span>
+              <code v-if="newForm.icon" class="identity-icon-value">{{ newForm.icon }}</code>
+              <span v-else class="identity-icon-empty">{{ t('common.iconPicker.none') }}</span>
+            </div>
+            <button
+              type="button"
+              class="detail-edit-btn"
+              @click="openIconPickerFor('create')"
+            >
+              {{ t('common.iconPicker.pickerOpen') }}
+            </button>
+          </div>
           <div class="form-grid">
             <div class="form-group full-width">
               <label class="form-label">{{ t('skills.fields.name') }} *</label>
@@ -574,6 +622,13 @@
         </div>
       </div>
     </div>
+
+    <!-- Shared icon picker — single instance routed by iconPickerTarget. -->
+    <SkillIconPicker
+      v-model:visible="iconPickerVisible"
+      :model-value="iconPickerTarget === 'create' ? newForm.icon : editForm.icon"
+      @apply="onIconPicked"
+    />
   </div>
 </template>
 
@@ -586,6 +641,8 @@ import type { Skill, SkillRuntimeStatus, SkillSecurityFinding } from '@/types/in
 import ImportHubDialog from '@/components/skill/ImportHubDialog.vue'
 import PreflightInstallDialog from '@/components/skill/PreflightInstallDialog.vue'
 import McPagination from '@/components/common/McPagination.vue'
+import SkillIcon from '@/components/common/SkillIcon.vue'
+import SkillIconPicker from '@/components/common/SkillIconPicker.vue'
 import { mcConfirm } from '@/components/common/useConfirm'
 import { useSkillName } from '@/composables/useSkillName'
 
@@ -645,7 +702,25 @@ const editForm = ref<{
   nameEn: string
   description: string
   tags: string
-}>({ nameZh: '', nameEn: '', description: '', tags: '' })
+  icon: string
+}>({ nameZh: '', nameEn: '', description: '', tags: '', icon: '' })
+
+/** Icon picker visibility — shared between the create modal and the
+ *  drawer Display section. We only ever have one picker open at a time. */
+const iconPickerVisible = ref(false)
+/** Routes the picker's apply event to either the create form or the
+ *  drawer's identity edit, depending on who opened it. */
+type IconPickerTarget = 'create' | 'edit'
+const iconPickerTarget = ref<IconPickerTarget>('edit')
+
+/** Whether the underlying SKILL.md frontmatter has a declared `icon`.
+ *  When true, the resolver will overwrite a row-level icon override on
+ *  the next resolve — we surface a warning so the user knows their
+ *  edit may be ephemeral and should be made in the body instead. */
+const manifestDeclaresIcon = computed(() => {
+  const m = detailManifest.value as { icon?: string } | null
+  return !!(m && typeof m.icon === 'string' && m.icon.trim())
+})
 const editBodyForm = ref<{ skillContent: string; sourceCode: string }>({
   skillContent: '',
   sourceCode: '',
@@ -653,7 +728,7 @@ const editBodyForm = ref<{ skillContent: string; sourceCode: string }>({
 
 /** New-skill modal — pared down to the two questions that *must* be answered
  *  at creation time. Everything else is filled in via the drawer. */
-const newForm = ref<{ name: string; description: string }>({ name: '', description: '' })
+const newForm = ref<{ name: string; description: string; icon: string }>({ name: '', description: '', icon: '' })
 
 /** Virtual MCP-derived skills synthesize their id from
  *  {@link McpSkillBridge#VIRTUAL_ID_BASE} (= 9e18). The DB update path
@@ -898,7 +973,7 @@ async function loadRuntimeStatus() {
 }
 
 function openCreateModal() {
-  newForm.value = { name: '', description: '' }
+  newForm.value = { name: '', description: '', icon: '' }
   showModal.value = true
 }
 
@@ -917,6 +992,7 @@ async function createSkillFromModal() {
     const payload = {
       name: newForm.value.name.trim(),
       description: newForm.value.description.trim(),
+      icon: newForm.value.icon || undefined,
       skillType: 'dynamic',
       version: '1.0.0',
       enabled: true,
@@ -952,8 +1028,22 @@ function startEditIdentity() {
     nameEn: s.nameEn || '',
     description: s.description || '',
     tags: s.tags || '',
+    icon: s.icon || '',
   }
   editingIdentity.value = true
+}
+
+function openIconPickerFor(target: IconPickerTarget) {
+  iconPickerTarget.value = target
+  iconPickerVisible.value = true
+}
+
+function onIconPicked(value: string) {
+  if (iconPickerTarget.value === 'edit') {
+    editForm.value.icon = value
+  } else {
+    newForm.value.icon = value
+  }
 }
 
 function cancelEditIdentity() {
@@ -974,6 +1064,13 @@ async function saveIdentity() {
       nameEn: editForm.value.nameEn,
       description: editForm.value.description,
       tags: editForm.value.tags,
+      // Icon is technically a manifest-projected field, but the
+      // resolver only overwrites when the manifest declares one
+      // (SkillPackageResolver.java:185). Sending it here lets users
+      // override icons for skills whose SKILL.md has no `icon:` and
+      // — for skills that do declare it — the warning above tells
+      // them to expect re-projection.
+      icon: editForm.value.icon,
     }
     const res: any = await skillApi.update(detailSkill.value.id, payload)
     const updated: Skill | undefined = res?.data
@@ -1920,6 +2017,63 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 }
 @media (max-width: 600px) {
   .identity-grid { grid-template-columns: 1fr; }
+}
+
+/* Icon row — preview tile + label + picker button. Used in the drawer
+ * Display section and the create modal so both flows look identical. */
+.identity-icon-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(123, 88, 67, 0.05);
+  margin-bottom: 12px;
+}
+:global(html.dark .identity-icon-row) {
+  background: rgba(255, 255, 255, 0.04);
+}
+.identity-icon-row--create {
+  margin: 4px 0 16px;
+}
+.identity-icon-preview {
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 10px;
+  padding: 4px;
+  box-sizing: content-box;
+  flex-shrink: 0;
+}
+:global(html.dark .identity-icon-preview) {
+  background: rgba(255, 255, 255, 0.08);
+}
+.identity-icon-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.identity-icon-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mc-text-tertiary);
+}
+.identity-icon-value {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--mc-text-primary);
+  background: transparent;
+  padding: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.identity-icon-empty {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--mc-text-tertiary);
 }
 
 /* ============================================================

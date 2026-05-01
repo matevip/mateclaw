@@ -23,6 +23,7 @@
     "marked-highlight": "^2.2.3",
     "mermaid": "^11.14.0",
     "pinia": "^3.0.1",
+    "pixelarticons": "2.1.0",
     "vue": "^3.5.13",
     "vue-i18n": "9.14.4",
     "vue-router": "^4.5.0"

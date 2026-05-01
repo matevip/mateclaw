@@ -234,22 +234,45 @@ public class SkillService {
 
     /**
      * 更新技能
-     * 内置技能只允许修改 enabled、configJson、description
+     * <p>
+     * 内置技能允许修改的字段集合：
+     * <ul>
+     *   <li>{@code enabled} — 启用开关</li>
+     *   <li>{@code configJson} / {@code skillContent} — 运维 fallback 内容</li>
+     *   <li>{@code description} — 文案微调</li>
+     *   <li><b>展示覆盖</b>：{@code icon}、{@code nameZh}、{@code nameEn}、{@code tags}
+     *       — 这些纯前台显示字段，不影响 builtin 的运行时安全性，让用户能为内置 skill
+     *       挑像素图标 / 改本地化显示名而不必碰源码。
+     *       <br>注：{@code icon} 是 manifest 投影字段，会被 SkillPackageResolver
+     *       根据 SKILL.md frontmatter 同步。配套的解析器修改（仅在 row icon 为空时
+     *       才投影）确保用户覆盖能持久化。
+     *   </li>
+     * </ul>
+     * 仍不允许：name / version / author / skillType / builtin —— 这些是身份字段，
+     * 改动会破坏绑定与解析。
      */
     public SkillEntity updateSkill(SkillEntity skill) {
         SkillEntity existing = getSkill(skill.getId());
 
         if (Boolean.TRUE.equals(existing.getBuiltin())) {
-            // 内置技能：只允许修改有限字段
+            // Functional fields
             existing.setEnabled(skill.getEnabled() != null ? skill.getEnabled() : existing.getEnabled());
             existing.setConfigJson(skill.getConfigJson());
             existing.setDescription(skill.getDescription() != null ? skill.getDescription() : existing.getDescription());
-            // builtin skill 也允许更新 skillContent（用于维护 fallback 内容）
             if (skill.getSkillContent() != null) {
                 existing.setSkillContent(skill.getSkillContent());
             }
+            // Display overrides — pure frontend-facing, no runtime impact.
+            // Treat blank-string as an explicit "clear" (so the picker's
+            // "no icon" path reverts the row icon back to the manifest
+            // projection on the next resolve).
+            if (skill.getIcon() != null) existing.setIcon(skill.getIcon());
+            if (skill.getNameZh() != null) existing.setNameZh(skill.getNameZh());
+            if (skill.getNameEn() != null) existing.setNameEn(skill.getNameEn());
+            if (skill.getTags() != null) existing.setTags(skill.getTags());
+
             skillMapper.updateById(existing);
-            log.info("Updated builtin skill (limited): {}", existing.getName());
+            log.info("Updated builtin skill (display overrides allowed): {}", existing.getName());
 
             // builtin skill 也同步 workspace SKILL.md
             syncSkillContentToWorkspace(existing);
