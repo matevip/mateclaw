@@ -9,7 +9,7 @@
         <select v-model="selectedAgentId" class="agent-select" @change="onAgentChange">
           <option value="" disabled>{{ t('agentContext.selectAgent') }}</option>
           <option v-for="agent in agents" :key="agent.id" :value="agent.id">
-            {{ agent.icon || '🤖' }} {{ agent.name }}
+            {{ plainTextIcon(agent.icon) }} {{ agent.name }}
           </option>
         </select>
       </div>
@@ -209,6 +209,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, agentContextApi } from '@/api/index'
 import type { Agent, WorkspaceFile } from '@/types/index'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
+import { plainTextIcon } from '@/composables/usePixelarticons'
 
 const { renderMarkdown } = useMarkdownRenderer()
 

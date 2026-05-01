@@ -45,7 +45,7 @@
             </td>
             <td>
               <div class="agent-cell">
-                <span class="agent-icon-sm">{{ session.agentIcon || '🤖' }}</span>
+                <span class="agent-icon-sm"><SkillIcon :value="session.agentIcon" :size="16" :fallback="'🤖'" /></span>
                 <span>{{ session.agentName || '-' }}</span>
               </div>
             </td>
@@ -97,6 +97,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { conversationApi } from '@/api/index'
 import { channelIconUrl, sourceLabel } from '@/utils/channelSource'
 import type { Conversation } from '@/types/index'
+import SkillIcon from '@/components/common/SkillIcon.vue'
 
 const router = useRouter()
 const { t } = useI18n()

@@ -55,6 +55,16 @@ export type ParsedIcon =
   | { kind: 'empty' }
 
 /**
+ * Plain-text icon glyph for hosts that can't render components — chiefly
+ * `<select><option>`. Returns the emoji as-is, falls back for `pi:` /
+ * URL icons (which would otherwise render as literal `pi:robot` text).
+ */
+export function plainTextIcon(value: string | null | undefined, fallback = '🤖'): string {
+  const parsed = parseIconValue(value)
+  return parsed.kind === 'emoji' ? parsed.value : fallback
+}
+
+/**
  * Decode a stored icon string into a renderable shape. Returns
  * {@code kind: 'empty'} for null/blank so callers can branch on a
  * single discriminator.

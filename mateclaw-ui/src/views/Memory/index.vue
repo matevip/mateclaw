@@ -33,7 +33,7 @@
                   :class="{ active: agent.id === selectedAgentId }"
                   @click="selectAgent(agent)"
                 >
-                  <span class="agent-dropdown-item__icon">{{ agent.icon || '🤖' }}</span>
+                  <span class="agent-dropdown-item__icon"><SkillIcon :value="agent.icon" :size="18" :fallback="'🤖'" /></span>
                   <div class="agent-dropdown-item__info">
                     <span class="agent-dropdown-item__name">{{ agent.name }}</span>
                     <span class="agent-dropdown-item__desc">{{ agent.description || agent.agentType }}</span>
@@ -184,6 +184,7 @@ import { ElMessage } from 'element-plus'
 import { http } from '@/api'
 import { useAgentStore } from '@/stores/useAgentStore'
 import { useMemoryStore, type DreamReportItem } from '@/stores/useMemoryStore'
+import SkillIcon from '@/components/common/SkillIcon.vue'
 import MorningCard from './components/MorningCard.vue'
 import FactList from './components/FactList.vue'
 import MemoryBrowser from './components/MemoryBrowser.vue'

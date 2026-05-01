@@ -525,7 +525,7 @@
           <p v-else-if="detailEmployees.length === 0" class="detail-empty">{{ t('skills.detail.noEmployees') }}</p>
           <ul v-else class="memory-agent-list">
             <li v-for="agent in detailEmployees" :key="agent.id" class="memory-agent-item">
-              <span class="memory-agent-icon">{{ agent.icon || '🤖' }}</span>
+              <span class="memory-agent-icon"><SkillIcon :value="agent.icon" :size="20" :fallback="'🤖'" /></span>
               <div class="memory-agent-info">
                 <span class="memory-agent-name">{{ agent.name }}</span>
                 <span class="memory-agent-binding" :class="`binding-${agent.binding || 'explicit'}`">

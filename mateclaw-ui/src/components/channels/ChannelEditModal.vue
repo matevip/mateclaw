@@ -42,7 +42,7 @@
             <select v-model="form.agentId" class="form-input">
               <option :value="null">{{ t('channels.placeholders.selectAgent') }}</option>
               <option v-for="agent in agents" :key="agent.id" :value="agent.id">
-                {{ agent.icon || '🤖' }} {{ agent.name }}
+                {{ plainTextIcon(agent.icon) }} {{ agent.name }}
               </option>
             </select>
           </div>
@@ -440,6 +440,7 @@ import { useWeixinQrcodePoll } from '@/composables/channels/useWeixinQrcodePoll'
 import { useWecomBotAuth } from '@/composables/channels/useWecomBotAuth'
 import { useFeishuAppRegister } from '@/composables/channels/useFeishuAppRegister'
 import { useDingTalkAppRegister } from '@/composables/channels/useDingTalkAppRegister'
+import { plainTextIcon } from '@/composables/usePixelarticons'
 
 interface Props {
   modelValue: boolean

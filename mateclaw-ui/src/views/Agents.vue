@@ -42,7 +42,9 @@
             :class="{ 'agent-card--disabled': !agent.enabled }"
           >
             <div class="agent-card__header">
-              <span class="agent-card__icon">{{ agent.icon || '🤖' }}</span>
+              <span class="agent-card__icon">
+                <SkillIcon :value="agent.icon" :size="36" :fallback="'🤖'" />
+              </span>
               <label class="toggle-switch toggle-switch--sm">
                 <input type="checkbox" :checked="agent.enabled" @change="toggleAgent(agent)" />
                 <span class="toggle-slider"></span>
@@ -137,6 +139,13 @@
       </div>
     </div>
 
+    <!-- Shared icon picker — opened from the Basic tab's [Pick icon] button. -->
+    <SkillIconPicker
+      v-model:visible="iconPickerVisible"
+      :model-value="form.icon"
+      @apply="(v: string) => (form.icon = v)"
+    />
+
     <!-- Create/Edit Modal -->
     <div v-if="showModal" class="modal-overlay">
       <div class="modal">
@@ -176,7 +185,13 @@
             </div>
             <div class="form-group">
               <label class="form-label">{{ t('agents.fields.icon') }}</label>
-              <input v-model="form.icon" class="form-input" :placeholder="t('agents.placeholders.icon')" />
+              <button type="button" class="icon-picker-trigger" @click="iconPickerVisible = true">
+                <SkillIcon :value="form.icon" :size="24" :fallback="'🤖'" />
+                <span class="icon-picker-trigger__label">
+                  {{ form.icon || t('common.iconPicker.none') }}
+                </span>
+                <span class="icon-picker-trigger__action">{{ t('common.iconPicker.pickerOpen') }}</span>
+              </button>
             </div>
             <div class="form-group">
               <label class="form-label">{{ t('agents.fields.type') }}</label>
@@ -233,7 +248,7 @@
                 :class="{ selected: selectedSkillIds.includes(skill.id) }"
               >
                 <input type="checkbox" :value="skill.id" v-model="selectedSkillIds" class="binding-checkbox" />
-                <span class="binding-icon">{{ skill.icon || '🧩' }}</span>
+                <span class="binding-icon"><SkillIcon :value="skill.icon" :size="20" :fallback="'🧩'" /></span>
                 <div class="binding-info">
                   <span class="binding-name">{{ skill.name }}</span>
                   <span v-if="skill.description" class="binding-desc">{{ skill.description?.slice(0, 80) }}</span>
@@ -267,7 +282,7 @@
                   :class="{ selected: selectedToolNames.includes(tool.name) }"
                 >
                   <input type="checkbox" :value="tool.name" v-model="selectedToolNames" class="binding-checkbox" />
-                  <span class="binding-icon">{{ tool.icon || '🔧' }}</span>
+                  <span class="binding-icon"><SkillIcon :value="tool.icon" :size="20" :fallback="'🔧'" /></span>
                   <div class="binding-info">
                     <span class="binding-name">{{ tool.displayName || tool.name }}</span>
                     <span v-if="tool.description" class="binding-desc">{{ tool.description?.slice(0, 80) }}</span>
@@ -328,6 +343,8 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, agentBindingApi, modelApi, skillApi, toolApi, templateApi } from '@/api/index'
 import type { Agent } from '@/types/index'
+import SkillIcon from '@/components/common/SkillIcon.vue'
+import SkillIconPicker from '@/components/common/SkillIconPicker.vue'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -370,13 +387,17 @@ const defaultForm = (): Partial<Agent> & { name: string; defaultThinkingLevel: s
   agentType: 'react',
   systemPrompt: '',
   maxIterations: 10,
-  icon: '🤖',
+  // Empty so SkillIcon's fallback (🤖) shows instead of pinning a literal
+  // emoji into form.icon — otherwise the picker thinks the user picked
+  // the robot emoji explicitly and reopens on the Emoji tab.
+  icon: '',
   tags: '',
   enabled: true,
   defaultThinkingLevel: null,
 })
 
 const form = ref(defaultForm())
+const iconPickerVisible = ref(false)
 
 const filteredAgents = computed(() => {
   let list = agents.value
@@ -494,7 +515,7 @@ async function openEditModal(agent: Agent) {
     agentType: agent.agentType,
     systemPrompt: agent.systemPrompt || '',
     maxIterations: agent.maxIterations,
-    icon: agent.icon || '🤖',
+    icon: agent.icon || '',
     tags: agent.tags || '',
     enabled: agent.enabled,
     defaultThinkingLevel: (agent as any).defaultThinkingLevel || null,
@@ -896,4 +917,40 @@ async function toggleAgent(agent: Agent) {
 .advanced-tools-count { padding: 1px 8px; background: var(--mc-primary-bg); color: var(--mc-primary); border-radius: 999px; font-size: 11px; font-weight: 700; }
 .advanced-tools-chevron { color: var(--mc-text-tertiary); font-size: 12px; }
 .advanced-tools-note { font-style: italic; color: var(--mc-text-tertiary); margin-top: 4px; }
+
+/* Icon picker trigger — replaces the old free-text icon input. Tile shape
+ * mirrors SkillMarket's identity-icon-row so the create/edit affordance
+ * is consistent across the app. */
+.icon-picker-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--mc-border);
+  border-radius: 8px;
+  background: var(--mc-bg-sunken);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+  width: 100%;
+}
+.icon-picker-trigger:hover { border-color: var(--mc-primary); background: var(--mc-bg-elevated); }
+.icon-picker-trigger:focus-visible { outline: none; border-color: var(--mc-primary); box-shadow: 0 0 0 2px rgba(217,119,87,0.15); }
+.icon-picker-trigger__label {
+  flex: 1; min-width: 0;
+  font-size: 13px;
+  color: var(--mc-text-primary);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.icon-picker-trigger__action {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--mc-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 </style>

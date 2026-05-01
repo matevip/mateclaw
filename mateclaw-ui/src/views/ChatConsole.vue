@@ -42,7 +42,7 @@
               :class="{ active: String(agent.id) === String(selectedAgentId) }"
               @click="selectAgent(agent)"
             >
-              <span class="agent-dropdown-item__icon">{{ agent.icon || '🤖' }}</span>
+              <span class="agent-dropdown-item__icon"><SkillIcon :value="agent.icon" :size="18" :fallback="'🤖'" /></span>
               <div class="agent-dropdown-item__info">
                 <span class="agent-dropdown-item__name">{{ agent.name }}</span>
                 <span class="agent-dropdown-item__desc">{{ agent.description || agent.agentType }}</span>
@@ -312,6 +312,7 @@ import type { Conversation, Agent, ModelConfig, ProviderInfo, ActiveModelsInfo, 
 
 // 导入组件化组件
 import MessageList from '@/components/chat/MessageList.vue'
+import SkillIcon from '@/components/common/SkillIcon.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import StreamLoadingBar from '@/components/chat/StreamLoadingBar.vue'
 import TalkMode from '@/components/chat/TalkMode.vue'
