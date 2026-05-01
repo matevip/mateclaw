@@ -170,6 +170,13 @@ const router = createRouter({
               component: () => import('@/views/Tools.vue'),
               meta: { title: 'Settings - Tools Catalog' },
             },
+            // RFC-090 Phase 7: ACP endpoints (External coding agents)
+            {
+              path: 'acp',
+              name: 'SettingsAcpEndpoints',
+              component: () => import('@/views/AcpEndpoints.vue'),
+              meta: { title: 'Settings - ACP Endpoints' },
+            },
             {
               path: 'token-usage',
               name: 'SettingsTokenUsage',

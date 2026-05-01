@@ -176,6 +176,18 @@ export const skillApi = {
   clearLessons: (id: string | number) => http.post(`/skills/${id}/lessons/clear`),
 }
 
+// ==================== ACP Endpoints (RFC-090 Phase 7) ====================
+export const acpApi = {
+  list: () => http.get('/acp/endpoints'),
+  get: (id: number | string) => http.get(`/acp/endpoints/${id}`),
+  create: (data: any) => http.post('/acp/endpoints', data),
+  update: (id: number | string, data: any) => http.put(`/acp/endpoints/${id}`, data),
+  delete: (id: number | string) => http.delete(`/acp/endpoints/${id}`),
+  toggle: (id: number | string, enabled: boolean) =>
+    http.put(`/acp/endpoints/${id}/toggle?enabled=${enabled}`),
+  test: (id: number | string) => http.post(`/acp/endpoints/${id}/test`),
+}
+
 // ==================== Skill Templates (RFC-091) ====================
 export const skillTemplateApi = {
   list: () => http.get('/skill-templates'),
