@@ -59,6 +59,7 @@ import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.model.ModelFamily;
 import vip.mate.llm.model.ModelProtocol;
 import vip.mate.llm.model.ModelProviderEntity;
+import vip.mate.llm.routing.ProviderRouter;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.llm.service.ModelProviderService;
 import vip.mate.planning.service.PlanningService;
@@ -101,6 +102,7 @@ public class AgentGraphBuilder {
     private final ModelConfigService modelConfigService;
     private final ModelProviderService modelProviderService;
     private final vip.mate.llm.service.ModelCapabilityService modelCapabilityService;
+    private final ProviderRouter providerRouter;
     private final PlanningService planningService;
     private final ToolGuardService toolGuardService;
     private final vip.mate.tool.guard.service.ToolGuardConfigService toolGuardConfigService;
@@ -155,6 +157,15 @@ public class AgentGraphBuilder {
             runtimeModel = modelConfigService.getDefaultModel();
         } catch (Exception e) {
             throw new MateClawException("err.agent.no_default_model", "无法构建 Agent：请先在「设置 → 模型」中配置并启用默认模型");
+        }
+
+        // RFC-090 §9.2 调整 C — log a warning when the chosen primary model
+        // doesn't satisfy the union of bound skills' requires-model. This is
+        // diagnostics only; the chain order isn't rewritten yet.
+        try {
+            providerRouter.diagnosePrimary(entity.getId(), runtimeModel);
+        } catch (Exception e) {
+            log.debug("[ProviderRouter] diagnostic failed: {}", e.getMessage());
         }
 
         ModelProviderEntity provider;

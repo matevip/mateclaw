@@ -196,7 +196,7 @@
               </svg>
               {{ t('skills.actions.configure') }}
             </button>
-            <button v-if="skill.skillType !== 'builtin'" class="skill-btn danger" @click="deleteSkill(skill.id)">
+            <button v-if="skill.skillType !== 'builtin'" class="skill-btn danger" @click="deleteSkill(skill)">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="3 6 5 6 21 6"/>
                 <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
@@ -396,7 +396,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { skillApi } from '@/api/index'
+import { skillApi, skillInstallApi } from '@/api/index'
 import type { Skill, SkillRuntimeStatus, SkillSecurityFinding } from '@/types/index'
 import ImportHubDialog from '@/components/skill/ImportHubDialog.vue'
 import { useSkillName } from '@/composables/useSkillName'
@@ -635,12 +635,20 @@ async function saveSkill() {
   }
 }
 
-async function deleteSkill(id: string | number) {
+async function deleteSkill(idOrSkill: string | number | Skill) {
+  // RFC-090 §14.5 — UI "Delete" routes to uninstall, not hard-delete:
+  //   - DELETE /skills/install/{name} archives the workspace + soft-delete row
+  //   - DELETE /skills/{id} (admin "彻底删除") stays hidden in the UI
+  // Resolve to the skill record so we can call the uninstall path by name.
+  const skill: Skill | undefined = typeof idOrSkill === 'object'
+    ? idOrSkill
+    : skills.value.find(s => s.id === idOrSkill)
+  if (!skill) return
   try {
     await ElMessageBox.confirm(t('skills.messages.deleteConfirm'), t('skills.messages.deleteTitle'), { type: 'warning' })
   } catch { return }
   try {
-    await skillApi.delete(id)
+    await skillInstallApi.uninstall(skill.name)
     await loadAll()
   } catch (e: any) {
     ElMessage.error(typeof e === 'string' ? e : e?.message || t('skills.messages.deleteFailed'))

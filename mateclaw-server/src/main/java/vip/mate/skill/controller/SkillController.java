@@ -6,13 +6,17 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
+import vip.mate.skill.manifest.SkillManifest;
 import vip.mate.skill.model.SkillEntity;
+import vip.mate.skill.runtime.SkillDependencyChecker;
 import vip.mate.skill.service.SkillService;
 import vip.mate.skill.synthesis.SkillSynthesisService;
 import vip.mate.skill.runtime.SkillRuntimeService;
 import vip.mate.skill.runtime.model.ResolvedSkill;
 import vip.mate.skill.workspace.SkillWorkspaceManager;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -34,6 +38,7 @@ public class SkillController {
     private final SkillRuntimeService skillRuntimeService;
     private final SkillWorkspaceManager workspaceManager;
     private final SkillSynthesisService synthesisService;
+    private final SkillDependencyChecker dependencyChecker;
 
     @Operation(summary = "获取技能分页列表（RFC-042 §2.1）")
     @GetMapping
@@ -148,6 +153,60 @@ public class SkillController {
                 "count", skills.size(),
                 "message", resync ? "Active skills refreshed with workspace resync" : "Active skills refreshed",
                 "resynced", resynced));
+    }
+
+    // ==================== Requirements API (RFC-090 §7) ====================
+
+    /**
+     * RFC-090 §7 — pre-flight check: returns the per-requirement status
+     * for the skill so the install dialog and the detail drawer can render
+     * "✓ ffmpeg detected / ✗ groq_key missing" rows.
+     *
+     * <p>Calls the same {@link SkillDependencyChecker} the runtime uses,
+     * so the UI never disagrees with the runtime gate.
+     */
+    @Operation(summary = "Pre-flight requirement statuses for a skill (RFC-090)")
+    @GetMapping("/{id}/requirements")
+    public R<Map<String, Object>> requirements(@PathVariable Long id) {
+        ResolvedSkill resolved = skillRuntimeService.resolveAllSkillsStatus().stream()
+                .filter(r -> r != null && id.equals(r.getId()))
+                .findFirst()
+                .orElse(null);
+        if (resolved == null) {
+            return R.fail("Skill not found: " + id);
+        }
+        SkillManifest manifest = resolved.getManifest();
+        if (manifest == null) {
+            // Legacy skill — fall back to dependency summary already on the resolved view.
+            return R.ok(Map.of(
+                    "allMet", resolved.isDependencyReady(),
+                    "statuses", List.of(),
+                    "summary", resolved.getDependencySummary() != null ? resolved.getDependencySummary() : ""
+            ));
+        }
+
+        List<Map<String, Object>> statuses = new ArrayList<>();
+        boolean allMet = true;
+        for (SkillManifest.RequirementDef req : manifest.getRequires()) {
+            SkillDependencyChecker.RequirementStatus st = dependencyChecker.checkRequirement(req);
+            boolean satisfied = st == SkillDependencyChecker.RequirementStatus.SATISFIED;
+            if (!satisfied && !req.isOptional()) allMet = false;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("key", req.getKey());
+            row.put("type", req.getType());
+            row.put("description", req.getDescription());
+            row.put("optional", req.isOptional());
+            row.put("status", st.name());
+            row.put("satisfied", satisfied);
+            row.put("installCommands", req.getInstall());
+            statuses.add(row);
+        }
+        return R.ok(Map.of(
+                "allMet", allMet,
+                "statuses", statuses,
+                "featureStatuses", resolved.getFeatureStatuses(),
+                "activeFeatures", resolved.getActiveFeatures()
+        ));
     }
 
     // ==================== Synthesis API (RFC-023) ====================
