@@ -170,6 +170,10 @@ export const skillApi = {
   refreshRuntime: () => http.post('/skills/runtime/refresh'),
   exportWorkspace: (id: string | number) => http.post(`/skills/${id}/export-workspace`),
   getWorkspaceInfo: (id: string | number) => http.get(`/skills/${id}/workspace`),
+  // RFC-090 §7 + §11.4 — pre-flight requirements + LESSONS.md
+  requirements: (id: string | number) => http.get(`/skills/${id}/requirements`),
+  getLessons: (id: string | number) => http.get(`/skills/${id}/lessons`),
+  clearLessons: (id: string | number) => http.post(`/skills/${id}/lessons/clear`),
 }
 
 // ==================== Skill Install ====================

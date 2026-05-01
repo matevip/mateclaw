@@ -255,6 +255,9 @@
             {{ t('skills.detail.features') }}
             <span v-if="detailFeaturesCount > 0" class="tab-count">{{ detailFeaturesCount }}</span>
           </button>
+          <button class="detail-tab" :class="{ active: detailTab === 'lessons' }" @click="detailTab = 'lessons'">
+            {{ t('skills.detail.lessons') }}
+          </button>
         </div>
         <!-- Manifest tab -->
         <div v-if="detailTab === 'manifest'" class="detail-section">
@@ -296,6 +299,18 @@
               </div>
             </li>
           </ul>
+        </div>
+        <!-- RFC-090 §11.4 — Lessons tab -->
+        <div v-if="detailTab === 'lessons'" class="detail-section">
+          <div class="lessons-header">
+            <p class="detail-hint">{{ t('skills.detail.lessonsHint') }}</p>
+            <button class="lessons-clear-btn" :disabled="!detailLessonsRaw" @click="clearLessons">
+              {{ t('skills.detail.clearLessons') }}
+            </button>
+          </div>
+          <p v-if="detailLessonsLoading" class="detail-empty">{{ t('common.loading') }}</p>
+          <p v-else-if="!detailLessonsRaw" class="detail-empty">{{ t('skills.detail.noLessons') }}</p>
+          <pre v-else class="detail-pre">{{ detailLessonsRaw }}</pre>
         </div>
       </div>
     </el-drawer>
@@ -429,7 +444,9 @@ const rescanning = ref<Record<string, boolean>>({})
 /** RFC-090 Phase 3 — detail drawer state. */
 const detailDrawerVisible = ref(false)
 const detailSkill = ref<Skill | null>(null)
-const detailTab = ref<'manifest' | 'tools' | 'features'>('manifest')
+const detailTab = ref<'manifest' | 'tools' | 'features' | 'lessons'>('manifest')
+const detailLessonsRaw = ref<string>('')
+const detailLessonsLoading = ref(false)
 
 const detailRuntime = computed(() =>
   detailSkill.value ? runtimeStatusMap.value[detailSkill.value.name] || null : null,
@@ -451,8 +468,44 @@ const detailFeaturesCount = computed(() => detailFeatures.value.length)
 function openDetailDrawer(skill: Skill) {
   detailSkill.value = skill
   detailTab.value = 'manifest'
+  detailLessonsRaw.value = ''
   detailDrawerVisible.value = true
 }
+
+async function loadLessons() {
+  if (!detailSkill.value) return
+  detailLessonsLoading.value = true
+  try {
+    const res: any = await skillApi.getLessons(detailSkill.value.id)
+    detailLessonsRaw.value = res?.data?.raw || ''
+  } catch (e: any) {
+    detailLessonsRaw.value = ''
+    console.warn('[SkillMarket] failed to load lessons', e)
+  } finally {
+    detailLessonsLoading.value = false
+  }
+}
+
+async function clearLessons() {
+  if (!detailSkill.value) return
+  try {
+    await ElMessageBox.confirm(t('skills.detail.clearLessonsConfirm'), t('skills.messages.deleteTitle'), { type: 'warning' })
+  } catch { return }
+  try {
+    await skillApi.clearLessons(detailSkill.value.id)
+    detailLessonsRaw.value = ''
+  } catch (e: any) {
+    ElMessage.error(typeof e === 'string' ? e : e?.message || t('skills.messages.deleteFailed'))
+  }
+}
+
+watch(detailTab, (tab) => {
+  // Lazy load LESSONS.md only when the user clicks into that tab; we
+  // don't want every drawer open to fire an extra request.
+  if (tab === 'lessons' && detailDrawerVisible.value && !detailLessonsRaw.value && !detailLessonsLoading.value) {
+    loadLessons()
+  }
+})
 
 const categoryTabs = computed(() => [
   { label: t('skills.tabs.all'), value: 'all', icon: '🗂️' },
@@ -1225,4 +1278,9 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 .detail-meta-key { color: var(--mc-text-tertiary); margin-right: 4px; }
 .detail-feature-tag { padding: 2px 6px; background: var(--mc-bg-elevated); border-radius: 4px; font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace; color: var(--mc-text-primary); }
 .detail-feature-fallback { font-size: 11px; color: var(--mc-primary-hover); margin-top: 6px; font-style: italic; }
+
+.lessons-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.lessons-clear-btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--mc-border); background: var(--mc-bg-muted); color: var(--mc-text-secondary); cursor: pointer; font-size: 12px; }
+.lessons-clear-btn:hover:not(:disabled) { background: var(--mc-danger-bg); color: var(--mc-danger); border-color: var(--mc-danger); }
+.lessons-clear-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

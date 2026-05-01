@@ -6,6 +6,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
+import vip.mate.skill.lessons.SkillLessonsService;
 import vip.mate.skill.manifest.SkillManifest;
 import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.runtime.SkillDependencyChecker;
@@ -39,6 +40,7 @@ public class SkillController {
     private final SkillWorkspaceManager workspaceManager;
     private final SkillSynthesisService synthesisService;
     private final SkillDependencyChecker dependencyChecker;
+    private final SkillLessonsService lessonsService;
 
     @Operation(summary = "获取技能分页列表（RFC-042 §2.1）")
     @GetMapping
@@ -207,6 +209,40 @@ public class SkillController {
                 "featureStatuses", resolved.getFeatureStatuses(),
                 "activeFeatures", resolved.getActiveFeatures()
         ));
+    }
+
+    // ==================== Lessons API (RFC-090 §7 + §11.4) ====================
+
+    /**
+     * Read the per-skill {@code LESSONS.md} body for the detail drawer.
+     * Returns {@code entries: []} when the file is missing.
+     */
+    @Operation(summary = "Read per-skill LESSONS.md (RFC-090 §11.4)")
+    @GetMapping("/{id}/lessons")
+    public R<Map<String, Object>> getLessons(@PathVariable Long id) {
+        ResolvedSkill resolved = skillRuntimeService.resolveAllSkillsStatus().stream()
+                .filter(r -> r != null && id.equals(r.getId()))
+                .findFirst()
+                .orElse(null);
+        if (resolved == null) return R.fail("Skill not found: " + id);
+        String body = lessonsService.readLessons(resolved);
+        return R.ok(Map.of(
+                "skillId", id,
+                "skillName", resolved.getName(),
+                "raw", body == null ? "" : body
+        ));
+    }
+
+    @Operation(summary = "Clear all lessons for a skill (RFC-090 §11.4)")
+    @PostMapping("/{id}/lessons/clear")
+    public R<Map<String, Object>> clearLessons(@PathVariable Long id) {
+        ResolvedSkill resolved = skillRuntimeService.resolveAllSkillsStatus().stream()
+                .filter(r -> r != null && id.equals(r.getId()))
+                .findFirst()
+                .orElse(null);
+        if (resolved == null) return R.fail("Skill not found: " + id);
+        boolean cleared = lessonsService.clearLessons(resolved);
+        return R.ok(Map.of("cleared", cleared));
     }
 
     // ==================== Synthesis API (RFC-023) ====================

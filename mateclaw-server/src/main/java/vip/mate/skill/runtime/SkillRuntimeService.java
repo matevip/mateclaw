@@ -2,9 +2,12 @@ package vip.mate.skill.runtime;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import vip.mate.skill.lessons.SkillLessonsService;
+import vip.mate.skill.manifest.SkillManifest;
 import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.runtime.model.ResolvedSkill;
 import vip.mate.skill.service.SkillService;
@@ -25,11 +28,27 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SkillRuntimeService {
 
     private final SkillService skillService;
     private final SkillPackageResolver packageResolver;
+    /**
+     * {@code @Lazy} — SkillLessonsService depends on SkillWorkspaceManager,
+     * which is constructed early; the lazy proxy avoids a chicken-and-egg
+     * cycle when the runtime service initializes alongside the skill
+     * service stack. Using setter-style injection through the
+     * constructor below.
+     */
+    private final SkillLessonsService lessonsService;
+
+    @Autowired
+    public SkillRuntimeService(SkillService skillService,
+                               SkillPackageResolver packageResolver,
+                               @Lazy SkillLessonsService lessonsService) {
+        this.skillService = skillService;
+        this.packageResolver = packageResolver;
+        this.lessonsService = lessonsService;
+    }
 
     // 缓存已解析的 active skills（5分钟过期）
     private final Cache<String, List<ResolvedSkill>> activeSkillsCache = Caffeine.newBuilder()
@@ -232,6 +251,41 @@ public class SkillRuntimeService {
             sb.append(" |\n");
         }
 
+        // RFC-090 §11.4.3 + §10.2 Q6 — append per-skill LESSONS.md after
+        // the catalog so the LLM sees "Available Skills" first, then any
+        // accumulated lessons attached to each skill that has opted in.
+        appendLessonsBlock(sb, activeSkills);
+
         return sb.toString();
+    }
+
+    /**
+     * Append a "## Lessons learned" block to the prompt enhancement
+     * with one subsection per active skill that has lessons recorded.
+     *
+     * <p>Skills opt in via {@code self-evolution.lessons_enabled} (default
+     * true). Skills with no LESSONS.md content contribute nothing — we
+     * never emit an empty subsection.
+     */
+    private void appendLessonsBlock(StringBuilder sb, List<ResolvedSkill> activeSkills) {
+        if (lessonsService == null || activeSkills == null || activeSkills.isEmpty()) return;
+        StringBuilder lessons = new StringBuilder();
+        for (ResolvedSkill skill : activeSkills) {
+            SkillManifest manifest = skill.getManifest();
+            boolean enabled = manifest == null
+                    || manifest.getSelfEvolution() == null
+                    || manifest.getSelfEvolution().isLessonsEnabled();
+            if (!enabled) continue;
+            String body = lessonsService.readLessonsBody(skill);
+            if (body == null || body.isBlank()) continue;
+            lessons.append("\n### ").append(skill.getName()).append("\n");
+            lessons.append(body).append("\n");
+        }
+        if (lessons.length() > 0) {
+            sb.append("\n\n## Lessons learned\n");
+            sb.append("Past observations the agent recorded for these skills. ");
+            sb.append("Treat them as advisory hints — the canonical SKILL.md still wins on conflict.\n");
+            sb.append(lessons);
+        }
     }
 }
