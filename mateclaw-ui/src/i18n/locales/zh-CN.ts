@@ -1168,7 +1168,7 @@ export default {
         openai: 'OpenAI API key（sk-…）。申请: https://platform.openai.com/api-keys',
         dashscope: '阿里云 DashScope key — 跟 MateClaw .env 里的 DASHSCOPE_API_KEY 同一个值',
         google: 'Google AI Studio API key。申请: https://aistudio.google.com/apikey',
-        claudeOauth: '注意: claude-code 的 OAuth 登录（~/.claude/ 里那个）在这里不能用。第三方 Zed wrapper 直接调 Anthropic 公开 API，只认真正的 API key。请到 https://console.anthropic.com/settings/keys 申请；或改用 qwen-code / opencode 复用各自 CLI 的本地登录态。',
+        claudeOauth: '注意: claude-code 的 OAuth 登录（~/.claude/ 里那个）在这里不能用——更糟的是 Claude Agent SDK 会"优先读 OAuth、再读 API key"，导致你下面填的 key 被静默忽略。如果你这台机器上跑过 `claude login`，先清钥匙串: (macOS) `claude logout` 或 `security delete-generic-password -s "Claude Code-credentials"`；(Linux/Windows) 删 ~/.claude/credentials.json。然后再回来填真正的 API key（sk-ant-…）。或者改用 qwen-code / opencode 复用各自 CLI 的本地登录态。',
       },
     },
     modal: {
