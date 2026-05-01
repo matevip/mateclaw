@@ -55,12 +55,8 @@ const router = createRouter({
           component: () => import('@/views/SkillMarket.vue'),
           meta: { title: 'Skills' },
         },
-        {
-          path: 'tools',
-          name: 'Tools',
-          component: () => import('@/views/Tools.vue'),
-          meta: { title: 'Tools' },
-        },
+        // Tools 顶层入口已降级到 Settings ▸ Tools (Catalog) (RFC-090 Phase 1)
+        // 旧路径 /tools 由下方 redirect 兼容
         {
           path: 'plugins',
           name: 'Plugins',
@@ -157,7 +153,13 @@ const router = createRouter({
               path: 'mcp-servers',
               name: 'SettingsMcpServers',
               component: () => import('@/views/McpServers.vue'),
-              meta: { title: 'Settings - MCP Servers' },
+              meta: { title: 'Settings - MCP Connections' },
+            },
+            {
+              path: 'tools',
+              name: 'SettingsTools',
+              component: () => import('@/views/Tools.vue'),
+              meta: { title: 'Settings - Tools Catalog' },
             },
             {
               path: 'token-usage',
@@ -209,6 +211,8 @@ const router = createRouter({
         { path: 'datasources', redirect: '/settings/datasources' },
         { path: 'mcp-servers', redirect: '/settings/mcp-servers' },
         { path: 'token-usage', redirect: '/settings/token-usage' },
+        // RFC-090 Phase 1: Tools 顶层降级到 Settings
+        { path: 'tools', redirect: '/settings/tools' },
       ],
     },
     {
