@@ -439,36 +439,45 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.activity-page { gap: 16px; display: flex; flex-direction: column; padding: 0; }
-.header-actions { display: flex; gap: 8px; align-items: center; }
+/* Layout — sit inside mc-page-inner's 28px padding; just stack our
+   own sections with breathing room. The earlier `padding: 0` override
+   collapsed the inset and let cards bleed into the frame border. */
+.activity-page { gap: 18px; display: flex; flex-direction: column; }
+.mc-page-header { margin-bottom: 6px; }
+.header-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
 .btn-ghost {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 6px 12px; border: 1px solid var(--mc-border-light);
-  background: transparent; color: var(--mc-text-secondary);
+  background: var(--mc-bg-elevated); color: var(--mc-text-secondary);
   border-radius: 999px; font-size: 12px; font-weight: 500; cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  font-family: inherit;
 }
-.btn-ghost:hover:not(:disabled) { background: var(--mc-bg-muted); color: var(--mc-text-primary); }
+.btn-ghost:hover:not(:disabled) { background: var(--mc-bg-muted); color: var(--mc-text-primary); border-color: var(--mc-border); }
 .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Filter chips — minimal source toggle, one row */
+/* Filter chips — single row, white space normalized */
 .filter-chips {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 4px 0;
 }
 .filter-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 6px 12px; border: 1px solid var(--mc-border-light);
   background: var(--mc-bg-elevated); color: var(--mc-text-secondary);
   border-radius: 999px; font-size: 12px; font-weight: 500; cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  font-family: inherit;
 }
 .filter-chip:hover { border-color: var(--mc-border); color: var(--mc-text-primary); }
+/* Active chip — orange brand accent, not raw text-primary which inverted
+   awkwardly in dark mode (white-on-white-ish). */
 .filter-chip.active {
-  background: var(--mc-text-primary); color: var(--mc-bg-elevated);
-  border-color: var(--mc-text-primary); font-weight: 600;
+  background: var(--mc-primary-bg);
+  color: var(--mc-primary);
+  border-color: var(--mc-primary);
+  font-weight: 600;
 }
-.chip-dot { width: 8px; height: 8px; border-radius: 50%; }
+.chip-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .dot-all { background: var(--mc-text-tertiary); }
 .dot-audit { background: #f59e0b; }
 .dot-approval { background: #6366f1; }
@@ -478,33 +487,42 @@ onMounted(() => {
 .filter-more {
   background: none; border: none; color: var(--mc-text-tertiary);
   font-size: 12px; cursor: pointer; padding: 4px 8px;
+  font-family: inherit;
 }
 .filter-more:hover { color: var(--mc-text-primary); }
 
-.filter-extra { display: flex; gap: 8px; padding: 4px 0; }
+.filter-extra { display: flex; gap: 8px; flex-wrap: wrap; }
 .filter-select {
   padding: 6px 10px; border: 1px solid var(--mc-border-light);
   border-radius: 8px; background: var(--mc-bg-elevated);
   color: var(--mc-text-primary); font-size: 12px;
+  font-family: inherit;
+  min-width: 140px;
 }
 
-.fade-enter-active, .fade-leave-active { transition: opacity 0.15s, max-height 0.2s; max-height: 60px; }
-.fade-enter-from, .fade-leave-to { opacity: 0; max-height: 0; }
+/* Fade transition — drop the brittle max-height clamp; rely on opacity
+   only. The earlier 60px ceiling truncated the dropdown row when both
+   selects wrapped. */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.18s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 
-/* Event feed — flat cards, day grouped */
-.event-feed { display: flex; flex-direction: column; }
+/* Event feed — vertical stack, each row a self-contained card */
+.event-feed { display: flex; flex-direction: column; gap: 0; }
 
 .day-divider {
   display: flex; align-items: center; gap: 10px;
-  padding: 14px 4px 6px;
+  padding: 18px 2px 8px;
   font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--mc-text-tertiary);
 }
-.day-label::after { content: ''; }
+.day-divider:first-child { padding-top: 4px; }
+.day-label { display: inline-block; }
 .day-count {
+  display: inline-block;
   padding: 1px 8px; border-radius: 999px;
   background: var(--mc-bg-sunken); color: var(--mc-text-tertiary);
   font-size: 10px; font-weight: 600; letter-spacing: 0;
+  text-transform: none;
 }
 
 .event-row {
@@ -516,17 +534,21 @@ onMounted(() => {
   background: var(--mc-bg-elevated);
   cursor: pointer;
   text-align: left;
-  transition: all 0.15s;
-  margin-bottom: 6px;
-  font: inherit;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  margin-bottom: 8px;
+  font-family: inherit;
+  font-size: inherit;
   color: inherit;
 }
+.event-row:last-child { margin-bottom: 0; }
 .event-row:hover {
   border-color: var(--mc-border);
   background: var(--mc-bg-muted);
-  transform: translateY(-1px);
   box-shadow: var(--mc-shadow-soft);
 }
+/* Don't translateY on hover — the parent mc-page-frame has rounded
+   corners + a glow ::before overlay; lifted cards visibly poked
+   through the rounded border. */
 
 .event-dot {
   width: 8px; height: 8px; border-radius: 50%;
@@ -581,17 +603,21 @@ onMounted(() => {
 :root.dark .verb-login, :root.dark .verb-logout { color: #c4b5fd; background: rgba(139, 92, 246, 0.18); }
 
 .feed-empty {
-  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
   padding: 60px 20px;
   color: var(--mc-text-tertiary); font-size: 14px;
   text-align: center;
+  border: 1px dashed var(--mc-border-light);
+  border-radius: 12px;
+  background: var(--mc-bg-muted);
 }
+.feed-empty p { margin: 0; }
 .empty-icon { font-size: 32px; }
 .empty-hint { font-size: 12px; max-width: 320px; line-height: 1.6; }
 
 .pagination {
   display: flex; align-items: center; justify-content: center;
-  gap: 14px; margin-top: 18px;
+  gap: 14px; margin-top: 12px;
 }
 .page-info { font-size: 12px; color: var(--mc-text-tertiary); }
 
@@ -602,12 +628,15 @@ onMounted(() => {
 }
 
 .detail-hero {
+  /* Indented so the absolute-positioned dot sits inside, not behind
+     the drawer's left edge. The earlier `left: -16px` could clip on
+     drawers that don't have transparent borders. */
   position: relative;
-  padding: 4px 0 18px;
+  padding: 4px 0 18px 18px;
   border-bottom: 1px solid var(--mc-border-light);
 }
 .detail-dot {
-  position: absolute; left: -16px; top: 16px;
+  position: absolute; left: 0; top: 14px;
   width: 10px; height: 10px; border-radius: 50%;
 }
 .detail-headline {
