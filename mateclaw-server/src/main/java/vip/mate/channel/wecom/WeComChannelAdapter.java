@@ -337,14 +337,40 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
      * Called when WeCom auth_succeed frame is received — the only point at
      * which the connection is genuinely usable. Resets backoff and clears
      * the failure dedup flag so the next outage (if any) can register.
+     *
+     * <p>RFC-080 follow-up: also cancels {@code reconnectFuture}. A stale
+     * failure signal (e.g. the previous socket's async onError fired AFTER
+     * connectWebSocket reset the dedup flag) can schedule a ghost reconnect
+     * while this attempt is still in flight. Without canceling, that ghost
+     * fires 2s later and tears down the freshly-authenticated connection,
+     * producing the self-sustaining loop. Per-listener identity dedup catches
+     * most cases; this is the belt-and-suspenders for any signal that still
+     * gets through.
      */
     private void markReady() {
         super.onReconnectSuccess();
+        if (reconnectFuture != null) {
+            reconnectFuture.cancel(false);
+            reconnectFuture = null;
+        }
         disconnectInflight.set(false);
     }
 
     /**
-     * WebSocket 监听器：接收消息帧并分发处理
+     * WebSocket 监听器：接收消息帧并分发处理。
+     *
+     * <p>RFC-080 follow-up: dedup by socket identity. The {@code disconnectInflight}
+     * flag is per-channel and gets reset by {@link #connectWebSocket} as soon as a
+     * new attempt starts. But the previous socket's onClose/onError can fire
+     * asynchronously on a JDK HttpClient worker tens of milliseconds AFTER we have
+     * already called sendClose+rebuilt and reset the flag. Without per-socket
+     * dedup that stale signal slips through, schedules a ghost reconnect, and
+     * tears down the freshly-established healthy connection 2s later — producing
+     * the self-sustaining 2-second loop observed in the field.
+     *
+     * <p>Each listener instance compares the {@code WebSocket} argument against
+     * {@link #webSocket} and ignores callbacks for sockets that have already
+     * been replaced or released.
      */
     private class WeComWebSocketListener implements WebSocket.Listener {
 
@@ -356,6 +382,9 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
 
         @Override
         public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
+            if (webSocket != WeComChannelAdapter.this.webSocket) {
+                return null;
+            }
             wsBuffer.append(data);
             if (last) {
                 String fullMessage = wsBuffer.toString();
@@ -368,6 +397,9 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
 
         @Override
         public CompletionStage<?> onBinary(WebSocket webSocket, ByteBuffer data, boolean last) {
+            if (webSocket != WeComChannelAdapter.this.webSocket) {
+                return null;
+            }
             byte[] bytes = new byte[data.remaining()];
             data.get(bytes);
             wsBuffer.append(new String(bytes));
@@ -382,6 +414,10 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
 
         @Override
         public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
+            if (webSocket != WeComChannelAdapter.this.webSocket) {
+                log.debug("[wecom] stale onClose ignored: code={}, reason={}", statusCode, reason);
+                return null;
+            }
             log.warn("[wecom] WebSocket closed: code={}, reason={}", statusCode, reason);
             handleFailure("WebSocket closed: code=" + statusCode + ", reason=" + reason);
             return null;
@@ -389,6 +425,10 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
 
         @Override
         public void onError(WebSocket webSocket, Throwable error) {
+            if (webSocket != WeComChannelAdapter.this.webSocket) {
+                log.debug("[wecom] stale onError ignored: {}", error.getMessage());
+                return;
+            }
             log.error("[wecom] WebSocket error: {}", error.getMessage());
             handleFailure("WebSocket error: " + error.getMessage());
         }
