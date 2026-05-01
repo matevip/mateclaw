@@ -208,6 +208,25 @@
             />
             <span class="message-attachment-audio__name">{{ attachment.name }}</span>
           </div>
+          <!-- 3D model preview via @google/model-viewer Web Component
+               (registered globally in src/main.ts; renders &lt;model-viewer&gt;
+               as a custom HTML element). -->
+          <div
+            v-for="attachment in model3dAttachments"
+            :key="'model3d-' + attachment.storedName"
+            class="message-attachment-model3d"
+          >
+            <model-viewer
+              :src="getDisplayUrl(attachment)"
+              camera-controls
+              auto-rotate
+              shadow-intensity="1"
+              exposure="1"
+              alt="Generated 3D model"
+              class="message-attachment-model3d__viewer"
+            />
+            <span class="message-attachment-model3d__name">{{ attachment.name }}</span>
+          </div>
           <button
             v-for="attachment in fileAttachments"
             :key="attachment.storedName"
@@ -307,7 +326,7 @@ import type { ChatErrorInfo } from '@/types/chatError'
 const { renderMarkdown } = useMarkdownRenderer()
 const { t } = useI18n()
 const { getToolLabel } = useToolLabel()
-const { blobUrls, loadAllImages, loadAllVideos, loadAllAudios, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
+const { blobUrls, loadAllImages, loadAllVideos, loadAllAudios, loadAllModels, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
 
 interface Props {
   message: Message
@@ -575,12 +594,15 @@ const mediaPartAttachments = computed<ChatAttachment[]>(() => {
   const seen = new Set<string>()
   for (const p of parts) {
     if (!p || !p.fileUrl) continue
-    if (p.type !== 'image' && p.type !== 'audio' && p.type !== 'video') continue
+    if (p.type !== 'image' && p.type !== 'audio' && p.type !== 'video' && p.type !== 'model3d') continue
     if (existingUrls.has(p.fileUrl) || seen.has(p.fileUrl)) continue
     seen.add(p.fileUrl)
     const fileName = p.fileName || p.fileUrl.split('/').pop() || `${p.type}-${out.length}`
     const ct = p.contentType
-        || (p.type === 'image' ? 'image/png' : p.type === 'audio' ? 'audio/mpeg' : 'video/mp4')
+        || (p.type === 'image' ? 'image/png'
+            : p.type === 'audio' ? 'audio/mpeg'
+            : p.type === 'video' ? 'video/mp4'
+            : 'model/gltf-binary')
     out.push({
       name: fileName,
       size: 0,
@@ -600,10 +622,12 @@ const attachments = computed(() => [
 const imageAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('image/')))
 const videoAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('video/')))
 const audioAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('audio/')))
+const model3dAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('model/')))
 const fileAttachments = computed(() => attachments.value.filter(a =>
   !a.contentType?.startsWith('image/')
     && !a.contentType?.startsWith('video/')
     && !a.contentType?.startsWith('audio/')
+    && !a.contentType?.startsWith('model/')
 ))
 
 // 增量加载图片/视频/音频附件的鉴权 blob URL（watch 覆盖首次 + 后续变化）
@@ -615,6 +639,11 @@ watch(videoAttachments, (atts) => {
 }, { immediate: true })
 watch(audioAttachments, (atts) => {
   if (atts.length > 0) loadAllAudios(atts)
+}, { immediate: true })
+// 3D models also need the auth-blob loader — <model-viewer src> doesn't carry
+// the Authorization header any more than <img>/<audio> do.
+watch(model3dAttachments, (atts) => {
+  if (atts.length > 0) loadAllModels(atts)
 }, { immediate: true })
 
 // --- 时间 ---
@@ -1443,6 +1472,33 @@ watch(isGenerating, (generating) => {
 }
 
 .message-attachment-audio__name {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.76;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-attachment-model3d {
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-soft, #f5f5f5);
+}
+
+.message-attachment-model3d__viewer {
+  width: 100%;
+  max-width: 480px;
+  height: 360px;
+  display: block;
+  border-radius: 12px;
+  /* model-viewer renders nothing until the .glb finishes loading;
+     keep the box sized so layout doesn't jump. */
+  background: linear-gradient(135deg, #fafafa, #ececec);
+}
+
+.message-attachment-model3d__name {
   display: block;
   margin-top: 4px;
   font-size: 12px;

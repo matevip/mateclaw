@@ -5,7 +5,17 @@ import { resolve } from 'path'
 
 export default defineConfig({
   plugins: [
-    vue(),
+    vue({
+      template: {
+        compilerOptions: {
+          // Treat <model-viewer> as a custom Web Component (registered globally
+          // via @google/model-viewer in main.ts) so Vue doesn't try to resolve
+          // it as a Vue component and emit a "Failed to resolve component"
+          // warning at runtime.
+          isCustomElement: (tag) => tag === 'model-viewer',
+        },
+      },
+    }),
     tailwindcss(),
   ],
   resolve: {

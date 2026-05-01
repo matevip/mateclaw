@@ -54,6 +54,12 @@ public class SystemSettingService {
     private static final String MUSIC_ENABLED_KEY = "musicEnabled";
     private static final String MUSIC_PROVIDER_KEY = "musicProvider";
     private static final String MUSIC_FALLBACK_ENABLED_KEY = "musicFallbackEnabled";
+
+    // 3D 模型生成配置 keys
+    private static final String MODEL3D_ENABLED_KEY = "model3dEnabled";
+    private static final String MODEL3D_PROVIDER_KEY = "model3dProvider";
+    private static final String MODEL3D_FALLBACK_ENABLED_KEY = "model3dFallbackEnabled";
+
     private static final String ZHIPU_API_KEY_KEY = "zhipuApiKey";
     private static final String ZHIPU_BASE_URL_KEY = "zhipuBaseUrl";
     private static final String FAL_API_KEY_KEY = "falApiKey";
@@ -133,6 +139,11 @@ public class SystemSettingService {
         dto.setMusicEnabled(Boolean.parseBoolean(getValue(MUSIC_ENABLED_KEY, "false")));
         dto.setMusicProvider(getValue(MUSIC_PROVIDER_KEY, "auto"));
         dto.setMusicFallbackEnabled(Boolean.parseBoolean(getValue(MUSIC_FALLBACK_ENABLED_KEY, "true")));
+
+        // 3D 模型生成配置
+        dto.setModel3dEnabled(Boolean.parseBoolean(getValue(MODEL3D_ENABLED_KEY, "false")));
+        dto.setModel3dProvider(getValue(MODEL3D_PROVIDER_KEY, "auto"));
+        dto.setModel3dFallbackEnabled(Boolean.parseBoolean(getValue(MODEL3D_FALLBACK_ENABLED_KEY, "true")));
         return dto;
     }
 
@@ -294,6 +305,17 @@ public class SystemSettingService {
         }
         if (dto.getMusicFallbackEnabled() != null) {
             saveValue(MUSIC_FALLBACK_ENABLED_KEY, String.valueOf(dto.getMusicFallbackEnabled()), "音乐 Provider 级 Fallback");
+        }
+
+        // 3D 模型生成配置
+        if (dto.getModel3dEnabled() != null) {
+            saveValue(MODEL3D_ENABLED_KEY, String.valueOf(dto.getModel3dEnabled()), "是否启用 3D 模型生成");
+        }
+        if (dto.getModel3dProvider() != null) {
+            saveValue(MODEL3D_PROVIDER_KEY, dto.getModel3dProvider(), "3D 模型生成首选 Provider");
+        }
+        if (dto.getModel3dFallbackEnabled() != null) {
+            saveValue(MODEL3D_FALLBACK_ENABLED_KEY, String.valueOf(dto.getModel3dFallbackEnabled()), "3D Provider 级 Fallback");
         }
         return getSettings();
     }

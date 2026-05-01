@@ -85,6 +85,19 @@ export function useAuthenticatedAttachment() {
   }
 
   /**
+   * 批量加载所有 3D 模型附件的 blob URL（&lt;model-viewer src&gt; 不带 Authorization 头）
+   */
+  async function loadAllModels(attachments: ChatAttachment[]) {
+    const modelAtts = attachments.filter(a => a.contentType?.startsWith('model/'))
+    for (const att of modelAtts) {
+      const key = att.storedName || att.url
+      if (!att.previewUrl && att.url && !blobUrls.value[key]) {
+        await loadBlobUrl(att.url, key)
+      }
+    }
+  }
+
+  /**
    * 鉴权下载文件：fetch blob → 创建临时 <a download> → 触发点击
    */
   async function downloadFile(attachment: ChatAttachment) {
@@ -154,6 +167,7 @@ export function useAuthenticatedAttachment() {
     loadAllImages,
     loadAllVideos,
     loadAllAudios,
+    loadAllModels,
     downloadFile,
     openImage,
     getDisplayUrl,

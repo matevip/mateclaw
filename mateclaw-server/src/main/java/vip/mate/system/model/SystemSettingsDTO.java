@@ -114,4 +114,10 @@ public class SystemSettingsDTO {
     /** 首选音乐 provider: auto / google-lyria / minimax */
     private String musicProvider;
     private Boolean musicFallbackEnabled;
+
+    // ===== 3D 模型生成配置 =====
+    private Boolean model3dEnabled;
+    /** 首选 3D provider: auto / hunyuan-3d */
+    private String model3dProvider;
+    private Boolean model3dFallbackEnabled;
 }

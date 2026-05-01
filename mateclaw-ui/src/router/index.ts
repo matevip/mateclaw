@@ -124,6 +124,12 @@ const router = createRouter({
               component: () => import('@/views/Settings/Video/index.vue'),
               meta: { title: 'Settings - Video' },
             },
+            {
+              path: 'model3d',
+              name: 'SettingsModel3D',
+              component: () => import('@/views/Settings/Model3D/index.vue'),
+              meta: { title: 'Settings - 3D Model' },
+            },
             // Workspace management
             {
               path: 'workspaces',

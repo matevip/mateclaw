@@ -94,6 +94,20 @@ public class MessageContentPart {
         return part;
     }
 
+    /**
+     * 3D model asset (.glb / .obj / .fbx). The frontend renders this with a
+     * &lt;model-viewer&gt; Web Component when contentType starts with
+     * {@code model/} (e.g. {@code model/gltf-binary} for glb).
+     */
+    public static MessageContentPart model3d(String mediaId, String fileName) {
+        MessageContentPart part = new MessageContentPart();
+        part.setType("model3d");
+        part.setMediaId(mediaId);
+        part.setFileName(fileName);
+        part.setContentType("model/gltf-binary");
+        return part;
+    }
+
     public static MessageContentPart toolCall(String jsonPayload) {
         MessageContentPart part = new MessageContentPart();
         part.setType("tool_call");

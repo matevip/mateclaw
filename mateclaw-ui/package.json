@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
+    "@google/model-viewer": "^4.2.0",
     "axios": "^1.7.9",
     "dayjs": "^1.11.13",
     "dompurify": "^3.3.3",

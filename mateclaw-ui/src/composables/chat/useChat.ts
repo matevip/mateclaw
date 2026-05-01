@@ -275,7 +275,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     /任务\s*ID[=:"\s]+([a-f0-9]{16})/i,
     /task[_\s]*id[=:"\s]+([a-f0-9]{16})/i,
   ]
-  const ASYNC_TOOL_NAMES = new Set(['music_generate', 'video_generate', 'image_generate'])
+  const ASYNC_TOOL_NAMES = new Set(['music_generate', 'video_generate', 'image_generate', 'model3d_generate'])
   let reconnectingForAsyncTasks = false
 
   function extractTaskId(result: unknown): string | null {
@@ -1189,6 +1189,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         fileUrl: data.audioUrl,
         fileName: `music_${data.taskId}.${fmt}`,
         contentType: fmt === 'wav' ? 'audio/wav' : 'audio/mpeg',
+      } as MessageContentPart
+    } else if (data.modelUrl) {
+      const fmt = ((data.format || 'glb') as string).toLowerCase()
+      mediaPart = {
+        type: 'model3d',
+        fileUrl: data.modelUrl,
+        fileName: `model_${data.taskId}.${fmt}`,
+        contentType: fmt === 'obj' ? 'model/obj'
+          : fmt === 'fbx' ? 'model/fbx'
+          : fmt === 'usdz' ? 'model/vnd.usdz+zip'
+          : 'model/gltf-binary',
       } as MessageContentPart
     }
 

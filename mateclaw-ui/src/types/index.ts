@@ -188,7 +188,7 @@ export interface MessageMetadata {
 }
 
 export interface MessageContentPart {
-  type: 'text' | 'thinking' | 'image' | 'file' | 'audio' | 'video' | 'tool_call' | 'parse_error'
+  type: 'text' | 'thinking' | 'image' | 'file' | 'audio' | 'video' | 'model3d' | 'tool_call' | 'parse_error'
   text?: string
   fileUrl?: string
   fileName?: string

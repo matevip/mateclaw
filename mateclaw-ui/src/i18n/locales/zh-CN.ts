@@ -307,6 +307,7 @@ export default {
       stt: '语音识别',
       music: '音乐生成',
       video: '视频生成',
+      model3d: '3D 生成',
       about: '关于',
       advanced: '高级',
     },
@@ -529,6 +530,10 @@ export default {
       musicEnabled: '启用音乐生成',
       musicProvider: '首选音乐提供商',
       musicFallbackEnabled: '提供商回退',
+      // 3D 模型生成
+      model3dEnabled: '启用 3D 模型生成',
+      model3dProvider: '首选 3D 提供商',
+      model3dFallbackEnabled: '提供商回退',
       // TTS 语音合成
       ttsEnabled: '启用语音合成',
       ttsProvider: '首选 TTS 提供商',
@@ -580,6 +585,11 @@ export default {
       musicFallbackEnabled: '首选提供商失败时自动尝试其他已配置的提供商。',
       googleLyriaInfo: '复用模型管理中的 Google API Key。Lyria 3 模型，支持歌词谱曲和纯音乐生成。',
       minimaxMusicInfo: '复用视频生成中的 MiniMax API Key。music-2.5+ 模型，支持歌词和纯音乐。',
+      // 3D 模型生成
+      model3dEnabled: '开启后 Agent 可通过 model3d_generate 工具生成 3D 模型 (.glb)。需先在「模型与凭据」配置 hunyuan-3d 的 SecretId:SecretKey。',
+      model3dProvider: '选择首选 3D 提供商，auto 模式按优先级自动选用。',
+      model3dFallbackEnabled: '首选提供商失败时自动尝试其他已配置的提供商。',
+      hunyuan3dInfo: '腾讯混元 3D（ai3d.tencentcloudapi.com）。HY-3D-3.1 / HY-3D-3.0 走 Pro 接口，HY-3D-Express 走 Rapid 极速接口。在「模型与凭据」中以 SecretId:SecretKey 格式保存。',
       // TTS 语音合成
       ttsEnabled: '开启后可通过消息朗读按钮或自动模式使用语音合成。Edge TTS 免费无需 Key。',
       ttsProvider: '选择首选 TTS 提供商，auto 模式优先使用免费的 Edge TTS。',
@@ -623,6 +633,10 @@ export default {
     musicDesc: '配置 AI 音乐生成，支持 Google Lyria 和 MiniMax Music',
     musicProviderOptions: { auto: '自动选择' },
     musicProviderTags: { reuseLlmKey: '复用 LLM API Key', sharedWithVideo: '与视频共用' },
+    model3dTitle: '3D 模型生成',
+    model3dDesc: '配置 AI 3D 模型生成，支持腾讯混元 3D（HY-3D-3.1 / HY-3D-3.0 / HY-3D-Express）',
+    model3dProviderOptions: { auto: '自动选择', hunyuan: '腾讯混元 3D' },
+    model3dProviderTags: { requiresKey: '需配置 SecretId:SecretKey' },
     ttsTitle: '语音合成',
     ttsDesc: '配置 TTS 语音合成，支持 Edge TTS（免费）、OpenAI TTS、DashScope CosyVoice',
     ttsProviderOptions: {
