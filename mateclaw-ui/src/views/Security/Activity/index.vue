@@ -108,8 +108,9 @@
             v-model:page-size="pageSize"
             :total="total"
             :page-sizes="[20, 50, 100]"
+            :small="isMobile"
             background
-            layout="total, sizes, prev, pager, next, jumper"
+            :layout="paginationLayout"
             @size-change="onPageSizeChange"
             @current-change="loadEvents"
           />
@@ -122,10 +123,9 @@
          JSON dump replaced by structured field rendering. -->
     <el-drawer
       v-model="detailVisible"
-      :show-close="true"
-      :with-header="false"
+      :title="t('security.activity.detailTitle')"
       direction="rtl"
-      size="720px"
+      :size="drawerSize"
       :destroy-on-close="true"
     >
       <div v-if="detailEvent" class="detail-shell">
@@ -206,7 +206,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { activityApi } from '@/api'
 
@@ -226,6 +226,24 @@ interface ActivityEvent {
   summary?: string
   detail?: Record<string, any>
 }
+
+/**
+ * Mobile detection — drives the el-drawer size and el-pagination
+ * layout dynamically. CSS @media handles static layout, but EP
+ * component props need a reactive value to switch from a 720px
+ * drawer to full-width sheet, and to drop the size-switcher /
+ * jumper when there's no horizontal room for them.
+ */
+const isMobile = ref(false)
+let mq: MediaQueryList | null = null
+function syncMobile(e: MediaQueryListEvent | MediaQueryList) {
+  isMobile.value = e.matches
+}
+
+const drawerSize = computed(() => isMobile.value ? '100%' : '720px')
+const paginationLayout = computed(() =>
+  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper',
+)
 
 const events = ref<ActivityEvent[]>([])
 const loading = ref(false)
@@ -460,7 +478,14 @@ function absoluteTime(event: ActivityEvent): string {
 }
 
 onMounted(() => {
+  mq = window.matchMedia('(max-width: 768px)')
+  syncMobile(mq)
+  mq.addEventListener('change', syncMobile)
   loadEvents()
+})
+
+onBeforeUnmount(() => {
+  mq?.removeEventListener('change', syncMobile)
 })
 </script>
 
@@ -689,11 +714,11 @@ onMounted(() => {
 }
 
 .detail-hero {
-  /* Indented so the absolute-positioned dot sits inside, not behind
-     the drawer's left edge. */
+  /* Glass hero block. No negative margin — el-drawer body has
+     overflow constraints and a -8px outdent caused the rounded
+     border to clip on the sides. */
   position: relative;
   padding: 18px 18px 22px;
-  margin: -8px -8px 0;
   border-radius: 16px;
   border: 1px solid var(--mc-border-light);
   background: rgba(255, 255, 255, 0.55);
@@ -790,5 +815,86 @@ onMounted(() => {
   font-size: 11px; line-height: 1.6;
   color: var(--mc-text-secondary);
   white-space: pre-wrap; word-break: break-word;
+}
+
+/* ============ Mobile / narrow viewport (≤ 768px) ============ */
+@media (max-width: 768px) {
+  /* Header — stack title and refresh button vertically */
+  .activity-page :deep(.mc-page-header) {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .header-actions { justify-content: flex-end; }
+
+  /* Filter chips — drop the "More filters" link out of one row */
+  .filter-chips { padding: 8px 10px; gap: 6px; }
+  .filter-chip { padding: 5px 10px; font-size: 11px; }
+  .filter-spacer { flex-basis: 100%; height: 0; }
+
+  /* Event row — let target wrap naturally; time on a second line */
+  .event-row {
+    padding: 12px 14px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .event-body { flex: 1 1 100%; min-width: 0; }
+  .event-sentence {
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .target-name {
+    max-width: 100%;
+    white-space: normal;
+    word-break: break-all;
+  }
+  .event-time {
+    /* Push time to the right edge of its own row under the body */
+    flex: 0 0 auto;
+    margin-left: auto;
+    font-size: 11px;
+    padding-top: 0;
+  }
+  .event-chevron { display: none; }
+  .event-dot { margin-top: 5px; }
+
+  /* Day divider — tighter rhythm on mobile */
+  .day-divider { padding: 14px 2px 6px; }
+
+  /* Detail drawer — drawer goes full-width via :size binding;
+     here we collapse the inner padding and headline scale. */
+  .detail-shell { padding: 16px 16px 24px; gap: 18px; }
+  .detail-hero { padding: 14px 14px 18px; }
+  .detail-dot { left: 14px; top: 20px; }
+  .detail-headline {
+    font-size: 18px;
+    padding-left: 18px;
+    gap: 6px;
+  }
+  .detail-verb { font-size: 13px; padding: 1px 8px; }
+  .detail-target-type { font-size: 14px; }
+  .detail-target-name {
+    font-size: 13px;
+    margin-left: 18px;
+    word-break: break-all;
+  }
+  .detail-meta { padding-left: 18px; flex-wrap: wrap; }
+  .change-key { width: 100px; font-size: 11px; }
+  .change-item { gap: 10px; padding: 8px 0; font-size: 12px; }
+
+  /* Pagination — :small=true on EP shrinks; container loosens padding */
+  .pagination { padding: 6px 8px; margin-top: 10px; }
+}
+
+/* ============ Very small phones (≤ 480px) ============ */
+@media (max-width: 480px) {
+  .filter-chips { padding: 6px 8px; }
+  .event-row { padding: 10px 12px; }
+  .event-sentence { font-size: 12px; gap: 4px; }
+  .event-actor { font-weight: 700; }
+  .target-name { font-size: 12px; }
+  .detail-headline { font-size: 16px; }
+  .detail-target-name { font-size: 12px; }
+  .change-key { width: 84px; }
 }
 </style>
