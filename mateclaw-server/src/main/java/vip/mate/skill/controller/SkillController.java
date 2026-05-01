@@ -99,7 +99,20 @@ public class SkillController {
     @Operation(summary = "获取各类型技能计数（tab 徽章用）")
     @GetMapping("/counts")
     public R<Map<String, Long>> counts() {
-        return R.ok(skillService.countByType());
+        Map<String, Long> result = skillService.countByType();
+        // RFC-090 §3.2 — virtual MCP-derived skills aren't in mate_skill,
+        // so countByType() misses them. Fold in the live count so the
+        // "MCP" and "all" tab badges match what the list endpoint shows.
+        try {
+            long virtualMcp = mcpSkillBridge.listMcpDerivedSkillEntities().size();
+            if (virtualMcp > 0) {
+                result.merge("mcp", virtualMcp, Long::sum);
+                result.merge("all", virtualMcp, Long::sum);
+            }
+        } catch (Exception ignored) {
+            // Bridge failure must not break the badge fetch.
+        }
+        return R.ok(result);
     }
 
     @Operation(summary = "重新扫描单个技能（RFC-042 §2.3.4）")
