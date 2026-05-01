@@ -494,6 +494,12 @@ public class SkillPackageResolver {
                         .requires(defaultRequires)
                         .platforms(manifest.getPlatforms())
                         .build());
+                // Write the synthesized feature back so the UI's Features
+                // tab and the LLM's prompt enhancement both see one row
+                // instead of "no features declared". Functionally
+                // equivalent to the no-features-declared case, but
+                // observable in the manifest_json projection.
+                manifest.setFeatures(effectiveFeatures);
             } else {
                 effectiveFeatures = features;
             }

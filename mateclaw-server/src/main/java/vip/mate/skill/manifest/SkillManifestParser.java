@@ -71,6 +71,18 @@ public class SkillManifestParser {
         }
         Map<String, Object> fm = parsed.getFrontmatter();
 
+        // RFC-090 §5.4 — Anthropic-compatible `allowed-tools` is preferred, but
+        // 99% of legacy SKILL.md files declare tools via `dependencies.tools`
+        // (per the original SkillFrontmatterParser shape). Fall back to that
+        // list when v3 fields are absent so old skills stop rendering an
+        // empty Tools tab in the detail drawer.
+        List<String> v3AllowedTools = stringList(coalesce(fm, "allowed-tools", "allowed_tools"));
+        List<String> effectiveAllowedTools = v3AllowedTools.isEmpty()
+                && parsed.getDependencies() != null
+                && !parsed.getDependencies().getTools().isEmpty()
+                ? new ArrayList<>(parsed.getDependencies().getTools())
+                : v3AllowedTools;
+
         SkillManifest.SkillManifestBuilder b = SkillManifest.builder()
                 .id(string(fm, "id"))
                 .name(string(fm, "name"))
@@ -80,7 +92,7 @@ public class SkillManifestParser {
                 .author(string(fm, "author"))
                 .type(string(fm, "type"))
                 .category(string(fm, "category"))
-                .allowedTools(stringList(coalesce(fm, "allowed-tools", "allowed_tools")))
+                .allowedTools(effectiveAllowedTools)
                 .platforms(parsed.getPlatforms() == null ? List.of() : parsed.getPlatforms())
                 .requires(parseRequires(fm.get("requires"), parsed.getDependencies()))
                 .features(parseFeatures(fm.get("features")))

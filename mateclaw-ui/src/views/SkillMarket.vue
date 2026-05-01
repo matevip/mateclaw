@@ -346,7 +346,14 @@
           <ul v-else class="memory-agent-list">
             <li v-for="agent in detailEmployees" :key="agent.id" class="memory-agent-item">
               <span class="memory-agent-icon">{{ agent.icon || '🤖' }}</span>
-              <span class="memory-agent-name">{{ agent.name }}</span>
+              <div class="memory-agent-info">
+                <span class="memory-agent-name">{{ agent.name }}</span>
+                <span class="memory-agent-binding" :class="`binding-${agent.binding || 'explicit'}`">
+                  {{ agent.binding === 'implicit'
+                      ? t('skills.detail.bindingImplicit')
+                      : t('skills.detail.bindingExplicit') }}
+                </span>
+              </div>
               <button class="memory-link-btn" @click="$router.push(`/memory?agentId=${agent.id}`)">
                 {{ t('skills.detail.openMemory') }}
               </button>
@@ -502,7 +509,7 @@ const detailSkill = ref<Skill | null>(null)
 const detailTab = ref<'manifest' | 'tools' | 'features' | 'lessons' | 'memory'>('manifest')
 const detailLessonsRaw = ref<string>('')
 const detailLessonsLoading = ref(false)
-const detailEmployees = ref<Array<{ id: number; name: string; icon?: string }>>([])
+const detailEmployees = ref<Array<{ id: number; name: string; icon?: string; binding?: 'explicit' | 'implicit' }>>([])
 const detailEmployeesLoading = ref(false)
 
 /** RFC-090 §4.2 card surface — per-skill side data (lessons count, used-by). */
@@ -1490,7 +1497,11 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 .memory-agent-list { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 8px; }
 .memory-agent-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--mc-border-light); border-radius: 10px; background: var(--mc-bg-muted); }
 .memory-agent-icon { font-size: 20px; }
-.memory-agent-name { flex: 1; font-weight: 600; color: var(--mc-text-primary); }
+.memory-agent-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.memory-agent-name { font-weight: 600; color: var(--mc-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.memory-agent-binding { font-size: 10px; padding: 1px 6px; border-radius: 999px; font-weight: 700; letter-spacing: 0.04em; align-self: flex-start; }
+.binding-explicit { background: var(--mc-primary-bg); color: var(--mc-primary); }
+.binding-implicit { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
 .memory-link-btn { padding: 4px 10px; border: 1px solid var(--mc-border); background: var(--mc-bg-elevated); color: var(--mc-primary); border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 500; }
 .memory-link-btn:hover { background: var(--mc-primary-bg); border-color: var(--mc-primary); }
 

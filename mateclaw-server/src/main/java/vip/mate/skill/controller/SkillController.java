@@ -9,6 +9,7 @@ import vip.mate.common.result.R;
 import vip.mate.agent.AgentService;
 import vip.mate.agent.binding.model.AgentSkillBinding;
 import vip.mate.agent.binding.repository.AgentSkillBindingMapper;
+import vip.mate.agent.binding.service.AgentBindingService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.skill.lessons.SkillLessonsService;
@@ -48,6 +49,7 @@ public class SkillController {
     private final SkillLessonsService lessonsService;
     private final AgentSkillBindingMapper agentSkillBindingMapper;
     private final AgentService agentService;
+    private final AgentBindingService agentBindingService;
 
     @Operation(summary = "获取技能分页列表（RFC-042 §2.1）")
     @GetMapping
@@ -230,33 +232,82 @@ public class SkillController {
     // ==================== Reverse lookup (RFC-090 §7) ====================
 
     /**
-     * RFC-090 §7 — list agents (employees) currently bound to this
-     * skill so the skill card can render "Used by N employees" with a
-     * click-through. Returns lightweight {id, name, icon} rows; the
-     * full agent object would balloon the card payload.
+     * RFC-090 §7 / §14.2 — list agents (employees) for which this
+     * skill is reachable.
+     *
+     * <p>Two coverage paths, both reflected in the response:
+     * <ol>
+     *   <li><b>Explicit</b> — there's a {@code mate_agent_skill} row
+     *       with this skill id and {@code enabled=true}.</li>
+     *   <li><b>Implicit</b> — the agent has no explicit skill binding
+     *       at all ({@code AgentBindingService.getBoundSkillIds}
+     *       returns null), which the three-state contract treats as
+     *       "use every globally-enabled skill". Most users never wire
+     *       explicit bindings, so without this branch the count was
+     *       always zero even for skills clearly visible to the LLM.</li>
+     * </ol>
+     *
+     * <p>Each row carries {@code binding: "explicit" | "implicit"} so
+     * the UI can label the relationship.
      */
-    @Operation(summary = "List agents bound to this skill (RFC-090)")
+    @Operation(summary = "List agents that can use this skill (RFC-090 §14.2)")
     @GetMapping("/{id}/employees")
     public R<List<Map<String, Object>>> employees(@PathVariable Long id) {
-        List<AgentSkillBinding> bindings = agentSkillBindingMapper.selectList(
+        // Explicit bindings: agent_skill rows pointing to this skill.
+        List<AgentSkillBinding> explicitBindings = agentSkillBindingMapper.selectList(
                 new LambdaQueryWrapper<AgentSkillBinding>()
                         .eq(AgentSkillBinding::getSkillId, id)
                         .eq(AgentSkillBinding::getEnabled, true));
-        List<Map<String, Object>> rows = new ArrayList<>(bindings.size());
-        for (AgentSkillBinding b : bindings) {
-            try {
-                AgentEntity agent = agentService.getAgent(b.getAgentId());
-                if (agent == null) continue;
-                Map<String, Object> row = new LinkedHashMap<>();
-                row.put("id", agent.getId());
-                row.put("name", agent.getName());
-                row.put("icon", agent.getIcon());
-                rows.add(row);
-            } catch (Exception ignored) {
-                // agent may have been deleted; skip rather than fail the whole list
+        java.util.Set<Long> explicitAgentIds = new java.util.LinkedHashSet<>();
+        for (AgentSkillBinding b : explicitBindings) explicitAgentIds.add(b.getAgentId());
+
+        // Implicit bindings: agents whose getBoundSkillIds() == null
+        // (no explicit row in agent_skill at all). They get every
+        // globally-enabled skill, which includes this one provided the
+        // skill itself is enabled.
+        List<AgentEntity> allAgents = agentService.listAgents();
+        java.util.Set<Long> implicitAgentIds = new java.util.LinkedHashSet<>();
+        SkillEntity skill;
+        try {
+            skill = skillService.getSkill(id);
+        } catch (Exception e) {
+            skill = null;
+        }
+        boolean skillGloballyAvailable = skill != null && Boolean.TRUE.equals(skill.getEnabled());
+        if (skillGloballyAvailable) {
+            for (AgentEntity agent : allAgents) {
+                if (explicitAgentIds.contains(agent.getId())) continue;
+                java.util.Set<Long> bound = agentBindingService.getBoundSkillIds(agent.getId());
+                // null → no explicit bindings → uses every enabled skill
+                if (bound == null) implicitAgentIds.add(agent.getId());
             }
         }
+
+        java.util.List<Map<String, Object>> rows = new ArrayList<>();
+        // Stable order: explicit first (most "intentional" relationship),
+        // then implicit, agents inside each group keep DB insert order.
+        for (Long agentId : explicitAgentIds) {
+            appendAgentRow(rows, agentId, "explicit");
+        }
+        for (Long agentId : implicitAgentIds) {
+            appendAgentRow(rows, agentId, "implicit");
+        }
         return R.ok(rows);
+    }
+
+    private void appendAgentRow(List<Map<String, Object>> rows, Long agentId, String binding) {
+        try {
+            AgentEntity agent = agentService.getAgent(agentId);
+            if (agent == null) return;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", agent.getId());
+            row.put("name", agent.getName());
+            row.put("icon", agent.getIcon());
+            row.put("binding", binding);
+            rows.add(row);
+        } catch (Exception ignored) {
+            // agent may have been deleted; skip rather than fail the whole list
+        }
     }
 
     // ==================== Lessons API (RFC-090 §7 + §11.4) ====================
