@@ -243,26 +243,39 @@
             </div>
           </div>
 
-          <!-- Tools Tab -->
+          <!-- Tools Tab — RFC-090 §9.2 调整 B: Advanced bypass for atomic
+               tools not packaged as skills (e.g. datetime, delegate_agent).
+               Skill bindings already auto-expand allowed-tools (§14.2), so
+               the picker is collapsed by default to reduce noise. -->
           <div v-if="modalTab === 'tools'" class="binding-tab">
-            <p class="binding-hint">{{ t('agents.binding.toolsHint') }}</p>
-            <div v-if="availableTools.length === 0" class="binding-empty">{{ t('agents.binding.noTools') }}</div>
-            <div v-else class="binding-list">
-              <label
-                v-for="tool in availableTools"
-                :key="tool.name"
-                class="binding-item"
-                :class="{ selected: selectedToolNames.includes(tool.name) }"
-              >
-                <input type="checkbox" :value="tool.name" v-model="selectedToolNames" class="binding-checkbox" />
-                <span class="binding-icon">{{ tool.icon || '🔧' }}</span>
-                <div class="binding-info">
-                  <span class="binding-name">{{ tool.displayName || tool.name }}</span>
-                  <span v-if="tool.description" class="binding-desc">{{ tool.description?.slice(0, 80) }}</span>
-                </div>
-                <span class="binding-type-badge">{{ tool.toolType }}</span>
-              </label>
-            </div>
+            <details class="advanced-tools" :open="selectedToolNames.length > 0 || advancedToolsOpen">
+              <summary class="advanced-tools-summary" @click.prevent="advancedToolsOpen = !advancedToolsOpen">
+                <span class="advanced-tools-title">
+                  {{ t('agents.binding.advancedToolsTitle') }}
+                  <span v-if="selectedToolNames.length > 0" class="advanced-tools-count">{{ selectedToolNames.length }}</span>
+                </span>
+                <span class="advanced-tools-chevron">{{ (advancedToolsOpen || selectedToolNames.length > 0) ? '▾' : '▸' }}</span>
+              </summary>
+              <p class="binding-hint">{{ t('agents.binding.toolsHint') }}</p>
+              <p class="binding-hint advanced-tools-note">{{ t('agents.binding.advancedToolsHint') }}</p>
+              <div v-if="availableTools.length === 0" class="binding-empty">{{ t('agents.binding.noTools') }}</div>
+              <div v-else class="binding-list">
+                <label
+                  v-for="tool in availableTools"
+                  :key="tool.name"
+                  class="binding-item"
+                  :class="{ selected: selectedToolNames.includes(tool.name) }"
+                >
+                  <input type="checkbox" :value="tool.name" v-model="selectedToolNames" class="binding-checkbox" />
+                  <span class="binding-icon">{{ tool.icon || '🔧' }}</span>
+                  <div class="binding-info">
+                    <span class="binding-name">{{ tool.displayName || tool.name }}</span>
+                    <span v-if="tool.description" class="binding-desc">{{ tool.description?.slice(0, 80) }}</span>
+                  </div>
+                  <span class="binding-type-badge">{{ tool.toolType }}</span>
+                </label>
+              </div>
+            </details>
           </div>
 
           <!-- Providers Tab (RFC-009 PR-3) -->
@@ -324,6 +337,10 @@ const activeFilter = ref('all')
 const showModal = ref(false)
 const editingAgent = ref<Agent | null>(null)
 const modalTab = ref<'basic' | 'skills' | 'tools' | 'providers'>('basic')
+/** RFC-090 §9.2 调整 B — Tool picker is an Advanced bypass; collapsed by
+ *  default but stays open as soon as the agent has any direct tool
+ *  bindings, so existing users don't lose visibility on their picks. */
+const advancedToolsOpen = ref(false)
 
 // Binding state
 const availableSkills = ref<any[]>([])
@@ -868,4 +885,15 @@ async function toggleAgent(agent: Agent) {
 
 .template-tags { display: flex; flex-wrap: wrap; gap: 4px; align-self: flex-start; margin-top: 2px; }
 .tag-chip { font-size: 11px; padding: 2px 8px; background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); border-radius: 999px; white-space: nowrap; }
+
+/* RFC-090 §9.2 调整 B — Advanced Tools picker (collapsed by default) */
+.advanced-tools { border: 1px dashed var(--mc-border); border-radius: 12px; padding: 0; }
+.advanced-tools[open] { padding: 12px 14px; }
+.advanced-tools-summary { list-style: none; cursor: pointer; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; user-select: none; color: var(--mc-text-secondary); font-size: 13px; font-weight: 600; }
+.advanced-tools-summary::-webkit-details-marker { display: none; }
+.advanced-tools[open] > .advanced-tools-summary { padding: 0 0 8px; border-bottom: 1px solid var(--mc-border-light); margin-bottom: 8px; }
+.advanced-tools-title { display: inline-flex; align-items: center; gap: 8px; }
+.advanced-tools-count { padding: 1px 8px; background: var(--mc-primary-bg); color: var(--mc-primary); border-radius: 999px; font-size: 11px; font-weight: 700; }
+.advanced-tools-chevron { color: var(--mc-text-tertiary); font-size: 12px; }
+.advanced-tools-note { font-style: italic; color: var(--mc-text-tertiary); margin-top: 4px; }
 </style>

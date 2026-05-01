@@ -114,6 +114,10 @@
           <span v-if="getDependencyBadge(skill)" class="runtime-badge" :class="getDependencyBadge(skill)?.cls">
             {{ getDependencyBadge(skill)?.label }}
           </span>
+          <!-- RFC-090 §14.1 features 矩阵：Setup Needed (M/N) -->
+          <span v-if="getFeaturesBadge(skill)" class="runtime-badge" :class="getFeaturesBadge(skill)?.cls">
+            {{ getFeaturesBadge(skill)?.label }}
+          </span>
           <span v-if="getSourceBadge(skill)" class="source-badge">{{ getSourceBadge(skill) }}</span>
           <span v-if="getRuntimePath(skill)" class="skill-source-path">{{ getRuntimePath(skill) }}</span>
         </div>
@@ -179,6 +183,12 @@
         <div class="skill-footer">
           <span v-if="skill.author" class="skill-author">by {{ skill.author }}</span>
           <div class="skill-actions">
+            <button class="skill-btn" @click="openDetailDrawer(skill)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/>
+              </svg>
+              {{ t('skills.actions.view') }}
+            </button>
             <button class="skill-btn" @click="openEditModal(skill)">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -223,6 +233,72 @@
 
     <!-- Import Hub Dialog -->
     <ImportHubDialog v-model:visible="showImportDialog" @installed="loadAll" />
+
+    <!-- RFC-090 Phase 3 — Skill detail drawer (Manifest / Tools / Features) -->
+    <el-drawer
+      v-model="detailDrawerVisible"
+      :title="detailSkill ? resolveSkillName(detailSkill) : t('skills.detail.title')"
+      direction="rtl"
+      size="640px"
+      :destroy-on-close="true"
+    >
+      <div v-if="detailSkill" class="detail-drawer">
+        <div class="detail-tabs">
+          <button class="detail-tab" :class="{ active: detailTab === 'manifest' }" @click="detailTab = 'manifest'">
+            {{ t('skills.detail.manifest') }}
+          </button>
+          <button class="detail-tab" :class="{ active: detailTab === 'tools' }" @click="detailTab = 'tools'">
+            {{ t('skills.detail.tools') }}
+            <span v-if="detailToolsCount > 0" class="tab-count">{{ detailToolsCount }}</span>
+          </button>
+          <button class="detail-tab" :class="{ active: detailTab === 'features' }" @click="detailTab = 'features'">
+            {{ t('skills.detail.features') }}
+            <span v-if="detailFeaturesCount > 0" class="tab-count">{{ detailFeaturesCount }}</span>
+          </button>
+        </div>
+        <!-- Manifest tab -->
+        <div v-if="detailTab === 'manifest'" class="detail-section">
+          <p v-if="!detailManifest" class="detail-empty">{{ t('skills.detail.noManifest') }}</p>
+          <pre v-else class="detail-pre">{{ detailManifestPretty }}</pre>
+        </div>
+        <!-- Tools tab -->
+        <div v-if="detailTab === 'tools'" class="detail-section">
+          <p v-if="detailToolsCount === 0" class="detail-empty">{{ t('skills.detail.noTools') }}</p>
+          <ul v-else class="detail-tool-list">
+            <li v-for="tool in detailEffectiveTools" :key="tool" class="detail-tool-item">
+              <code>{{ tool }}</code>
+            </li>
+          </ul>
+          <p class="detail-hint">{{ t('skills.detail.toolsHint') }}</p>
+        </div>
+        <!-- Features tab -->
+        <div v-if="detailTab === 'features'" class="detail-section">
+          <p v-if="detailFeaturesCount === 0" class="detail-empty">{{ t('skills.detail.noFeatures') }}</p>
+          <ul v-else class="detail-feature-list">
+            <li v-for="feat in detailFeatures" :key="feat.id" class="detail-feature-item">
+              <div class="detail-feature-head">
+                <span class="detail-feature-id">{{ feat.id }}</span>
+                <span class="detail-feature-status" :class="`feat-${(feat.status || 'unknown').toLowerCase()}`">
+                  {{ feat.status }}
+                </span>
+              </div>
+              <div v-if="feat.label" class="detail-feature-label">{{ feat.label }}</div>
+              <div v-if="feat.requires?.length" class="detail-feature-meta">
+                <span class="detail-meta-key">requires:</span>
+                <span v-for="r in feat.requires" :key="r" class="detail-feature-tag">{{ r }}</span>
+              </div>
+              <div v-if="feat.platforms?.length" class="detail-feature-meta">
+                <span class="detail-meta-key">platforms:</span>
+                <span v-for="p in feat.platforms" :key="p" class="detail-feature-tag">{{ p }}</span>
+              </div>
+              <div v-if="feat.fallbackMessage" class="detail-feature-fallback">
+                {{ feat.fallbackMessage }}
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </el-drawer>
 
     <!-- Modal -->
     <div v-if="showModal" class="modal-overlay">
@@ -349,6 +425,34 @@ const query = reactive({
 /** Per-skill UI state for the RFC-042 §2.3 findings panel. */
 const expandedFindings = ref<Record<string, boolean>>({})
 const rescanning = ref<Record<string, boolean>>({})
+
+/** RFC-090 Phase 3 — detail drawer state. */
+const detailDrawerVisible = ref(false)
+const detailSkill = ref<Skill | null>(null)
+const detailTab = ref<'manifest' | 'tools' | 'features'>('manifest')
+
+const detailRuntime = computed(() =>
+  detailSkill.value ? runtimeStatusMap.value[detailSkill.value.name] || null : null,
+)
+const detailManifest = computed(() => detailRuntime.value?.manifest ?? null)
+const detailManifestPretty = computed(() =>
+  detailManifest.value ? JSON.stringify(detailManifest.value, null, 2) : '',
+)
+const detailEffectiveTools = computed(() => detailRuntime.value?.effectiveAllowedTools || [])
+const detailToolsCount = computed(() => detailEffectiveTools.value.length)
+const detailFeatures = computed(() => {
+  const m = detailManifest.value
+  if (!m || !m.features) return []
+  const statuses = detailRuntime.value?.featureStatuses || {}
+  return m.features.map(f => ({ ...f, status: statuses[f.id] || 'UNKNOWN' }))
+})
+const detailFeaturesCount = computed(() => detailFeatures.value.length)
+
+function openDetailDrawer(skill: Skill) {
+  detailSkill.value = skill
+  detailTab.value = 'manifest'
+  detailDrawerVisible.value = true
+}
 
 const categoryTabs = computed(() => [
   { label: t('skills.tabs.all'), value: 'all', icon: '🗂️' },
@@ -691,6 +795,37 @@ function getDependencyBadge(skill: Skill): { label: string; cls: string } | null
   return null
 }
 
+/**
+ * RFC-090 §14.1 — when a manifest declares a features[] matrix, surface
+ * "Setup Needed (M/N)" so the user sees partial readiness instead of a
+ * binary "all-or-nothing" deps badge. Returns null when the manifest has
+ * no explicit features (legacy skills or single-feature shape) — the
+ * existing dependency badge already covers that case.
+ */
+function getFeaturesBadge(skill: Skill): { label: string; cls: string } | null {
+  if (!skill.enabled) return null
+  const rt = getRuntimeStatus(skill)
+  if (!rt || !rt.manifest) return null
+  const declaredFeatures = rt.manifest.features || []
+  if (declaredFeatures.length === 0) return null
+  const statuses = rt.featureStatuses || {}
+  const total = declaredFeatures.length
+  const ready = (rt.activeFeatures || []).length
+  if (ready === total) {
+    return { label: `${ready}/${total} ready`, cls: 'rt-features-ready' }
+  }
+  if (ready === 0) {
+    return { label: `Setup Needed (0/${total})`, cls: 'rt-deps-missing' }
+  }
+  // Mixed: at least one feature is not READY.
+  // Distinguish UNSUPPORTED vs SETUP_NEEDED to color appropriately.
+  const anyUnsupported = Object.values(statuses).some(s => s === 'UNSUPPORTED')
+  return {
+    label: `Setup Needed (${ready}/${total})`,
+    cls: anyUnsupported ? 'rt-features-mixed' : 'rt-deps-missing',
+  }
+}
+
 function getMissingDeps(skill: Skill): string[] {
   const rt = getRuntimeStatus(skill)
   return rt?.missingDependencies || []
@@ -997,6 +1132,11 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 :root.dark .rt-synthesized { background: rgba(99, 102, 241, 0.15); color: #818cf8; }
 .rt-sec-warning { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }
 .rt-deps-missing { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }
+/* RFC-090 §14.1 — features 矩阵徽标 */
+.rt-features-ready { background: rgba(34, 197, 94, 0.12); color: #16a34a; }
+.rt-features-mixed { background: rgba(99, 102, 241, 0.12); color: #6366f1; }
+:root.dark .rt-features-ready { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
+:root.dark .rt-features-mixed { background: rgba(129, 140, 248, 0.18); color: #a5b4fc; }
 .rt-disabled { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
 .rt-unknown { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
 .skill-source-path { font-size: 11px; color: var(--mc-text-tertiary); font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
@@ -1047,4 +1187,34 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
     width: 100%;
   }
 }
+
+/* RFC-090 Phase 3 — detail drawer */
+.detail-drawer { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 16px; }
+.detail-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--mc-border-light); padding-bottom: 4px; }
+.detail-tab { padding: 8px 14px; border: none; background: none; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--mc-text-secondary); border-radius: 8px 8px 0 0; display: inline-flex; align-items: center; gap: 6px; }
+.detail-tab:hover { color: var(--mc-text-primary); background: var(--mc-bg-muted); }
+.detail-tab.active { color: var(--mc-primary); background: var(--mc-primary-bg); border-bottom: 2px solid var(--mc-primary); margin-bottom: -1px; font-weight: 600; }
+.tab-count { font-size: 10px; padding: 1px 6px; border-radius: 10px; background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); font-weight: 600; }
+.detail-tab.active .tab-count { background: var(--mc-primary); color: white; }
+.detail-section { padding: 4px 0; }
+.detail-empty { color: var(--mc-text-tertiary); font-size: 13px; font-style: italic; }
+.detail-pre { background: var(--mc-bg-sunken); padding: 12px; border-radius: 8px; max-height: 480px; overflow: auto; font-size: 12px; line-height: 1.5; color: var(--mc-text-primary); font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace; white-space: pre-wrap; word-break: break-word; }
+.detail-tool-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.detail-tool-item code { display: block; padding: 6px 10px; background: var(--mc-bg-sunken); border-radius: 8px; font-size: 12px; color: var(--mc-text-primary); }
+.detail-hint { margin-top: 12px; font-size: 12px; color: var(--mc-text-tertiary); line-height: 1.5; }
+.detail-feature-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.detail-feature-item { padding: 12px; border: 1px solid var(--mc-border-light); border-radius: 12px; background: var(--mc-bg-muted); }
+.detail-feature-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.detail-feature-id { font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; font-weight: 600; color: var(--mc-text-primary); }
+.detail-feature-status { font-size: 10px; padding: 2px 8px; border-radius: 999px; font-weight: 700; letter-spacing: 0.04em; }
+.feat-ready { background: rgba(34, 197, 94, 0.12); color: #16a34a; }
+.feat-setup_needed { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }
+.feat-unsupported { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
+.feat-unknown { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
+:root.dark .feat-ready { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
+.detail-feature-label { font-size: 13px; color: var(--mc-text-secondary); margin: 4px 0 6px; }
+.detail-feature-meta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin: 4px 0; font-size: 11px; }
+.detail-meta-key { color: var(--mc-text-tertiary); margin-right: 4px; }
+.detail-feature-tag { padding: 2px 6px; background: var(--mc-bg-elevated); border-radius: 4px; font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace; color: var(--mc-text-primary); }
+.detail-feature-fallback { font-size: 11px; color: var(--mc-primary-hover); margin-top: 6px; font-style: italic; }
 </style>

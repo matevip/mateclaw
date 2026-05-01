@@ -772,6 +772,8 @@ export default {
     binding: {
       skillsHint: '选择此智能体可使用的技能。留空则使用所有已启用的技能。',
       toolsHint: '选择此智能体可使用的工具。留空则使用所有已启用的工具。',
+      advancedToolsTitle: '高级：手选原子工具',
+      advancedToolsHint: 'Skill 绑定已自动展开 allowed-tools。此处仅用于未打包成 Skill 的内置微工具（如 datetime、delegate_agent）。',
       providersHint: '此智能体优先使用的提供商顺序（数字越小越先尝试）。留空则按全局可用池顺序回退。提供商进入冷却或被移出池时仍会被自动跳过。',
       providersAddHint: '点击下方提供商加入偏好列表：',
       noSkills: '暂无可用技能',
@@ -1932,9 +1934,20 @@ export default {
     },
     actions: {
       configure: '配置',
+      view: '查看',
       delete: '删除',
       saveChanges: '保存更改',
       createSkill: '创建技能',
+    },
+    detail: {
+      title: '技能详情',
+      manifest: 'Manifest',
+      tools: '工具',
+      features: '特性',
+      noManifest: '该技能未声明 v3 manifest，使用旧字段。',
+      noTools: '当前激活特性未暴露任何工具。',
+      noFeatures: '未声明 features[] 矩阵，技能被视为单一默认特性。',
+      toolsHint: 'Skill 绑定到 agent 时，这些工具名将合并进 LLM 的 allowed-tools。SETUP_NEEDED 特性下的工具保持隐藏。',
     },
     runtime: {
       disabled: '已停用',

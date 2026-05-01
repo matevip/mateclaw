@@ -233,6 +233,8 @@ export interface Skill {
 
 /** 运行时解析状态（来自 /runtime/status） */
 export interface SkillRuntimeStatus {
+  /** RFC-090 Phase 2 — entity primary key */
+  id?: number
   name: string
   description?: string
   source: string  // "directory" | "database"
@@ -256,6 +258,77 @@ export interface SkillRuntimeStatus {
   dependencySummary?: string | null
   // Computed label
   runtimeStatusLabel?: string
+  // RFC-090 §14.1 — features matrix + manifest SoT
+  manifest?: SkillManifest | null
+  /** Map<featureId, "READY" | "SETUP_NEEDED" | "UNSUPPORTED"> */
+  featureStatuses?: Record<string, string>
+  /** featureIds whose status is READY */
+  activeFeatures?: string[]
+  /** Tools advertised to the LLM after feature filtering */
+  effectiveAllowedTools?: string[]
+}
+
+/** RFC-090 §14.6 — typed view onto manifest_json */
+export interface SkillManifest {
+  id?: string
+  name?: string
+  description?: string
+  icon?: string
+  version?: string
+  author?: string
+  /** prompt | code | mcp | acp | knowledge */
+  type?: string
+  category?: string
+  allowedTools?: string[]
+  requires?: SkillManifestRequirement[]
+  platforms?: string[]
+  features?: SkillManifestFeature[]
+  settings?: SkillManifestSetting[]
+  requiresModel?: string[]
+  dashboardMetrics?: SkillManifestDashboardMetric[]
+  selfEvolution?: { lessonsEnabled?: boolean; lessonsMaxEntries?: number; memoryWritesAllowed?: boolean }
+  knowledge?: {
+    bindKb?: string
+    retrieval?: string
+    topK?: number
+    citation?: string
+    rerank?: boolean
+    boundKbId?: number | null
+  } | null
+  extras?: Record<string, any>
+}
+
+export interface SkillManifestRequirement {
+  key: string
+  type?: string
+  check?: string
+  optional?: boolean
+  description?: string
+  install?: Record<string, string>
+}
+
+export interface SkillManifestFeature {
+  id: string
+  label?: string
+  requires?: string[]
+  platforms?: string[]
+  tools?: string[]
+  fallbackMessage?: string
+  unsupportedMessage?: string
+}
+
+export interface SkillManifestSetting {
+  key: string
+  label?: string
+  type?: string
+  defaultValue?: any
+  options?: Record<string, any>[]
+}
+
+export interface SkillManifestDashboardMetric {
+  label?: string
+  memoryKey?: string
+  format?: string
 }
 
 /** 安全扫描发现 */

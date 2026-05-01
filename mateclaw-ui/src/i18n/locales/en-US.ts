@@ -772,6 +772,8 @@ export default {
     binding: {
       skillsHint: 'Select skills this agent can use. Leave empty to use all enabled skills.',
       toolsHint: 'Select tools this agent can use. Leave empty to use all enabled tools.',
+      advancedToolsTitle: 'Advanced: Hand-picked atomic tools',
+      advancedToolsHint: 'Skill bindings already auto-expand allowed tools. Use this only for built-in micro-utilities not packaged as a skill (e.g. datetime, delegate_agent).',
       providersHint: 'Preferred provider order for this agent (lower index tried first). Leave empty to use the global available-pool order. Cooling-down or pool-removed providers are still skipped automatically.',
       providersAddHint: 'Click a provider below to add it to the preference list:',
       noSkills: 'No skills available',
@@ -1930,9 +1932,20 @@ export default {
     },
     actions: {
       configure: 'Configure',
+      view: 'View',
       delete: 'Delete',
       saveChanges: 'Save Changes',
       createSkill: 'Create Skill',
+    },
+    detail: {
+      title: 'Skill detail',
+      manifest: 'Manifest',
+      tools: 'Tools',
+      features: 'Features',
+      noManifest: 'This skill does not declare a v3 manifest. Legacy fields apply.',
+      noTools: 'No tools advertised by active features.',
+      noFeatures: 'No features[] matrix declared. The skill is treated as a single default feature.',
+      toolsHint: 'These tool names are merged into the LLM allowed-tool list when this skill is bound to an agent. Tools owned by SETUP_NEEDED features stay hidden.',
     },
     runtime: {
       disabled: 'Disabled',
