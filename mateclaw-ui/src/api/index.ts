@@ -176,6 +176,14 @@ export const skillApi = {
   clearLessons: (id: string | number) => http.post(`/skills/${id}/lessons/clear`),
 }
 
+// ==================== Skill Templates (RFC-091) ====================
+export const skillTemplateApi = {
+  list: () => http.get('/skill-templates'),
+  get: (id: string) => http.get(`/skill-templates/${id}`),
+  instantiate: (id: string, values: Record<string, unknown>) =>
+    http.post(`/skill-templates/${id}/instantiate`, values),
+}
+
 // ==================== Skill Install ====================
 export const skillInstallApi = {
   searchHub: (q: string, limit = 20) =>

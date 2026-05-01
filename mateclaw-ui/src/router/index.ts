@@ -63,6 +63,13 @@ const router = createRouter({
           component: () => import('@/views/Security/Activity/index.vue'),
           meta: { title: 'Activity' },
         },
+        // RFC-091: Skill 模板库 + 创作向导
+        {
+          path: 'skills/templates',
+          name: 'SkillTemplates',
+          component: () => import('@/views/SkillTemplates.vue'),
+          meta: { title: 'Skill Templates' },
+        },
         {
           path: 'plugins',
           name: 'Plugins',

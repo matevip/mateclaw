@@ -1,0 +1,45 @@
+{
+  "id": "meeting-summarizer",
+  "name": "Meeting Summarizer",
+  "nameZh": "会议纪要助手",
+  "category": "content",
+  "type": "prompt",
+  "icon": "📝",
+  "description": "Pure-prompt skill that turns a meeting transcript into a structured summary (decisions, action items, owners).",
+  "descriptionZh": "把会议转录稿整理成结构化纪要（决策、行动项、负责人）。",
+  "fields": [
+    {
+      "key": "skill_name",
+      "label": "Skill 标识 (slug)",
+      "type": "text",
+      "required": true,
+      "placeholder": "team-meeting-notes"
+    },
+    {
+      "key": "display_name",
+      "label": "显示名",
+      "type": "text",
+      "required": false,
+      "placeholder": "Team Meeting Notes"
+    },
+    {
+      "key": "team_context",
+      "label": "团队上下文",
+      "type": "textarea",
+      "required": false,
+      "default": "产研团队，敏捷开发，迭代节奏 2 周。",
+      "hint": "帮助模型理解参会人角色与术语"
+    },
+    {
+      "key": "output_language",
+      "label": "输出语言",
+      "type": "select",
+      "default": "zh",
+      "options": [
+        { "value": "zh", "label": "中文" },
+        { "value": "en", "label": "English" }
+      ]
+    }
+  ],
+  "skillMd": "---\nname: {{skill_name}}\ndescription: {{display_name}} - 把会议转录整理为结构化纪要\ntype: prompt\nicon: \"📝\"\ncategory: content\nversion: 1.0.0\nauthor: skill-template-wizard\nself-evolution:\n  lessons_enabled: true\n---\n\n# {{display_name}}\n\n你是会议纪要助手。**团队背景**：{{team_context}}\n\n输出格式（{{output_language_label}}）：\n\n1. **核心决策** — 列点，每条 1 句话\n2. **行动项 (Action Items)** — 表格：负责人 / 任务 / Due\n3. **风险与待办** — 列点\n4. **下次同步** — 时间 + 议题草案\n\n约束：\n- 不要把闲聊误判为决策\n- 没有明确负责人的任务标 `Owner: TBD`\n- 提到具体日期时统一为 `YYYY-MM-DD`\n"
+}
