@@ -343,6 +343,12 @@ const navGroups = computed(() => [
         label: t('nav.plugins'),
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 3h-8v4h8V3z"/></svg>`,
       },
+      // RFC-090 Phase 4: Activity 提升到顶层
+      {
+        path: '/activity',
+        label: t('nav.activity'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
+      },
     ],
   },
   {

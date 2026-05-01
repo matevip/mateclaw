@@ -1,12 +1,18 @@
 <template>
-  <div class="settings-section">
-    <div class="section-header">
-      <div>
-        <h2 class="section-title">{{ t('security.activity.title') }}</h2>
-        <p class="section-desc">{{ t('security.activity.desc') }}</p>
-      </div>
-    </div>
-
+  <!-- RFC-090 Phase 4: Activity 提升到顶层路由 /activity，但本组件
+       既保留 settings-section 内层结构以便旧 Settings 引用兼容，
+       又用 mc-page-shell 包一层在顶层路由下显示完整页框。 -->
+  <div class="mc-page-shell">
+    <div class="mc-page-frame">
+      <div class="mc-page-inner activity-page">
+        <div class="mc-page-header">
+          <div>
+            <div class="mc-page-kicker">{{ t('nav.activity') }}</div>
+            <h1 class="mc-page-title">{{ t('security.activity.title') }}</h1>
+            <p class="mc-page-desc">{{ t('security.activity.desc') }}</p>
+          </div>
+        </div>
+        <div class="settings-section activity-inner mc-surface-card">
     <!-- Filters -->
     <div class="filter-row">
       <select v-model="filters.action" class="filter-select" @change="loadEvents">
@@ -76,6 +82,9 @@
       <span class="page-info">{{ page }} / {{ Math.ceil(total / pageSize) }}</span>
       <button class="btn-secondary btn-sm" :disabled="page >= Math.ceil(total / pageSize)" @click="page++; loadEvents()">&raquo;</button>
     </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -127,6 +136,10 @@ onMounted(() => {
 </style>
 
 <style scoped>
+/* RFC-090 Phase 4 — top-level standalone shell */
+.activity-page { gap: 18px; }
+.activity-inner { padding: 18px; }
+
 .filter-row {
   display: flex;
   gap: 8px;

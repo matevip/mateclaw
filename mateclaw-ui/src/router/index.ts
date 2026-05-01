@@ -58,6 +58,12 @@ const router = createRouter({
         // Tools 顶层入口已降级到 Settings ▸ Tools (Catalog) (RFC-090 Phase 1)
         // 旧路径 /tools 由下方 redirect 兼容
         {
+          path: 'activity',
+          name: 'Activity',
+          component: () => import('@/views/Security/Activity/index.vue'),
+          meta: { title: 'Activity' },
+        },
+        {
           path: 'plugins',
           name: 'Plugins',
           component: () => import('@/views/Plugins.vue'),
@@ -124,12 +130,8 @@ const router = createRouter({
               component: () => import('@/views/Security/Members/index.vue'),
               meta: { title: 'Settings - Members' },
             },
-            {
-              path: 'activity',
-              name: 'SettingsActivity',
-              component: () => import('@/views/Security/Activity/index.vue'),
-              meta: { title: 'Settings - Activity' },
-            },
+            // RFC-090 Phase 4: Activity 提升到顶层 /activity（下方 children-out
+            // 的 settings/activity redirect 兼容旧链接，此处不再注册子路由）
             // Advanced (absorbed from top-level nav)
             {
               path: 'agent-context',
@@ -206,7 +208,9 @@ const router = createRouter({
         { path: 'workspace', redirect: '/settings/agent-context' },
         { path: 'security/workspaces', redirect: '/settings/workspaces' },
         { path: 'security/members', redirect: '/settings/members' },
-        { path: 'security/activity', redirect: '/settings/activity' },
+        // RFC-090 Phase 4: Activity 提升到顶层
+        { path: 'security/activity', redirect: '/activity' },
+        { path: 'settings/activity', redirect: '/activity' },
         { path: 'cron-jobs', redirect: '/settings/cron-jobs' },
         { path: 'datasources', redirect: '/settings/datasources' },
         { path: 'mcp-servers', redirect: '/settings/mcp-servers' },

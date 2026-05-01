@@ -247,6 +247,7 @@ export default {
     mcpServers: 'MCP 连接',
     mcpConnections: 'MCP 连接',
     toolsCatalog: '工具目录',
+    activity: '活动记录',
     settingsGroup: '设置',
     agents: '智能体',
     security: '安全',

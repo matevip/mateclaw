@@ -247,6 +247,7 @@ export default {
     mcpServers: 'MCP Connections',
     mcpConnections: 'MCP Connections',
     toolsCatalog: 'Tools (Catalog)',
+    activity: 'Activity',
     settingsGroup: 'Settings',
     agents: 'Agents',
     security: 'Security',
