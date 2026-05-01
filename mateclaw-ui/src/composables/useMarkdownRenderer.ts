@@ -258,9 +258,18 @@ const customRenderer = {
       // Dangerous scheme — render the inner content as plain content (no anchor).
       return innerHtml
     }
+    // Defense against LLMs hallucinating a host on tool-returned download URLs.
+    // /api/v1/files/generated/<id> is always same-origin; multiple models have
+    // been observed prepending bogus schemes/hosts (https://localhost:8080,
+    // https://ai-tools-system.com, …) when echoing the URL back, breaking the
+    // download. Strip any prepended scheme://host so the link works regardless
+    // of what the model wrote.
+    const hostStripped = /^https?:\/\/[^/]+(\/api\/v1\/files\/generated\/.+)$/i.exec(href)
+    const safeHref = hostStripped ? hostStripped[1] : href
+
     let extra = ''
     try {
-      const url = new URL(href, typeof window !== 'undefined' ? window.location.href : 'http://localhost/')
+      const url = new URL(safeHref, typeof window !== 'undefined' ? window.location.href : 'http://localhost/')
       if (typeof window !== 'undefined' && url.origin !== window.location.origin) {
         extra = ' target="_blank" rel="noopener noreferrer"'
       }
@@ -268,7 +277,7 @@ const customRenderer = {
       // Malformed URL — treat as same-origin (relative link path).
     }
     const titleAttr = title ? ` title="${escapeHtml(title)}"` : ''
-    return `<a href="${escapeHtml(href)}"${titleAttr}${extra}>${innerHtml}</a>`
+    return `<a href="${escapeHtml(safeHref)}"${titleAttr}${extra}>${innerHtml}</a>`
   },
 }
 

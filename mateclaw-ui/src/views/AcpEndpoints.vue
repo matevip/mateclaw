@@ -131,8 +131,81 @@
               <input v-model="form.argsJson" class="form-input mono" placeholder='["-y","@zed-industries/codex-acp"]' />
             </div>
             <div class="form-group full-width">
-              <label class="form-label">{{ t('acp.fields.env') }}</label>
-              <textarea v-model="form.envJson" class="form-input form-textarea mono" rows="2" placeholder='{"OPENAI_API_KEY":"..."}'></textarea>
+              <div class="env-header">
+                <label class="form-label">{{ t('acp.fields.env') }}</label>
+                <button type="button" class="btn-link env-mode-toggle" @click="toggleEnvMode">
+                  {{ envJsonMode ? t('acp.env.formMode') : t('acp.env.jsonMode') }}
+                </button>
+              </div>
+
+              <!-- Suggestion chips: clicking adds a pre-named row to the form. -->
+              <div v-if="!envJsonMode && envSuggestions.length > 0" class="env-suggestions">
+                <span class="env-suggestions-label">{{ t('acp.env.suggested') }}:</span>
+                <button
+                  v-for="sug in envSuggestions"
+                  :key="sug.key"
+                  type="button"
+                  class="env-suggestion-chip"
+                  :class="{ 'is-added': hasEnvKey(sug.key) }"
+                  :title="sug.hint"
+                  :disabled="hasEnvKey(sug.key)"
+                  @click="addSuggestedEnv(sug)"
+                >
+                  {{ sug.key }}
+                  <span class="chip-mark">{{ hasEnvKey(sug.key) ? '✓' : '+' }}</span>
+                </button>
+              </div>
+
+              <!-- Visual key/value editor (default mode). -->
+              <div v-if="!envJsonMode" class="env-table">
+                <div v-for="(entry, idx) in envEntries" :key="idx" class="env-row">
+                  <input
+                    v-model="entry.key"
+                    class="form-input mono env-key-input"
+                    :placeholder="t('acp.env.keyPlaceholder')"
+                    @blur="entry.masked = isSecretKey(entry.key)"
+                  />
+                  <div class="env-value-wrap">
+                    <input
+                      v-model="entry.value"
+                      :type="entry.masked && !entry.revealed ? 'password' : 'text'"
+                      class="form-input mono env-value-input"
+                      :placeholder="t('acp.env.valuePlaceholder')"
+                      autocomplete="off"
+                    />
+                    <button
+                      v-if="entry.masked"
+                      type="button"
+                      class="env-eye"
+                      @click="entry.revealed = !entry.revealed"
+                      :title="entry.revealed ? t('acp.env.hide') : t('acp.env.show')"
+                    >
+                      {{ entry.revealed ? '🙈' : '👁' }}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    class="env-remove"
+                    @click="removeEnvEntry(idx)"
+                    :title="t('acp.env.remove')"
+                  >×</button>
+                </div>
+                <button type="button" class="env-add-btn" @click="addEnvEntry">
+                  + {{ t('acp.env.addRow') }}
+                </button>
+              </div>
+
+              <!-- Raw JSON fallback for advanced users. -->
+              <textarea
+                v-else
+                v-model="form.envJson"
+                class="form-input form-textarea mono"
+                rows="3"
+                placeholder='{"OPENAI_API_KEY":"..."}'
+              ></textarea>
+
+              <!-- Endpoint-specific hint (e.g. claude-code OAuth caveat). -->
+              <div v-if="envHint" class="env-hint">💡 {{ envHint }}</div>
             </div>
             <div class="form-group full-width">
               <label class="toggle-inline">
@@ -152,7 +225,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { mcConfirm } from '@/components/common/useConfirm'
@@ -197,6 +270,156 @@ const form = reactive<any>(defaultForm())
 
 const canSave = computed(() => !!form.name && !!form.command)
 
+// ==================== Env editor state ====================
+//
+// The env field used to be a raw JSON textarea — easy to mistype the
+// quotes / commas / brace and impossible for users to discover which
+// API key they actually need to paste. The visual editor below replaces
+// that with a key/value table + per-endpoint suggestion chips, and
+// keeps a "Edit as JSON" toggle so advanced users can still drop into
+// a textarea when they want.
+//
+// Source-of-truth contract:
+//   - In form mode: envEntries is the truth; we serialize it into
+//     form.envJson at save time (and on toggle).
+//   - In JSON mode: form.envJson is the truth; we parse it back to
+//     envEntries when toggling off.
+
+interface EnvEntry {
+  key: string
+  value: string
+  masked: boolean
+  revealed: boolean
+}
+
+interface EnvSuggestion {
+  key: string
+  hint: string
+}
+
+const envEntries = ref<EnvEntry[]>([])
+const envJsonMode = ref(false)
+
+/**
+ * Treat any key whose name implies "secret" as masked by default. The
+ * user can still toggle visibility on the row. The pattern matches the
+ * obvious cases (API_KEY / TOKEN / SECRET / PASS*) — false negatives
+ * just show the value in plaintext, which is no worse than the old
+ * JSON textarea did.
+ */
+function isSecretKey(key: string): boolean {
+  if (!key) return false
+  return /(KEY|TOKEN|SECRET|PASS|CREDENTIAL)/i.test(key)
+}
+
+function entriesFromJson(json: string): EnvEntry[] {
+  if (!json || !json.trim()) return []
+  try {
+    const obj = JSON.parse(json)
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return []
+    return Object.entries(obj).map(([k, v]) => ({
+      key: k,
+      value: typeof v === 'string' ? v : String(v),
+      masked: isSecretKey(k),
+      revealed: false,
+    }))
+  } catch {
+    return []
+  }
+}
+
+function entriesToJson(entries: EnvEntry[]): string {
+  const obj: Record<string, string> = {}
+  for (const e of entries) {
+    const k = e.key.trim()
+    if (k) obj[k] = e.value
+  }
+  return JSON.stringify(obj)
+}
+
+function addEnvEntry() {
+  envEntries.value.push({ key: '', value: '', masked: false, revealed: false })
+}
+
+function removeEnvEntry(idx: number) {
+  envEntries.value.splice(idx, 1)
+}
+
+function hasEnvKey(key: string): boolean {
+  return envEntries.value.some((e) => e.key === key)
+}
+
+function addSuggestedEnv(sug: EnvSuggestion) {
+  if (hasEnvKey(sug.key)) return
+  envEntries.value.push({
+    key: sug.key,
+    value: '',
+    masked: isSecretKey(sug.key),
+    revealed: false,
+  })
+}
+
+/**
+ * Suggestion chips per endpoint — mirrors the server-side
+ * AcpRuntimeSupport.expectedAuthEnvVar() so the auth-error translator
+ * and the form helper agree on what env var each endpoint expects.
+ */
+const envSuggestions = computed<EnvSuggestion[]>(() => {
+  const slug = String(form.name || '').toLowerCase()
+  const cmd = String(form.command || '').toLowerCase()
+  const args = String(form.argsJson || '').toLowerCase()
+  const matches = (kw: string) => slug.includes(kw) || cmd.includes(kw) || args.includes(kw)
+
+  if (matches('claude') || matches('anthropic')) {
+    return [{ key: 'ANTHROPIC_API_KEY', hint: t('acp.env.hints.anthropic') }]
+  }
+  if (matches('codex') || matches('openai')) {
+    return [{ key: 'OPENAI_API_KEY', hint: t('acp.env.hints.openai') }]
+  }
+  if (matches('qwen') || matches('dashscope')) {
+    return [{ key: 'DASHSCOPE_API_KEY', hint: t('acp.env.hints.dashscope') }]
+  }
+  if (matches('gemini') || matches('google')) {
+    return [{ key: 'GOOGLE_API_KEY', hint: t('acp.env.hints.google') }]
+  }
+  // opencode is multi-provider; surface a soft hint instead of a chip
+  // because we don't know which provider the user has configured.
+  return []
+})
+
+/**
+ * Caveat banner shown beneath the env editor. Today it only fires for
+ * claude-code endpoints, where users are most likely to confuse OAuth
+ * login (which doesn't authenticate against the public API) with the
+ * env var the third-party Zed wrapper actually needs.
+ */
+const envHint = computed(() => {
+  const slug = String(form.name || '').toLowerCase()
+  if (slug.includes('claude')) return t('acp.env.hints.claudeOauth')
+  return ''
+})
+
+/**
+ * Switch between form and JSON. The truth-of-record swaps direction;
+ * the watch below performs the bridging conversion so the user never
+ * sees stale data on the other side.
+ */
+function toggleEnvMode() {
+  envJsonMode.value = !envJsonMode.value
+}
+
+watch(envJsonMode, (isJson, wasJson) => {
+  if (isJson && !wasJson) {
+    // form → JSON: serialize entries; the textarea now owns the value.
+    form.envJson = entriesToJson(envEntries.value)
+  } else if (!isJson && wasJson) {
+    // JSON → form: parse textarea back into rows; if the JSON is
+    // invalid, keep the entries empty rather than throw — the user can
+    // fix the JSON and toggle again.
+    envEntries.value = entriesFromJson(form.envJson)
+  }
+})
+
 onMounted(loadEndpoints)
 
 async function loadEndpoints() {
@@ -221,6 +444,8 @@ function argsPreview(ep: AcpEndpoint): string {
 function openCreateModal() {
   editing.value = null
   Object.assign(form, defaultForm())
+  envEntries.value = []
+  envJsonMode.value = false
   showModal.value = true
 }
 
@@ -236,6 +461,10 @@ function openEditModal(ep: AcpEndpoint) {
     toolParseMode: ep.toolParseMode || 'call_title',
     enabled: !!ep.enabled,
   })
+  // Always open in form mode so users see the structured editor first.
+  // The "Edit as JSON" toggle is one click away if they need it.
+  envEntries.value = entriesFromJson(form.envJson)
+  envJsonMode.value = false
   showModal.value = true
 }
 
@@ -245,6 +474,12 @@ function closeModal() {
 }
 
 async function saveEndpoint() {
+  // In form mode, the entries array is the truth — serialize it back
+  // into envJson before validating. In JSON mode the textarea is the
+  // truth and we validate it as-is.
+  if (!envJsonMode.value) {
+    form.envJson = entriesToJson(envEntries.value)
+  }
   // Sanity-check args/env are valid JSON before sending; the server
   // will tolerate empty strings, but we'd rather fail fast in UI.
   try {
@@ -384,4 +619,59 @@ td .status-error { background: none; color: var(--mc-text-tertiary); font-size: 
 .form-textarea { resize: vertical; }
 .toggle-inline { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .modal-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 22px; border-top: 1px solid var(--mc-border-light); }
+
+/* ---------- Visual env editor ---------- */
+.env-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.env-mode-toggle { font-size: 11px; padding: 0; }
+
+.env-suggestions {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  margin: 4px 0 8px; padding: 7px 10px;
+  background: var(--mc-primary-bg); border-radius: 8px; font-size: 12px;
+}
+.env-suggestions-label { color: var(--mc-text-secondary); font-weight: 600; }
+.env-suggestion-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px;
+  background: var(--mc-bg-elevated); border: 1px solid var(--mc-border);
+  border-radius: 999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; cursor: pointer; color: var(--mc-text-primary);
+  transition: 0.15s;
+}
+.env-suggestion-chip:hover { border-color: var(--mc-primary); color: var(--mc-primary); }
+.env-suggestion-chip:disabled { cursor: default; }
+.env-suggestion-chip.is-added {
+  background: rgba(34, 197, 94, 0.12); color: #16a34a;
+  border-color: transparent;
+}
+.env-suggestion-chip .chip-mark { font-weight: 700; opacity: 0.7; }
+
+.env-table { display: flex; flex-direction: column; gap: 6px; }
+.env-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(120px, 1.4fr) 24px; gap: 6px; align-items: center; }
+.env-key-input, .env-value-input { font-size: 12px; padding: 7px 9px; }
+.env-value-wrap { position: relative; display: flex; }
+.env-value-input { padding-right: 32px; flex: 1; }
+.env-eye {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  border: none; background: none; font-size: 13px; cursor: pointer; padding: 2px;
+  width: 24px; height: 24px; line-height: 1; border-radius: 4px;
+}
+.env-eye:hover { background: var(--mc-bg-sunken); }
+.env-remove {
+  width: 24px; height: 24px; border: none; background: none; cursor: pointer;
+  color: var(--mc-text-tertiary); border-radius: 6px; font-size: 16px; line-height: 1;
+}
+.env-remove:hover { background: var(--mc-danger-bg); color: var(--mc-danger); }
+.env-add-btn {
+  padding: 6px; background: none; border: 1px dashed var(--mc-border);
+  border-radius: 8px; color: var(--mc-text-secondary); font-size: 12px;
+  cursor: pointer; transition: 0.15s;
+}
+.env-add-btn:hover { border-color: var(--mc-primary); color: var(--mc-primary); }
+.env-hint {
+  margin-top: 8px; padding: 7px 10px;
+  background: var(--mc-primary-bg); border-radius: 6px;
+  font-size: 11px; color: var(--mc-text-secondary); line-height: 1.55;
+}
 </style>

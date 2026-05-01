@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import vip.mate.skill.acp.AcpSkillBridge;
 import vip.mate.skill.lessons.SkillLessonsService;
 import vip.mate.skill.manifest.SkillManifest;
 import vip.mate.skill.mcp.McpSkillBridge;
@@ -47,16 +48,23 @@ public class SkillRuntimeService {
      * which boots later in the lifecycle.
      */
     private final McpSkillBridge mcpSkillBridge;
+    /**
+     * RFC-090 §3.2 (parallel) — ACP-endpoint → virtual-skill bridge.
+     * Same {@code @Lazy} treatment as the MCP bridge.
+     */
+    private final AcpSkillBridge acpSkillBridge;
 
     @Autowired
     public SkillRuntimeService(SkillService skillService,
                                SkillPackageResolver packageResolver,
                                @Lazy SkillLessonsService lessonsService,
-                               @Lazy McpSkillBridge mcpSkillBridge) {
+                               @Lazy McpSkillBridge mcpSkillBridge,
+                               @Lazy AcpSkillBridge acpSkillBridge) {
         this.skillService = skillService;
         this.packageResolver = packageResolver;
         this.lessonsService = lessonsService;
         this.mcpSkillBridge = mcpSkillBridge;
+        this.acpSkillBridge = acpSkillBridge;
     }
 
     // 缓存已解析的 active skills（5分钟过期）
@@ -144,6 +152,14 @@ public class SkillRuntimeService {
         } catch (Exception e) {
             log.warn("MCP skill bridge active merge failed: {}", e.getMessage());
         }
+        try {
+            // RFC-090 §3.2 (parallel) — ACP-derived virtual skills.
+            for (ResolvedSkill virt : acpSkillBridge.listAcpDerivedResolvedSkills()) {
+                if (passesActiveGate(virt)) resolved.add(virt);
+            }
+        } catch (Exception e) {
+            log.warn("ACP skill bridge active merge failed: {}", e.getMessage());
+        }
 
         activeSkillsCache.put(CACHE_KEY, resolved);
         log.info("Refreshed active skills: {} enabled", resolved.size());
@@ -168,6 +184,11 @@ public class SkillRuntimeService {
             resolved.addAll(mcpSkillBridge.listMcpDerivedResolvedSkills());
         } catch (Exception e) {
             log.warn("MCP skill bridge merge failed: {}", e.getMessage());
+        }
+        try {
+            resolved.addAll(acpSkillBridge.listAcpDerivedResolvedSkills());
+        } catch (Exception e) {
+            log.warn("ACP skill bridge merge failed: {}", e.getMessage());
         }
         return resolved;
     }

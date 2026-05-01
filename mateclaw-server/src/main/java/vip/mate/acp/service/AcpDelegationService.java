@@ -57,6 +57,7 @@ public class AcpDelegationService {
 
     private final ObjectMapper objectMapper;
     private final AcpEndpointService endpointService;
+    private final AcpRuntimeSupport runtimeSupport;
 
     /**
      * Run a one-shot ACP prompt against {@code endpointName}. Returns
@@ -88,12 +89,16 @@ public class AcpDelegationService {
         List<String> args = endpointService.parseArgs(endpoint);
         Map<String, String> env = endpointService.parseEnv(endpoint);
         boolean trusted = !Boolean.FALSE.equals(endpoint.getTrusted());
+        // Always resolve cwd to a real directory: Zed's ACP Zod schema
+        // marks cwd as a required string and rejects {@code undefined}
+        // with -32602. See {@link AcpRuntimeSupport#resolveCwd}.
+        String resolvedCwd = runtimeSupport.resolveCwd(endpoint, cwdHint);
 
         StringBuilder accumulator = new StringBuilder();
         AcpStdioClient client;
         try {
             client = AcpStdioClient.spawn(objectMapper, endpoint.getCommand(),
-                    args, env, cwdHint);
+                    args, env, resolvedCwd);
         } catch (IOException e) {
             throw new MateClawException("err.acp.spawn_failed",
                     "Failed to spawn ACP agent '" + endpointName + "': " + e.getMessage());
@@ -109,7 +114,7 @@ public class AcpDelegationService {
                         "ACP protocol mismatch with endpoint '" + endpointName + "'");
             }
 
-            JsonNode session = autoClose.newSession(cwdHint, SESSION_NEW_TIMEOUT_MS);
+            JsonNode session = autoClose.newSession(resolvedCwd, SESSION_NEW_TIMEOUT_MS);
             String sessionId = session == null ? null : session.path("sessionId").asText("");
             if (sessionId == null || sessionId.isBlank()) {
                 throw new MateClawException("err.acp.session_failed",
@@ -123,6 +128,15 @@ public class AcpDelegationService {
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             log.warn("ACP delegation failed for endpoint '{}': {}", endpointName, e.getMessage());
+            // Upstream CLIs (claude-code / codex / qwen-code) wrap their
+            // own auth failures in opaque JSON-RPC noise. Recognise the
+            // 401/403/forbidden/unauthorized fingerprints and rewrite
+            // the message into something the user can act on, with the
+            // exact env var name they need to set.
+            String authHint = runtimeSupport.translateAuthError(endpoint, e.getMessage());
+            if (authHint != null) {
+                throw new MateClawException("err.acp.auth_failed", authHint);
+            }
             throw new MateClawException("err.acp.delegation_failed",
                     "ACP delegation to '" + endpointName + "' failed: " + e.getMessage());
         }

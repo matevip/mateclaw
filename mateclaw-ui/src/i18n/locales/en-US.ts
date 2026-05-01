@@ -1149,9 +1149,27 @@ export default {
       description: 'Description',
       command: 'Command',
       args: 'Args (JSON array)',
-      env: 'Env (JSON object)',
+      env: 'Environment variables',
       toolParseMode: 'Tool parse mode',
       enabled: 'Enabled',
+    },
+    env: {
+      formMode: 'Edit as JSON',
+      jsonMode: 'Edit as form',
+      suggested: 'Suggested',
+      addRow: 'Add variable',
+      keyPlaceholder: 'KEY_NAME',
+      valuePlaceholder: 'value (e.g. sk-…)',
+      show: 'Show',
+      hide: 'Hide',
+      remove: 'Remove',
+      hints: {
+        anthropic: 'Anthropic API key (sk-ant-…). Get one at https://console.anthropic.com/settings/keys',
+        openai: 'OpenAI API key (sk-…). Get one at https://platform.openai.com/api-keys',
+        dashscope: 'Aliyun DashScope key — same value as MateClaw .env DASHSCOPE_API_KEY',
+        google: 'Google AI Studio API key. Get one at https://aistudio.google.com/apikey',
+        claudeOauth: 'Heads up: claude-code OAuth login (the one stored in ~/.claude/) does NOT work here, and worse — the Claude Agent SDK reads it BEFORE this env var, silently shadowing your API key. If you have ever run `claude login` on this host, clear the keychain first: (macOS) `claude logout` or `security delete-generic-password -s "Claude Code-credentials"`; (Linux/Windows) delete ~/.claude/credentials.json. Then put a real API key (sk-ant-…) above. Or switch to qwen-code / opencode to reuse a CLI login.',
+      },
     },
     modal: {
       newTitle: 'Add ACP Endpoint',
@@ -2000,6 +2018,7 @@ export default {
       all: 'All',
       builtin: 'Built-in',
       mcp: 'MCP',
+      acp: 'ACP',
       dynamic: 'Dynamic',
     },
     search: {
@@ -2073,6 +2092,7 @@ export default {
     types: {
       builtin: 'Built-in',
       mcp: 'MCP',
+      acp: 'ACP',
       dynamic: 'Dynamic',
     },
     source: {

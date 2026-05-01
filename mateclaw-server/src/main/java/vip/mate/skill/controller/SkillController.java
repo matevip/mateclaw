@@ -51,6 +51,7 @@ public class SkillController {
     private final AgentService agentService;
     private final AgentBindingService agentBindingService;
     private final vip.mate.skill.mcp.McpSkillBridge mcpSkillBridge;
+    private final vip.mate.skill.acp.AcpSkillBridge acpSkillBridge;
 
     @Operation(summary = "获取技能分页列表（RFC-042 §2.1）")
     @GetMapping
@@ -93,6 +94,29 @@ public class SkillController {
                 // Bridge failure must not break the Skills page.
             }
         }
+        // RFC-090 §3.2 (parallel) — same auto-bridge for ACP endpoints.
+        if (page == 1 && (skillType == null || skillType.isBlank() || "acp".equalsIgnoreCase(skillType))) {
+            try {
+                List<SkillEntity> acpSkills = acpSkillBridge.listAcpDerivedSkillEntities();
+                if (!acpSkills.isEmpty()) {
+                    String kw = keyword == null ? "" : keyword.trim().toLowerCase();
+                    List<SkillEntity> filtered = acpSkills.stream()
+                            .filter(s -> kw.isEmpty()
+                                    || (s.getName() != null && s.getName().toLowerCase().contains(kw))
+                                    || (s.getDescription() != null && s.getDescription().toLowerCase().contains(kw)))
+                            .filter(s -> enabled == null || enabled.equals(s.getEnabled()))
+                            .toList();
+                    if (!filtered.isEmpty()) {
+                        java.util.List<SkillEntity> merged = new java.util.ArrayList<>(filtered);
+                        merged.addAll(dbPage.getRecords());
+                        dbPage.setRecords(merged);
+                        dbPage.setTotal(dbPage.getTotal() + filtered.size());
+                    }
+                }
+            } catch (Exception e) {
+                // Bridge failure must not break the Skills page.
+            }
+        }
         return R.ok(dbPage);
     }
 
@@ -111,6 +135,15 @@ public class SkillController {
             }
         } catch (Exception ignored) {
             // Bridge failure must not break the badge fetch.
+        }
+        try {
+            long virtualAcp = acpSkillBridge.listAcpDerivedSkillEntities().size();
+            if (virtualAcp > 0) {
+                result.merge("acp", virtualAcp, Long::sum);
+                result.merge("all", virtualAcp, Long::sum);
+            }
+        } catch (Exception ignored) {
+            // Same defensive stance as the MCP bridge above.
         }
         return R.ok(result);
     }
@@ -151,6 +184,11 @@ public class SkillController {
                     .findFirst()
                     .map(R::ok)
                     .orElse(R.fail("MCP-derived skill not found: " + id));
+        }
+        // RFC-090 §3.2 (parallel) — same path for ACP-derived virtual skills.
+        if (vip.mate.skill.acp.AcpSkillBridge.isVirtualAcpSkillId(id)) {
+            SkillEntity ent = acpSkillBridge.findEntityById(id);
+            return ent != null ? R.ok(ent) : R.fail("ACP-derived skill not found: " + id);
         }
         return R.ok(skillService.getSkill(id));
     }

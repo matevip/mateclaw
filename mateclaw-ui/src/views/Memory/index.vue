@@ -17,7 +17,7 @@
           <!-- Agent selector (ChatConsole pattern) -->
           <div class="agent-selector">
             <button class="agent-select-trigger" @click="agentDropdownOpen = !agentDropdownOpen">
-              <span class="agent-select-trigger__icon">{{ currentAgent?.icon || '🧠' }}</span>
+              <span class="agent-select-trigger__icon"><SkillIcon :value="currentAgent?.icon" :size="24" :fallback="'🧠'" /></span>
               <span class="agent-select-trigger__name">{{ currentAgent?.name || t('memory.selectAgent') }}</span>
               <svg class="agent-select-trigger__arrow" :class="{ open: agentDropdownOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
             </button>

@@ -26,7 +26,7 @@
 
       <div class="agent-selector">
         <button class="agent-select-trigger" @click="agentDropdownOpen = !agentDropdownOpen" :title="`${$t('chat.selectAgent')} (⌘K)`">
-          <span class="agent-select-trigger__icon">{{ currentAgent?.icon || '🤖' }}</span>
+          <span class="agent-select-trigger__icon"><SkillIcon :value="currentAgent?.icon" :size="24" :fallback="'🤖'" /></span>
           <span v-if="!convPanelCollapsed || isMobile" class="agent-select-trigger__name">{{ currentAgent?.name || $t('chat.selectAgent') }}</span>
           <svg v-if="!convPanelCollapsed || isMobile" class="agent-select-trigger__arrow" :class="{ open: agentDropdownOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
@@ -154,7 +154,7 @@
           <div class="chat-stage-copy" v-if="currentAgent">
             <div class="chat-stage-kicker">{{ $t('nav.chat') }}</div>
             <div class="agent-badge" :title="currentAgent.name">
-              <span class="agent-badge-icon">{{ currentAgent.icon || '🤖' }}</span>
+              <span class="agent-badge-icon"><SkillIcon :value="currentAgent.icon" :size="22" :fallback="'🤖'" /></span>
               <span class="agent-badge-name">{{ currentAgent.name }}</span>
               <span class="agent-badge-type">{{ currentAgent.agentType === 'react' ? 'ReAct' : 'Plan-Execute' }}</span>
               <span class="status-dot" :class="connectionStatusClass" :title="connectionStatusLabel"></span>

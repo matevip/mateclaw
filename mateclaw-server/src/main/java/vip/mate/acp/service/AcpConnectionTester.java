@@ -31,6 +31,7 @@ public class AcpConnectionTester {
 
     private final ObjectMapper objectMapper;
     private final AcpEndpointService endpointService;
+    private final AcpRuntimeSupport runtimeSupport;
 
     /**
      * Spawn the configured agent, exchange initialize + session/new,
@@ -46,11 +47,16 @@ public class AcpConnectionTester {
         List<String> args = endpointService.parseArgs(endpoint);
         Map<String, String> env = endpointService.parseEnv(endpoint);
         result.put("args", args);
+        // Same as AcpDelegationService — Zed's ACP server requires a
+        // non-blank cwd at session/new, so the connection test must
+        // also default it. The "Test" button used to fail at session/new
+        // with -32602 even when the CLI itself was healthy.
+        String resolvedCwd = runtimeSupport.resolveCwd(endpoint, null);
 
         AcpStdioClient client;
         try {
             client = AcpStdioClient.spawn(objectMapper, endpoint.getCommand(),
-                    args, env, /* cwd */ null);
+                    args, env, resolvedCwd);
         } catch (Exception e) {
             return persistAndReturn(endpoint, result, "ERROR",
                     "Spawn failed: " + e.getMessage(), started);
@@ -85,15 +91,18 @@ public class AcpConnectionTester {
             // session/new validates that the agent really stands up a
             // working session, not just initialize handshake.
             try {
-                JsonNode sessionResp = autoClose.newSession(null, SESSION_NEW_TIMEOUT_MS);
+                JsonNode sessionResp = autoClose.newSession(resolvedCwd, SESSION_NEW_TIMEOUT_MS);
                 if (sessionResp != null && sessionResp.has("sessionId")) {
                     result.put("sessionId", sessionResp.path("sessionId").asText(""));
                 }
             } catch (Exception e) {
                 // session/new may fail for legitimate reasons (e.g. agent
                 // requires auth flow first). Still report OK on initialize
-                // but flag in the message.
-                result.put("sessionWarning", e.getMessage());
+                // but flag in the message — translated when it smells
+                // like an auth error so the test page UI shows actionable
+                // text instead of raw JSON-RPC.
+                String authHint = runtimeSupport.translateAuthError(endpoint, e.getMessage());
+                result.put("sessionWarning", authHint != null ? authHint : e.getMessage());
             }
         } catch (Exception e) {
             return persistAndReturn(endpoint, result, "ERROR",

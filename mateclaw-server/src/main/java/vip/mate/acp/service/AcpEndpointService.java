@@ -5,7 +5,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import vip.mate.acp.event.AcpEndpointChangedEvent;
 import vip.mate.acp.model.AcpEndpointEntity;
 import vip.mate.acp.repository.AcpEndpointMapper;
 import vip.mate.exception.MateClawException;
@@ -36,10 +38,22 @@ public class AcpEndpointService {
 
     private final AcpEndpointMapper mapper;
     private final ObjectMapper objectMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     public List<AcpEndpointEntity> list() {
         return mapper.selectList(new LambdaQueryWrapper<AcpEndpointEntity>()
                 .orderByDesc(AcpEndpointEntity::getBuiltin)
+                .orderByAsc(AcpEndpointEntity::getName));
+    }
+
+    /**
+     * Subset of {@link #list()} that returns only enabled rows.
+     * Used by {@code AcpSkillBridge} to enumerate virtual skill cards
+     * (one per enabled endpoint).
+     */
+    public List<AcpEndpointEntity> listEnabled() {
+        return mapper.selectList(new LambdaQueryWrapper<AcpEndpointEntity>()
+                .eq(AcpEndpointEntity::getEnabled, true)
                 .orderByAsc(AcpEndpointEntity::getName));
     }
 
@@ -80,6 +94,7 @@ public class AcpEndpointService {
         if (input.getWorkspaceId() == null) input.setWorkspaceId(1L);
         mapper.insert(input);
         log.info("Created ACP endpoint: {}", input.getName());
+        publish(input, AcpEndpointChangedEvent.Type.CREATED);
         return input;
     }
 
@@ -104,6 +119,7 @@ public class AcpEndpointService {
             existing.setStdioBufferLimitBytes(patch.getStdioBufferLimitBytes());
         }
         mapper.updateById(existing);
+        publish(existing, AcpEndpointChangedEvent.Type.UPDATED);
         return existing;
     }
 
@@ -115,13 +131,27 @@ public class AcpEndpointService {
         }
         mapper.deleteById(id);
         log.info("Deleted ACP endpoint: {}", existing.getName());
+        publish(existing, AcpEndpointChangedEvent.Type.DELETED);
     }
 
     public AcpEndpointEntity toggle(Long id, boolean enabled) {
         AcpEndpointEntity existing = get(id);
         existing.setEnabled(enabled);
         mapper.updateById(existing);
+        publish(existing, AcpEndpointChangedEvent.Type.TOGGLED);
         return existing;
+    }
+
+    private void publish(AcpEndpointEntity ep, AcpEndpointChangedEvent.Type type) {
+        try {
+            eventPublisher.publishEvent(new AcpEndpointChangedEvent(
+                    ep.getId(), ep.getName(), type));
+        } catch (Exception e) {
+            // Listener failures must not break the CRUD path. The bridge
+            // will resync on the next ApplicationReady tick anyway.
+            log.warn("Failed to publish AcpEndpointChangedEvent for '{}': {}",
+                    ep.getName(), e.getMessage());
+        }
     }
 
     /** Persist a connection-test outcome on the row. */

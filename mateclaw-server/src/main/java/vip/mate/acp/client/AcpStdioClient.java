@@ -166,11 +166,23 @@ public class AcpStdioClient implements AutoCloseable {
      * Send {@code session/new} — establishes a session for prompting.
      * For the connection-test path we don't actually prompt, just
      * verify the server accepts the handshake.
+     *
+     * <p>The {@code cwd} parameter is always written into the request
+     * body. Zed's ACP Zod schema (used by {@code @zed-industries/claude-
+     * agent-acp} and the codex variant) marks {@code cwd} as a required
+     * string and returns {@code -32602 Invalid params} when it's
+     * missing. If the caller passes null/blank we substitute the JVM
+     * working directory — a workspace-aware default lives in
+     * {@code AcpRuntimeSupport#resolveCwd}, but this fallback ensures
+     * the protocol never sees {@code undefined} regardless of caller.
      */
     public JsonNode newSession(String cwd, long timeoutMillis)
             throws IOException, InterruptedException {
         ObjectNode params = mapper.createObjectNode();
-        if (cwd != null && !cwd.isBlank()) params.put("cwd", cwd);
+        String safeCwd = (cwd == null || cwd.isBlank())
+                ? System.getProperty("user.dir", ".")
+                : cwd;
+        params.put("cwd", safeCwd);
         params.set("mcpServers", mapper.createArrayNode());
         return sendRequest("session/new", params, timeoutMillis);
     }

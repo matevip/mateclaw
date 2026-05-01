@@ -861,6 +861,9 @@ const categoryTabs = computed(() => [
   { label: t('skills.tabs.all'), value: 'all', icon: '🗂️' },
   { label: t('skills.tabs.builtin'), value: 'builtin', icon: '🔧' },
   { label: t('skills.tabs.mcp'), value: 'mcp', icon: '🔌' },
+  // ACP (Agent Communication Protocol) — auto-bridged from
+  // Settings ▸ ACP Endpoints; one card per enabled endpoint.
+  { label: t('skills.tabs.acp'), value: 'acp', icon: '🤝' },
   { label: t('skills.tabs.dynamic'), value: 'dynamic', icon: '📦' },
 ])
 
@@ -1473,19 +1476,24 @@ function needsSetup(skill: Skill): boolean {
 }
 
 function getSkillIcon(type: string) {
-  return { builtin: '🔧', mcp: '🔌', dynamic: '📦' }[type] ?? '🛠️'
+  return { builtin: '🔧', mcp: '🔌', acp: '🤝', dynamic: '📦' }[type] ?? '🛠️'
 }
 
 function getSkillIconBg(type: string) {
-  return { builtin: 'bg-blue', mcp: 'bg-purple', dynamic: 'bg-green' }[type] ?? 'bg-gray'
+  return { builtin: 'bg-blue', mcp: 'bg-purple', acp: 'bg-orange', dynamic: 'bg-green' }[type] ?? 'bg-gray'
 }
 
 function getSkillTypeBadge(type: string) {
-  return { builtin: 'badge-blue', mcp: 'badge-purple', dynamic: 'badge-green' }[type] ?? 'badge-gray'
+  return { builtin: 'badge-blue', mcp: 'badge-purple', acp: 'badge-orange', dynamic: 'badge-green' }[type] ?? 'badge-gray'
 }
 
 function getSkillTypeLabel(type: string) {
-  const map: Record<string, string> = { builtin: t('skills.types.builtin'), mcp: t('skills.types.mcp'), dynamic: t('skills.types.dynamic') }
+  const map: Record<string, string> = {
+    builtin: t('skills.types.builtin'),
+    mcp: t('skills.types.mcp'),
+    acp: t('skills.types.acp'),
+    dynamic: t('skills.types.dynamic'),
+  }
   return map[type] ?? type
 }
 </script>
@@ -1676,6 +1684,7 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 .skill-icon-wrap { width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .bg-blue { background: var(--mc-primary-bg); }
 .bg-purple { background: var(--mc-primary-bg); }
+.bg-orange { background: var(--mc-primary-bg); }
 .bg-green { background: var(--mc-primary-bg); }
 .bg-gray { background: var(--mc-bg-sunken); }
 .skill-icon { font-size: 20px; }
