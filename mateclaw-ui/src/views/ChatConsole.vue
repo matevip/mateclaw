@@ -300,7 +300,8 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { ChatDotRound, Delete, Plus, Setting, UploadFilled } from '@element-plus/icons-vue'
 import { conversationApi, agentApi, modelApi, chatApi, cronJobApi } from '@/api/index'
 import { channelIconUrl } from '@/utils/channelSource'
@@ -463,12 +464,13 @@ function cancelRename() {
 }
 
 // Delete with confirmation
-function confirmDeleteConversation(conversationId: string) {
-  ElMessageBox.confirm(
-    t('chat.deleteConfirm') || 'Delete this conversation?',
-    t('common.confirm'),
-    { type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel') }
-  ).then(() => deleteConversation(conversationId)).catch(() => {})
+async function confirmDeleteConversation(conversationId: string) {
+  const ok = await mcConfirm({
+    title: t('common.confirm'),
+    message: t('chat.deleteConfirm') || 'Delete this conversation?',
+    tone: 'danger',
+  })
+  if (ok) deleteConversation(conversationId)
 }
 
 // 拖拽上传

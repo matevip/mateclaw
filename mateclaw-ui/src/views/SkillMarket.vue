@@ -120,7 +120,7 @@
                 <button
                   class="skill-btn"
                   :title="t('skills.actions.configure')"
-                  @click="openEditModal(skill)"
+                  @click="openEditFromCard(skill)"
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -149,20 +149,16 @@
           <p>{{ t('skills.emptyDesc') }}</p>
         </div>
 
-        <!-- Pagination (RFC-042 §2.1) -->
-        <el-pagination
-          v-if="total > 0"
-          class="skill-pagination"
-          v-model:current-page="query.page"
-          v-model:page-size="query.size"
-          :page-sizes="[10, 20, 50]"
-          :total="total"
-          :hide-on-single-page="false"
-          layout="total, sizes, prev, pager, next, jumper"
-          background
-          @size-change="onPageSizeChange"
-          @current-change="loadSkills"
-        />
+        <!-- Pagination (RFC-042 §2.1) — MateClaw frosted-pill component. -->
+        <div class="skill-pagination">
+          <McPagination
+            v-model:page="query.page"
+            v-model:size="query.size"
+            :total="total"
+            :sizes="[10, 20, 50]"
+            @change="onPagerChange"
+          />
+        </div>
       </div>
     </div>
 
@@ -176,18 +172,81 @@
       :skill-name="preflightSkillName"
     />
 
-    <!-- RFC-090 Phase 3 — Skill detail drawer (Manifest / Tools / Features) -->
-    <el-drawer
-      v-model="detailDrawerVisible"
-      :title="detailSkill ? resolveSkillName(detailSkill) : t('skills.detail.title')"
-      direction="rtl"
-      size="640px"
-      :destroy-on-close="true"
-    >
-      <div v-if="detailSkill" class="detail-drawer">
-        <div class="detail-tabs">
-          <button class="detail-tab" :class="{ active: detailTab === 'manifest' }" @click="detailTab = 'manifest'">
-            {{ t('skills.detail.manifest') }}
+    <!-- Skill detail drawer.
+         Mirrors Settings/Models/AddProviderDrawer.vue — Teleport + frosted
+         glass, iOS-spring slide, mobile bottom-sheet, dark variants. The
+         old el-drawer was off-brand and didn't match the rest of the app. -->
+    <Teleport to="body">
+      <Transition name="mc-drawer-fade">
+        <div
+          v-if="detailDrawerVisible && detailSkill"
+          class="mc-drawer-overlay"
+          :class="{ 'mc-drawer-overlay--wide': editingBody }"
+          @click.self="closeDetailDrawer"
+        >
+          <div class="mc-drawer-panel" :class="{ 'mc-drawer-panel--wide': editingBody }">
+            <div class="mc-drawer-header">
+              <div class="mc-drawer-header__meta">
+                <span class="mc-drawer-icon-shell">{{ detailSkill.icon || '🛠️' }}</span>
+                <div>
+                  <h3 class="mc-drawer-title">{{ resolveSkillName(detailSkill) }}</h3>
+                  <p class="mc-drawer-subtitle">
+                    {{ editingBody ? t('skills.detail.editingSource') : (detailSkill.description || detailSkill.name) }}
+                  </p>
+                </div>
+              </div>
+              <button
+                class="mc-drawer-close"
+                :title="t('common.cancel')"
+                @click="closeDetailDrawer"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Body-edit takeover: the entire drawer becomes one editor.
+                 Tabs and other blocks are hidden so the user can think in
+                 prose, not chrome. Save triggers a runtime refresh. -->
+            <div v-if="editingBody" class="mc-drawer-content mc-drawer-content--takeover">
+              <div class="takeover-toolbar">
+                <span class="takeover-section">SKILL.md</span>
+                <div class="edit-actions">
+                  <button class="detail-edit-btn detail-edit-cancel" @click="cancelEditBody" :disabled="savingEdit">
+                    {{ t('skills.actions.cancel') }}
+                  </button>
+                  <button class="detail-edit-btn detail-edit-save" @click="saveBody" :disabled="savingEdit">
+                    {{ savingEdit ? t('common.loading') : t('skills.actions.save') }}
+                  </button>
+                </div>
+              </div>
+              <textarea
+                v-model="editBodyForm.skillContent"
+                class="takeover-editor"
+                :placeholder="`# Skill Guide\n\n## When to use\n...`"
+                spellcheck="false"
+              ></textarea>
+              <template v-if="detailSkill.skillType === 'dynamic'">
+                <div class="takeover-toolbar takeover-toolbar--sub">
+                  <span class="takeover-section">{{ t('skills.fields.sourceCode') }}</span>
+                </div>
+                <textarea
+                  v-model="editBodyForm.sourceCode"
+                  class="takeover-editor takeover-editor--secondary"
+                  :placeholder="t('skills.placeholders.sourceCode')"
+                  spellcheck="false"
+                ></textarea>
+              </template>
+            </div>
+
+            <div v-else class="mc-drawer-content">
+              <div class="detail-tabs">
+          <button class="detail-tab" :class="{ active: detailTab === 'overview' }" @click="detailTab = 'overview'">
+            {{ t('skills.detail.overview') }}
+          </button>
+          <button class="detail-tab" :class="{ active: detailTab === 'body' }" @click="detailTab = 'body'">
+            {{ t('skills.detail.body') }}
           </button>
           <button class="detail-tab" :class="{ active: detailTab === 'tools' }" @click="detailTab = 'tools'">
             {{ t('skills.detail.tools') }}
@@ -208,10 +267,120 @@
             <span v-if="detailEmployees.length > 0" class="tab-count">{{ detailEmployees.length }}</span>
           </button>
         </div>
-        <!-- Manifest tab -->
-        <div v-if="detailTab === 'manifest'" class="detail-section">
-          <p v-if="!detailManifest" class="detail-empty">{{ t('skills.detail.noManifest') }}</p>
-          <pre v-else class="detail-pre">{{ detailManifestPretty }}</pre>
+
+        <!-- Overview tab — manifest-projected chips (read-only) +
+             DB-only display overrides (editable) + collapsed manifest. -->
+        <div v-if="detailTab === 'overview'" class="detail-section">
+          <!-- Manifest-projected fields (chips, read-only).
+               These columns are overwritten by SkillPackageResolver from
+               manifest_json on every resolve, so editing them on the row
+               wouldn't stick. Surface them as facts, not knobs. -->
+          <div class="detail-block">
+            <div class="detail-block-head">
+              <h4 class="detail-block-title">{{ t('skills.detail.manifestProjectedSection') }}</h4>
+            </div>
+            <p class="detail-hint">{{ t('skills.detail.manifestProjectedHint') }}</p>
+            <div class="meta-chips">
+              <span class="meta-chip"><span class="meta-chip-label">slug</span><code>{{ detailSkill.name }}</code></span>
+              <span class="meta-chip"><span class="meta-chip-label">{{ t('skills.fields.type') }}</span>{{ detailSkill.skillType || '—' }}</span>
+              <span v-if="detailSkill.icon" class="meta-chip"><span class="meta-chip-label">{{ t('skills.fields.icon') }}</span>{{ detailSkill.icon }}</span>
+              <span v-if="detailSkill.version" class="meta-chip"><span class="meta-chip-label">{{ t('skills.fields.version') }}</span>v{{ detailSkill.version }}</span>
+              <span v-if="detailSkill.author" class="meta-chip"><span class="meta-chip-label">{{ t('skills.fields.author') }}</span>{{ detailSkill.author }}</span>
+            </div>
+          </div>
+
+          <!-- DB-only display overrides (editable) -->
+          <div class="detail-block">
+            <div class="detail-block-head">
+              <h4 class="detail-block-title">{{ t('skills.detail.displayOverridesSection') }}</h4>
+              <button
+                v-if="!isVirtualSkill && !editingIdentity"
+                class="detail-edit-btn"
+                @click="startEditIdentity"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+                {{ t('skills.actions.edit') }}
+              </button>
+              <div v-else-if="editingIdentity" class="edit-actions">
+                <button class="detail-edit-btn detail-edit-cancel" @click="cancelEditIdentity" :disabled="savingEdit">
+                  {{ t('skills.actions.cancel') }}
+                </button>
+                <button class="detail-edit-btn detail-edit-save" @click="saveIdentity" :disabled="savingEdit">
+                  {{ savingEdit ? t('common.loading') : t('skills.actions.save') }}
+                </button>
+              </div>
+            </div>
+            <p v-if="isVirtualSkill" class="detail-readonly-banner">{{ t('skills.detail.virtualReadonly') }}</p>
+            <p v-else class="detail-hint">{{ t('skills.detail.displayOverridesHint') }}</p>
+
+            <dl v-if="!editingIdentity" class="identity-grid">
+              <div class="kv"><dt>{{ t('skills.fields.nameZh') }}</dt><dd>{{ detailSkill.nameZh || '—' }}</dd></div>
+              <div class="kv"><dt>{{ t('skills.fields.nameEn') }}</dt><dd>{{ detailSkill.nameEn || '—' }}</dd></div>
+              <div class="kv kv-full"><dt>{{ t('skills.fields.tags') }}</dt><dd>{{ detailSkill.tags || '—' }}</dd></div>
+              <div class="kv kv-full"><dt>{{ t('skills.fields.description') }}</dt><dd>{{ detailSkill.description || '—' }}</dd></div>
+            </dl>
+            <div v-else class="form-grid form-grid-tight">
+              <div class="form-group">
+                <label class="form-label">{{ t('skills.fields.nameZh') }}</label>
+                <input v-model="editForm.nameZh" class="form-input" :placeholder="t('skills.placeholders.nameZh')" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">{{ t('skills.fields.nameEn') }}</label>
+                <input v-model="editForm.nameEn" class="form-input" :placeholder="t('skills.placeholders.nameEn')" />
+              </div>
+              <div class="form-group full-width">
+                <label class="form-label">{{ t('skills.fields.tags') }}</label>
+                <input v-model="editForm.tags" class="form-input" :placeholder="t('skills.placeholders.tags')" />
+              </div>
+              <div class="form-group full-width">
+                <label class="form-label">{{ t('skills.fields.description') }}</label>
+                <input v-model="editForm.description" class="form-input" :placeholder="t('skills.placeholders.description')" />
+              </div>
+            </div>
+          </div>
+
+          <details class="detail-collapsible">
+            <summary>{{ t('skills.detail.viewRawManifest') }}</summary>
+            <p v-if="!detailManifest" class="detail-empty">{{ t('skills.detail.noManifest') }}</p>
+            <pre v-else class="detail-pre">{{ detailManifestPretty }}</pre>
+          </details>
+        </div>
+
+        <!-- Body tab — SKILL.md (+ dynamic sourceCode). Read mode shows
+             a preview; edit lives in the full-drawer takeover further
+             down (rendered outside the tab grid when editingBody=true). -->
+        <div v-if="detailTab === 'body'" class="detail-section">
+          <div class="detail-block">
+            <div class="detail-block-head">
+              <h4 class="detail-block-title">{{ t('skills.fields.skillContent') }}</h4>
+              <button
+                v-if="!isVirtualSkill"
+                class="detail-edit-btn detail-edit-primary"
+                @click="startEditBody"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+                {{ t('skills.detail.editSource') }}
+              </button>
+            </div>
+            <p class="detail-hint">{{ t('skills.detail.bodyHint') }}</p>
+            <p v-if="!detailSkill.skillContent" class="detail-empty">{{ t('skills.detail.noBody') }}</p>
+            <pre v-else class="detail-pre">{{ detailSkill.skillContent }}</pre>
+
+            <template v-if="detailSkill.skillType === 'dynamic'">
+              <div class="detail-block-head detail-subhead">
+                <h4 class="detail-block-title">{{ t('skills.fields.sourceCode') }}</h4>
+              </div>
+              <p class="detail-hint">{{ t('skills.detail.sourceCodeHint') }}</p>
+              <pre v-if="detailSkill.sourceCode" class="detail-pre">{{ detailSkill.sourceCode }}</pre>
+              <p v-else class="detail-empty">—</p>
+            </template>
+          </div>
         </div>
         <!-- Tools tab -->
         <div v-if="detailTab === 'tools'" class="detail-section">
@@ -354,14 +523,20 @@
           <p v-else-if="!detailLessonsRaw" class="detail-empty">{{ t('skills.detail.noLessons') }}</p>
           <pre v-else class="detail-pre">{{ detailLessonsRaw }}</pre>
         </div>
-      </div>
-    </el-drawer>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
-    <!-- Modal -->
-    <div v-if="showModal" class="modal-overlay">
-      <div class="modal">
+    <!-- New-skill modal (Layer-1 redesign).
+         Reduced to 2 fields. The user's job here is "name it and confirm
+         it exists"; everything else is filled in via the detail drawer
+         after the row is created. -->
+    <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
+      <div class="modal modal-slim">
         <div class="modal-header">
-          <h2>{{ editingSkill ? t('skills.modal.configureTitle') : t('skills.modal.newTitle') }}</h2>
+          <h2>{{ t('skills.modal.newTitle') }}</h2>
           <button class="modal-close" @click="closeModal">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -369,79 +544,32 @@
           </button>
         </div>
         <div class="modal-body">
+          <p class="modal-hint">{{ t('skills.modal.newSimpleHint') }}</p>
           <div class="form-grid">
-            <div class="form-group">
+            <div class="form-group full-width">
               <label class="form-label">{{ t('skills.fields.name') }} *</label>
-              <input v-model="form.name" class="form-input" :placeholder="t('skills.placeholders.name')"
-                :disabled="isBuiltinEditing" />
-            </div>
-            <!-- RFC-042 §2.2.6 — optional bilingual display names -->
-            <div class="form-group">
-              <label class="form-label">{{ t('skills.fields.nameZh') }}</label>
-              <input v-model="form.nameZh" class="form-input" :placeholder="t('skills.placeholders.nameZh')" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">{{ t('skills.fields.nameEn') }}</label>
-              <input v-model="form.nameEn" class="form-input" :placeholder="t('skills.placeholders.nameEn')" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">{{ t('skills.fields.type') }}</label>
-              <select v-model="form.skillType" class="form-input" :disabled="isBuiltinEditing">
-                <option value="dynamic">{{ t('skills.types.dynamic') }}</option>
-                <option value="mcp">{{ t('skills.types.mcp') }}</option>
-                <option value="builtin" v-if="isBuiltinEditing">{{ t('skills.types.builtin') }}</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">{{ t('skills.fields.icon') }}</label>
-              <input v-model="form.icon" class="form-input" :placeholder="t('skills.placeholders.icon')" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">{{ t('skills.fields.version') }}</label>
-              <input v-model="form.version" class="form-input" :placeholder="t('skills.placeholders.version')"
-                :disabled="isBuiltinEditing" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">{{ t('skills.fields.author') }}</label>
-              <input v-model="form.author" class="form-input" :placeholder="t('skills.placeholders.author')"
-                :disabled="isBuiltinEditing" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">{{ t('skills.fields.tags') }}</label>
-              <input v-model="form.tags" class="form-input" :placeholder="t('skills.placeholders.tags')" />
+              <input
+                v-model="newForm.name"
+                class="form-input"
+                :placeholder="t('skills.placeholders.name')"
+                @keydown.enter="createSkillFromModal"
+              />
             </div>
             <div class="form-group full-width">
               <label class="form-label">{{ t('skills.fields.description') }}</label>
-              <input v-model="form.description" class="form-input" :placeholder="t('skills.placeholders.description')" />
-            </div>
-            <div class="form-group full-width">
-              <label class="form-label">{{ t('skills.fields.configJson') }}</label>
-              <textarea v-model="form.configJson" class="form-textarea" rows="3" placeholder='{"key": "value"}'></textarea>
-            </div>
-            <div class="form-group full-width">
-              <label class="form-label">
-                {{ t('skills.fields.skillContent') }}
-                <span class="form-hint" v-if="getEditingRuntimeSource() === 'directory'">
-                  {{ t('skills.hints.directorySkill') }}
-                </span>
-                <span class="form-hint" v-else>
-                  {{ t('skills.hints.primaryContent') }}
-                </span>
-              </label>
-              <textarea v-model="form.skillContent" class="form-textarea code" rows="8"
-                placeholder="# Skill Guide&#10;&#10;## When to use&#10;..."></textarea>
-            </div>
-            <div class="form-group full-width" v-if="form.skillType === 'dynamic'">
-              <label class="form-label">{{ t('skills.fields.sourceCode') }}</label>
-              <textarea v-model="form.sourceCode" class="form-textarea code" rows="6"
-                :placeholder="t('skills.placeholders.sourceCode')"></textarea>
+              <input
+                v-model="newForm.description"
+                class="form-input"
+                :placeholder="t('skills.placeholders.description')"
+                @keydown.enter="createSkillFromModal"
+              />
             </div>
           </div>
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" @click="closeModal">{{ t('common.cancel') }}</button>
-          <button class="btn-primary" @click="saveSkill" :disabled="!form.name">
-            {{ editingSkill ? t('skills.actions.saveChanges') : t('skills.actions.createSkill') }}
+          <button class="btn-primary" @click="createSkillFromModal" :disabled="!newForm.name || creating">
+            {{ creating ? t('common.loading') : t('skills.actions.createSkill') }}
           </button>
         </div>
       </div>
@@ -452,11 +580,13 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { skillApi, skillInstallApi } from '@/api/index'
 import type { Skill, SkillRuntimeStatus, SkillSecurityFinding } from '@/types/index'
 import ImportHubDialog from '@/components/skill/ImportHubDialog.vue'
 import PreflightInstallDialog from '@/components/skill/PreflightInstallDialog.vue'
+import McPagination from '@/components/common/McPagination.vue'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { useSkillName } from '@/composables/useSkillName'
 
 const { t } = useI18n()
@@ -466,7 +596,7 @@ const total = ref(0)
 const counts = ref<Record<string, number>>({})
 const runtimeStatusMap = ref<Record<string, SkillRuntimeStatus>>({})
 const showModal = ref(false)
-const editingSkill = ref<Skill | null>(null)
+const creating = ref(false)
 const refreshing = ref(false)
 const showImportDialog = ref(false)
 
@@ -484,14 +614,57 @@ const query = reactive({
 const expandedFindings = ref<Record<string, boolean>>({})
 const rescanning = ref<Record<string, boolean>>({})
 
-/** RFC-090 Phase 3 — detail drawer state. */
+/** RFC-090 Phase 3 — detail drawer state.
+ *  Layer-1 redesign: 'overview' replaces 'manifest' (Identity edit + collapsed
+ *  manifest dump), and 'body' is a new editable tab for SKILL.md / sourceCode /
+ *  raw configJson. The legacy 'manifest' value is still accepted as a starting
+ *  tab for back-compat with any deep links that may pass it. */
 const detailDrawerVisible = ref(false)
 const detailSkill = ref<Skill | null>(null)
-const detailTab = ref<'manifest' | 'tools' | 'features' | 'security' | 'lessons' | 'memory'>('manifest')
+const detailTab = ref<'overview' | 'body' | 'manifest' | 'tools' | 'features' | 'security' | 'lessons' | 'memory'>('overview')
 const detailLessonsRaw = ref<string>('')
 const detailLessonsLoading = ref(false)
 const detailEmployees = ref<Array<{ id: number; name: string; icon?: string; binding?: 'explicit' | 'implicit' }>>([])
 const detailEmployeesLoading = ref(false)
+
+/** Inline edit state for the Overview / Body tabs.
+ *
+ *  Identity edit only covers DB-only display fields (nameZh/nameEn/tags/
+ *  description). The other "metadata" columns (icon/version/author/skillType)
+ *  are index projections that SkillPackageResolver writes back from
+ *  manifest_json on every resolve — exposing them as editable would let
+ *  the user perform a save that silently disappears on the next refresh.
+ *  See SkillPackageResolver.persistResolutionOutcome for the projection
+ *  write-back. The real authoring surface for those is SKILL.md frontmatter,
+ *  edited via the Body tab takeover. */
+const editingIdentity = ref(false)
+const editingBody = ref(false)
+const savingEdit = ref(false)
+const editForm = ref<{
+  nameZh: string
+  nameEn: string
+  description: string
+  tags: string
+}>({ nameZh: '', nameEn: '', description: '', tags: '' })
+const editBodyForm = ref<{ skillContent: string; sourceCode: string }>({
+  skillContent: '',
+  sourceCode: '',
+})
+
+/** New-skill modal — pared down to the two questions that *must* be answered
+ *  at creation time. Everything else is filled in via the drawer. */
+const newForm = ref<{ name: string; description: string }>({ name: '', description: '' })
+
+/** Virtual MCP-derived skills synthesize their id from
+ *  {@link McpSkillBridge#VIRTUAL_ID_BASE} (= 9e18). The DB update path
+ *  doesn't know about them, so the drawer hides the Edit affordance.
+ *  Using string-length is robust against JS number precision loss past 2^53. */
+const isVirtualSkill = computed(() => {
+  if (!detailSkill.value?.id) return false
+  const idStr = String(detailSkill.value.id)
+  return idStr.length >= 19 && idStr.startsWith('9')
+})
+const isBuiltinDetail = computed(() => detailSkill.value?.skillType === 'builtin' || !!detailSkill.value?.builtin)
 
 /** RFC-090 §4.4 — pre-flight dialog state. */
 const preflightVisible = ref(false)
@@ -539,12 +712,20 @@ const detailFeatures = computed(() => {
 })
 const detailFeaturesCount = computed(() => detailFeatures.value.length)
 
-function openDetailDrawer(skill: Skill) {
+function openDetailDrawer(
+  skill: Skill,
+  tab: 'overview' | 'body' | 'tools' | 'features' | 'security' | 'lessons' | 'memory' = 'overview',
+  opts: { editIdentity?: boolean; editBody?: boolean } = {},
+) {
   detailSkill.value = skill
-  detailTab.value = 'manifest'
+  detailTab.value = tab
   detailLessonsRaw.value = ''
   detailEmployees.value = []
+  editingIdentity.value = false
+  editingBody.value = false
   detailDrawerVisible.value = true
+  if (opts.editIdentity) startEditIdentity()
+  if (opts.editBody) startEditBody()
 }
 
 async function loadDetailEmployees() {
@@ -576,9 +757,12 @@ async function loadLessons() {
 
 async function clearLessons() {
   if (!detailSkill.value) return
-  try {
-    await ElMessageBox.confirm(t('skills.detail.clearLessonsConfirm'), t('skills.messages.deleteTitle'), { type: 'warning' })
-  } catch { return }
+  const ok = await mcConfirm({
+    title: t('skills.messages.deleteTitle'),
+    message: t('skills.detail.clearLessonsConfirm'),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await skillApi.clearLessons(detailSkill.value.id)
     detailLessonsRaw.value = ''
@@ -604,27 +788,6 @@ const categoryTabs = computed(() => [
   { label: t('skills.tabs.mcp'), value: 'mcp', icon: '🔌' },
   { label: t('skills.tabs.dynamic'), value: 'dynamic', icon: '📦' },
 ])
-
-const defaultForm = () => ({
-  name: '',
-  // RFC-042 §2.2.6 — optional bilingual display names
-  nameZh: '',
-  nameEn: '',
-  description: '',
-  skillType: 'dynamic' as string,
-  icon: '',
-  version: '1.0.0',
-  author: '',
-  tags: '',
-  configJson: '',
-  sourceCode: '',
-  skillContent: '',
-  enabled: true,
-})
-const form = ref<any>(defaultForm())
-
-/** 是否正在编辑内置技能（限制可编辑字段） */
-const isBuiltinEditing = computed(() => editingSkill.value?.skillType === 'builtin')
 
 function getCategoryCount(category: string) {
   return counts.value[category] ?? 0
@@ -667,8 +830,9 @@ function onFilterChange() {
   loadSkills()
 }
 
-function onPageSizeChange() {
-  query.page = 1
+/** McPagination emits a single change event with both page and size,
+ *  so we don't need separate handlers — just reload the list. */
+function onPagerChange() {
   loadSkills()
 }
 
@@ -734,54 +898,152 @@ async function loadRuntimeStatus() {
 }
 
 function openCreateModal() {
-  editingSkill.value = null
-  form.value = defaultForm()
-  showModal.value = true
-}
-
-function openEditModal(skill: Skill) {
-  editingSkill.value = skill
-  form.value = {
-    name: skill.name,
-    nameZh: skill.nameZh || '',
-    nameEn: skill.nameEn || '',
-    description: skill.description || '',
-    skillType: skill.skillType,
-    icon: skill.icon || '',
-    version: skill.version || '',
-    author: skill.author || '',
-    tags: skill.tags || '',
-    configJson: skill.configJson || '',
-    sourceCode: skill.sourceCode || '',
-    skillContent: skill.skillContent || '',
-    enabled: skill.enabled,
-  }
+  newForm.value = { name: '', description: '' }
   showModal.value = true
 }
 
 function closeModal() {
+  if (creating.value) return
   showModal.value = false
-  editingSkill.value = null
 }
 
-function getEditingRuntimeSource(): string {
-  if (!editingSkill.value) return ''
-  const rt = runtimeStatusMap.value[editingSkill.value.name]
-  return rt?.source || ''
-}
-
-async function saveSkill() {
+/** Layer-1: create the row with the bare minimum, then drop the user
+ *  straight into the drawer in edit mode so they keep configuring without
+ *  context-switching back to the card. */
+async function createSkillFromModal() {
+  if (!newForm.value.name || creating.value) return
+  creating.value = true
   try {
-    if (editingSkill.value) {
-      await skillApi.update(editingSkill.value.id, form.value)
-    } else {
-      await skillApi.create(form.value)
+    const payload = {
+      name: newForm.value.name.trim(),
+      description: newForm.value.description.trim(),
+      skillType: 'dynamic',
+      version: '1.0.0',
+      enabled: true,
     }
-    closeModal()
+    const res: any = await skillApi.create(payload)
+    showModal.value = false
     await loadAll()
+    const created: Skill | undefined = res?.data
+    if (created) {
+      const fresh = skills.value.find(s => s.id === created.id) || created
+      openDetailDrawer(fresh, 'overview', { editIdentity: true })
+    }
   } catch (e: any) {
     ElMessage.error(typeof e === 'string' ? e : e?.message || t('skills.messages.saveFailed'))
+  } finally {
+    creating.value = false
   }
+}
+
+/** Old configure-on-card button now lands in the drawer Overview tab in
+ *  edit mode — keeps the surface contract but skips the modal trip. */
+function openEditFromCard(skill: Skill) {
+  openDetailDrawer(skill, 'overview', { editIdentity: true })
+}
+
+// ==================== Inline edit (Overview / Body) ====================
+
+function startEditIdentity() {
+  if (!detailSkill.value) return
+  const s = detailSkill.value
+  editForm.value = {
+    nameZh: s.nameZh || '',
+    nameEn: s.nameEn || '',
+    description: s.description || '',
+    tags: s.tags || '',
+  }
+  editingIdentity.value = true
+}
+
+function cancelEditIdentity() {
+  editingIdentity.value = false
+}
+
+async function saveIdentity() {
+  if (!detailSkill.value || savingEdit.value) return
+  savingEdit.value = true
+  try {
+    // PUT /skills/{id} only updates non-null fields (MyBatis Plus default
+    // FieldStrategy=NOT_NULL on the entity), so we send only the DB-only
+    // display slice. Manifest-projected fields (icon/version/author/
+    // skillType) are deliberately excluded — they're owned by manifest_json
+    // and re-projected by SkillPackageResolver on every resolve.
+    const payload: Record<string, unknown> = {
+      nameZh: editForm.value.nameZh,
+      nameEn: editForm.value.nameEn,
+      description: editForm.value.description,
+      tags: editForm.value.tags,
+    }
+    const res: any = await skillApi.update(detailSkill.value.id, payload)
+    const updated: Skill | undefined = res?.data
+    if (updated) {
+      patchSkillInPlace(updated)
+      detailSkill.value = { ...detailSkill.value, ...updated }
+    }
+    editingIdentity.value = false
+    ElMessage.success(t('skills.messages.saveSuccess'))
+  } catch (e: any) {
+    ElMessage.error(typeof e === 'string' ? e : e?.message || t('skills.messages.saveFailed'))
+  } finally {
+    savingEdit.value = false
+  }
+}
+
+function startEditBody() {
+  if (!detailSkill.value) return
+  const s = detailSkill.value
+  editBodyForm.value = {
+    skillContent: s.skillContent || '',
+    sourceCode: s.sourceCode || '',
+  }
+  editingBody.value = true
+}
+
+function cancelEditBody() {
+  editingBody.value = false
+}
+
+async function saveBody() {
+  if (!detailSkill.value || savingEdit.value) return
+  savingEdit.value = true
+  try {
+    const payload: Record<string, unknown> = {
+      skillContent: editBodyForm.value.skillContent,
+    }
+    if (detailSkill.value.skillType === 'dynamic') {
+      payload.sourceCode = editBodyForm.value.sourceCode
+    }
+    const res: any = await skillApi.update(detailSkill.value.id, payload)
+    const updated: Skill | undefined = res?.data
+    if (updated) {
+      patchSkillInPlace(updated)
+      detailSkill.value = { ...detailSkill.value, ...updated }
+    }
+    editingBody.value = false
+    // Body change → next resolve re-projects icon/version/author from the
+    // new frontmatter, so refresh runtime status to pick those up.
+    loadRuntimeStatus()
+    ElMessage.success(t('skills.detail.sourceSavedReprojection'))
+  } catch (e: any) {
+    ElMessage.error(typeof e === 'string' ? e : e?.message || t('skills.messages.saveFailed'))
+  } finally {
+    savingEdit.value = false
+  }
+}
+
+function closeDetailDrawer() {
+  // Drop the takeover too — re-opening the same skill should land in
+  // the read view, not in a half-saved edit state.
+  if (savingEdit.value) return
+  editingIdentity.value = false
+  editingBody.value = false
+  detailDrawerVisible.value = false
+}
+
+function patchSkillInPlace(updated: Skill) {
+  const idx = skills.value.findIndex(s => s.id === updated.id)
+  if (idx >= 0) skills.value.splice(idx, 1, { ...skills.value[idx], ...updated })
 }
 
 async function deleteSkill(idOrSkill: string | number | Skill) {
@@ -793,9 +1055,12 @@ async function deleteSkill(idOrSkill: string | number | Skill) {
     ? idOrSkill
     : skills.value.find(s => s.id === idOrSkill)
   if (!skill) return
-  try {
-    await ElMessageBox.confirm(t('skills.messages.deleteConfirm'), t('skills.messages.deleteTitle'), { type: 'warning' })
-  } catch { return }
+  const ok = await mcConfirm({
+    title: t('skills.messages.deleteTitle'),
+    message: t('skills.messages.deleteConfirm'),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await skillInstallApi.uninstall(skill.name)
     await loadAll()
@@ -1192,49 +1457,7 @@ html.dark .skill-status-filter:focus {
   background: rgba(255, 255, 255, 0.12);
 }
 
-/* Pagination — strip Element Plus's heavy boxed look, blend with the glass surface */
 .skill-pagination { margin-top: 18px; display: flex; justify-content: center; }
-.skill-pagination :deep(.el-pagination) {
-  --el-pagination-bg-color: transparent;
-  --el-pagination-button-bg-color: transparent;
-  --el-pagination-hover-color: var(--mc-primary);
-  background: transparent;
-  font-weight: 500;
-  color: var(--mc-text-secondary);
-}
-.skill-pagination :deep(.el-pagination .btn-prev),
-.skill-pagination :deep(.el-pagination .btn-next),
-.skill-pagination :deep(.el-pagination .el-pager li),
-.skill-pagination :deep(.el-pagination .el-input__wrapper),
-.skill-pagination :deep(.el-pagination .el-select .el-input__wrapper) {
-  background: rgba(255, 255, 255, 0.45) !important;
-  box-shadow: none !important;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  transition: background 0.15s, border-color 0.15s;
-}
-html.dark .skill-pagination :deep(.el-pagination .btn-prev),
-html.dark .skill-pagination :deep(.el-pagination .btn-next),
-html.dark .skill-pagination :deep(.el-pagination .el-pager li),
-html.dark .skill-pagination :deep(.el-pagination .el-input__wrapper),
-html.dark .skill-pagination :deep(.el-pagination .el-select .el-input__wrapper) {
-  background: rgba(255, 255, 255, 0.06) !important;
-}
-.skill-pagination :deep(.el-pagination .btn-prev:hover),
-.skill-pagination :deep(.el-pagination .btn-next:hover),
-.skill-pagination :deep(.el-pagination .el-pager li:hover) {
-  background: rgba(217, 119, 87, 0.12) !important;
-  color: var(--mc-primary);
-}
-.skill-pagination :deep(.el-pagination .el-pager li.is-active) {
-  background: var(--mc-primary) !important;
-  color: #fff;
-  border-color: transparent;
-}
-.skill-pagination :deep(.el-pagination .el-pagination__total),
-.skill-pagination :deep(.el-pagination .el-pagination__sizes) {
-  margin-right: 12px;
-}
 
 /* RFC-042 §2.3 — security scan findings panel (frosted, non-EP) */
 .scan-badge-button {
@@ -1559,4 +1782,496 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 .lessons-clear-btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--mc-border); background: var(--mc-bg-muted); color: var(--mc-text-secondary); cursor: pointer; font-size: 12px; }
 .lessons-clear-btn:hover:not(:disabled) { background: var(--mc-danger-bg); color: var(--mc-danger); border-color: var(--mc-danger); }
 .lessons-clear-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Layer-1: drawer inline-edit blocks (Overview / Body) */
+.detail-block { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+.detail-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.detail-block-head.detail-subhead {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--mc-border-light);
+}
+.detail-block-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--mc-text-primary);
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+.edit-actions { display: flex; gap: 6px; }
+.detail-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 11px;
+  border: 1px solid var(--mc-border);
+  background: var(--mc-bg-elevated);
+  color: var(--mc-text-primary);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.detail-edit-btn:hover:not(:disabled) {
+  background: var(--mc-primary-bg);
+  border-color: var(--mc-primary);
+  color: var(--mc-primary);
+}
+.detail-edit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.detail-edit-btn.detail-edit-save {
+  background: var(--mc-primary);
+  border-color: var(--mc-primary);
+  color: #fff;
+}
+.detail-edit-btn.detail-edit-save:hover:not(:disabled) {
+  background: var(--mc-primary-hover);
+  border-color: var(--mc-primary-hover);
+  color: #fff;
+}
+.detail-edit-btn.detail-edit-cancel { color: var(--mc-text-secondary); }
+
+.detail-readonly-banner {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--mc-bg-muted);
+  border: 1px dashed var(--mc-border);
+  font-size: 12px;
+  color: var(--mc-text-secondary);
+  line-height: 1.5;
+}
+
+.identity-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+  margin: 4px 0 0;
+}
+.identity-grid .kv { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.identity-grid .kv-full { grid-column: 1 / -1; }
+.identity-grid dt {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--mc-text-tertiary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.identity-grid dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--mc-text-primary);
+  word-break: break-word;
+  line-height: 1.5;
+}
+.identity-grid dd code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--mc-bg-sunken);
+}
+
+.form-grid-tight { gap: 10px 12px; }
+.form-grid-tight .form-input,
+.form-grid-tight .form-textarea { padding: 7px 10px; font-size: 13px; }
+
+.detail-collapsible {
+  margin-top: 12px;
+  border: 1px solid var(--mc-border-light);
+  border-radius: 10px;
+  background: var(--mc-bg-muted);
+  padding: 0;
+}
+.detail-collapsible > summary {
+  cursor: pointer;
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mc-text-secondary);
+  list-style: none;
+  user-select: none;
+}
+.detail-collapsible > summary::-webkit-details-marker { display: none; }
+.detail-collapsible > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 10px;
+  transition: transform 0.15s;
+}
+.detail-collapsible[open] > summary::before { transform: rotate(90deg); }
+.detail-collapsible > summary:hover { color: var(--mc-text-primary); }
+.detail-collapsible > *:not(summary) { padding: 0 12px 12px; }
+
+/* Layer-1: slimmed New-Skill modal */
+.modal.modal-slim { max-width: 480px; }
+.modal-hint {
+  font-size: 12px;
+  color: var(--mc-text-secondary);
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+@media (max-width: 600px) {
+  .identity-grid { grid-template-columns: 1fr; }
+}
+
+/* ============================================================
+ * MateClaw frosted-glass drawer
+ * Mirrors Settings/Models/AddProviderDrawer.vue so the skill
+ * detail surface lives in the same visual language as the rest
+ * of the app — depth via translucency, not borders.
+ * ============================================================ */
+.mc-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 14, 10, 0.32);
+  backdrop-filter: blur(8px) saturate(140%);
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+  z-index: 1500;
+  display: flex;
+  justify-content: flex-end;
+}
+:global(html.dark .mc-drawer-overlay) {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.mc-drawer-panel {
+  width: 640px;
+  max-width: 92vw;
+  height: 100%;
+  background: rgba(255, 250, 245, 0.78);
+  backdrop-filter: blur(48px) saturate(180%);
+  -webkit-backdrop-filter: blur(48px) saturate(180%);
+  border-left: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: -24px 0 60px rgba(25, 14, 8, 0.16);
+  display: flex;
+  flex-direction: column;
+  animation: mc-drawer-slide 0.36s cubic-bezier(0.32, 0.72, 0, 1);
+  transition: width 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.mc-drawer-panel--wide {
+  /* Editing SKILL.md needs room — 640 was cramped for code authoring. */
+  width: 880px;
+}
+:global(html.dark .mc-drawer-panel) {
+  background: rgba(32, 26, 22, 0.82);
+  border-left-color: rgba(255, 255, 255, 0.10);
+  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes mc-drawer-slide {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.mc-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 22px 26px 18px;
+  border-bottom: 1px solid rgba(123, 88, 67, 0.10);
+  flex-shrink: 0;
+}
+:global(html.dark .mc-drawer-header) {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+.mc-drawer-header__meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.mc-drawer-icon-shell {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(123, 88, 67, 0.10);
+}
+:global(html.dark .mc-drawer-icon-shell) {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.mc-drawer-title {
+  margin: 0 0 2px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--mc-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mc-drawer-subtitle {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--mc-text-tertiary);
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.mc-drawer-close {
+  background: transparent;
+  border: 0;
+  padding: 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--mc-text-tertiary);
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.mc-drawer-close:hover {
+  background: rgba(123, 88, 67, 0.08);
+  color: var(--mc-text-primary);
+}
+:global(html.dark .mc-drawer-close:hover) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--mc-text-primary);
+}
+
+.mc-drawer-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px 28px;
+}
+.mc-drawer-content--takeover {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 22px 22px;
+  overflow: hidden;
+}
+
+/* Re-skin the original detail-tabs row for the new drawer surface —
+ * pill row instead of bordered tabs, matches the cleaner pill look
+ * already used elsewhere in the app. */
+.mc-drawer-content .detail-tabs {
+  border-bottom: none;
+  padding-bottom: 0;
+  gap: 2px;
+  margin-bottom: 16px;
+  background: rgba(123, 88, 67, 0.06);
+  padding: 4px;
+  border-radius: 999px;
+  width: fit-content;
+}
+:global(html.dark .mc-drawer-content .detail-tabs) {
+  background: rgba(255, 255, 255, 0.06);
+}
+.mc-drawer-content .detail-tab {
+  padding: 6px 14px;
+  border-radius: 999px;
+  margin-bottom: 0;
+  font-size: 12px;
+}
+.mc-drawer-content .detail-tab.active {
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--mc-primary-hover);
+  border-bottom: none;
+  margin-bottom: 0;
+  box-shadow: 0 1px 3px rgba(25, 14, 8, 0.08);
+}
+:global(html.dark .mc-drawer-content .detail-tab.active) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* Section blocks become System-Settings style cards: one rounded
+ * frosted card per logical group, hairline borders inside. */
+.mc-drawer-content .detail-block {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  box-shadow: 0 1px 3px rgba(25, 14, 8, 0.04);
+}
+:global(html.dark .mc-drawer-content .detail-block) {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.mc-drawer-content .detail-block-head {
+  margin-bottom: 8px;
+}
+.mc-drawer-content .detail-block-head.detail-subhead {
+  border-top: 1px solid rgba(123, 88, 67, 0.08);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+:global(html.dark .mc-drawer-content .detail-block-head.detail-subhead) {
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+.mc-drawer-content .detail-readonly-banner {
+  background: rgba(123, 88, 67, 0.06);
+  border: none;
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+:global(html.dark .mc-drawer-content .detail-readonly-banner) {
+  background: rgba(255, 255, 255, 0.05);
+}
+.mc-drawer-content .detail-pre {
+  background: rgba(123, 88, 67, 0.05);
+  border: 1px solid rgba(123, 88, 67, 0.08);
+  border-radius: 10px;
+}
+:global(html.dark .mc-drawer-content .detail-pre) {
+  background: rgba(0, 0, 0, 0.25);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+.mc-drawer-content .detail-collapsible {
+  background: rgba(123, 88, 67, 0.04);
+  border: none;
+}
+:global(html.dark .mc-drawer-content .detail-collapsible) {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Manifest-projected chips: read-only metadata facts row. */
+.meta-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(123, 88, 67, 0.07);
+  font-size: 12px;
+  color: var(--mc-text-primary);
+  font-weight: 500;
+}
+:global(html.dark .meta-chip) {
+  background: rgba(255, 255, 255, 0.07);
+}
+.meta-chip code {
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  color: var(--mc-text-primary);
+}
+.meta-chip-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mc-text-tertiary);
+}
+
+/* Body-edit takeover: a single editor occupying the whole drawer. */
+.takeover-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0 6px;
+}
+.takeover-toolbar--sub {
+  border-top: 1px solid rgba(123, 88, 67, 0.08);
+  padding-top: 14px;
+  margin-top: 8px;
+}
+:global(html.dark .takeover-toolbar--sub) {
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+.takeover-section {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mc-text-tertiary);
+}
+.takeover-editor {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  border-radius: 12px;
+  border: 1px solid rgba(123, 88, 67, 0.12);
+  background: rgba(255, 255, 255, 0.7);
+  padding: 14px 16px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--mc-text-primary);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.takeover-editor:focus {
+  border-color: rgba(217, 119, 87, 0.45);
+  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.1);
+}
+.takeover-editor--secondary {
+  flex: 0 0 38%;
+}
+:global(html.dark .takeover-editor) {
+  background: rgba(0, 0, 0, 0.3);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: var(--mc-text-primary);
+}
+
+/* Primary edit affordance — used by the "Edit SKILL.md" entry point
+ * to signal it's the main authoring action, not just a tweak. */
+.detail-edit-btn.detail-edit-primary {
+  background: var(--mc-primary);
+  border-color: var(--mc-primary);
+  color: #fff;
+}
+.detail-edit-btn.detail-edit-primary:hover:not(:disabled) {
+  background: var(--mc-primary-hover);
+  border-color: var(--mc-primary-hover);
+  color: #fff;
+}
+
+.mc-drawer-fade-enter-active,
+.mc-drawer-fade-leave-active {
+  transition: opacity 0.22s ease;
+}
+.mc-drawer-fade-enter-from,
+.mc-drawer-fade-leave-to {
+  opacity: 0;
+}
+
+/* Mobile: bottom sheet so the drawer doesn't crush 92vw. */
+@media (max-width: 768px) {
+  .mc-drawer-overlay {
+    justify-content: stretch;
+    align-items: flex-end;
+  }
+  .mc-drawer-panel,
+  .mc-drawer-panel--wide {
+    width: 100%;
+    max-width: 100%;
+    height: 92vh;
+    border-left: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.4);
+    border-top-left-radius: 20px;
+    border-top-right-radius: 20px;
+    animation: mc-drawer-slide-up 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  :global(html.dark .mc-drawer-panel) {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+  @keyframes mc-drawer-slide-up {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+}
 </style>

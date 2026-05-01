@@ -98,21 +98,16 @@
           </template>
         </div>
 
-        <!-- Element Plus pagination. We use a single guard:
-             total > pageSize on the wrapper so EP itself doesn't have
-             to negotiate hide-on-single-page (which in EP 2.9.x can
-             return null and leave the .pagination wrapper empty). -->
+        <!-- MateClaw frosted-pill pagination — replaces el-pagination
+             so the activity feed reads in the same visual language as
+             the rest of the app. -->
         <div v-if="total > pageSize" class="pagination">
-          <el-pagination
-            v-model:current-page="page"
-            v-model:page-size="pageSize"
+          <McPagination
+            v-model:page="page"
+            v-model:size="pageSize"
             :total="total"
-            :page-sizes="[20, 50, 100]"
-            :small="isMobile"
-            background
-            :layout="paginationLayout"
-            @size-change="onPageSizeChange"
-            @current-change="loadEvents"
+            :sizes="[20, 50, 100]"
+            @change="loadEvents"
           />
         </div>
       </div>
@@ -209,6 +204,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { activityApi } from '@/api'
+import McPagination from '@/components/common/McPagination.vue'
 
 const { t } = useI18n()
 
@@ -241,9 +237,6 @@ function syncMobile(e: MediaQueryListEvent | MediaQueryList) {
 }
 
 const drawerSize = computed(() => isMobile.value ? '100%' : '720px')
-const paginationLayout = computed(() =>
-  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper',
-)
 
 const events = ref<ActivityEvent[]>([])
 const loading = ref(false)
@@ -398,15 +391,6 @@ async function loadEvents() {
   } finally {
     loading.value = false
   }
-}
-
-function onPageSizeChange(newSize: number) {
-  pageSize.value = newSize
-  // Switching page size resets to page 1 — Element Plus emits both
-  // size-change AND current-change, but order isn't guaranteed; we
-  // pin page=1 here so the request never fires with a stale offset.
-  page.value = 1
-  loadEvents()
 }
 
 function filterEventsLocally() { /* trigger recompute via reactive filter */ }
