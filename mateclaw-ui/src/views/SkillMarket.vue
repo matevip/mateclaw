@@ -64,170 +64,82 @@
           </select>
         </div>
 
-        <!-- 技能列表 -->
+        <!-- Skill grid — RFC-090 §4.2 (Phase 1 slim).
+             Card surfaces 5 things: icon · name · status · description · actions.
+             All findings, deps, paths, lessons, used-by are in the detail drawer. -->
         <div class="skill-grid" v-if="skills.length > 0">
-          <div v-for="skill in skills" :key="skill.id" class="skill-card mc-surface-card"
-        :class="{ disabled: !skill.enabled }">
-        <div class="skill-header">
-          <div class="skill-icon-wrap" :class="getSkillIconBg(skill.skillType)">
-            <span class="skill-icon">{{ skill.icon || getSkillIcon(skill.skillType) }}</span>
-          </div>
-          <div class="skill-meta">
-            <h3 class="skill-name">{{ resolveSkillName(skill) }}</h3>
-            <!-- RFC-042 §2.2.4 — show the underlying slug below the i18n display name -->
-            <div v-if="hasI18nName(skill)" class="skill-slug">{{ skill.name }}</div>
-            <div class="skill-meta-row">
-              <span class="skill-type-badge" :class="getSkillTypeBadge(skill.skillType)">
-                {{ getSkillTypeLabel(skill.skillType) }}
+          <div
+            v-for="skill in skills"
+            :key="skill.id"
+            class="skill-card mc-surface-card"
+            :class="{ disabled: !skill.enabled }"
+            role="button"
+            tabindex="0"
+            @click="openDetailDrawer(skill)"
+            @keydown.enter="openDetailDrawer(skill)"
+          >
+            <div class="skill-header">
+              <div class="skill-icon-wrap" :class="getSkillIconBg(skill.skillType)">
+                <span class="skill-icon">{{ skill.icon || getSkillIcon(skill.skillType) }}</span>
+              </div>
+              <div class="skill-meta">
+                <h3 class="skill-name">{{ resolveSkillName(skill) }}</h3>
+                <!-- RFC-042 §2.2.4 — slug under display name when they differ -->
+                <div v-if="hasI18nName(skill)" class="skill-slug">{{ skill.name }}</div>
+              </div>
+              <label class="toggle-switch" @click.stop>
+                <input type="checkbox" :checked="skill.enabled" @change="toggleSkill(skill)" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <p class="skill-desc">{{ skill.description || t('skills.noDescription') }}</p>
+
+            <!-- Single status row: status pill (folds runtime/sec/deps/features) + source + version -->
+            <div class="skill-status-row">
+              <span class="status-pill" :class="getStatusPill(skill).cls">
+                {{ getStatusPill(skill).label }}
               </span>
+              <span class="source-label" :class="getSourceClass(skill)">{{ getSourceLabel(skill) }}</span>
               <span v-if="skill.version" class="skill-version">v{{ skill.version }}</span>
             </div>
-          </div>
-          <label class="toggle-switch">
-            <input type="checkbox" :checked="skill.enabled" @change="toggleSkill(skill)" />
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-        <p class="skill-desc">{{ skill.description || t('skills.noDescription') }}</p>
 
-        <!-- Runtime Status -->
-        <div class="skill-runtime-row">
-          <span class="runtime-badge" :class="getRuntimeBadgeClass(skill)">
-            {{ getRuntimeLabel(skill) }}
-          </span>
-          <!-- RFC-023: AI Synthesized Badge -->
-          <span v-if="skill.sourceConversationId" class="runtime-badge rt-synthesized" title="Auto-synthesized from conversation">
-            🤖 AI
-          </span>
-          <!-- Security Scan Status (RFC-023, expandable per RFC-042 §2.3) -->
-          <button
-            v-if="skill.securityScanStatus === 'FAILED'"
-            type="button"
-            class="runtime-badge rt-blocked scan-badge-button"
-            :aria-expanded="expandedFindings[String(skill.id)] ? 'true' : 'false'"
-            @click="toggleFindings(skill)"
-          >
-            🛡️ {{ t('skills.security.scanFailed') }}
-            <span class="scan-badge-chevron">{{ expandedFindings[String(skill.id)] ? '▾' : '▸' }}</span>
-          </button>
-          <span v-else-if="skill.securityScanStatus === 'PASSED'" class="runtime-badge rt-ready">
-            ✓ {{ t('skills.security.scanned') }}
-          </span>
-          <!-- Security Badge (runtime) -->
-          <span v-if="getSecurityBadge(skill)" class="runtime-badge" :class="getSecurityBadge(skill)?.cls">
-            {{ getSecurityBadge(skill)?.label }}
-          </span>
-          <!-- Dependency Badge -->
-          <span v-if="getDependencyBadge(skill)" class="runtime-badge" :class="getDependencyBadge(skill)?.cls">
-            {{ getDependencyBadge(skill)?.label }}
-          </span>
-          <!-- RFC-090 §14.1 features 矩阵：Setup Needed (M/N) -->
-          <span v-if="getFeaturesBadge(skill)" class="runtime-badge" :class="getFeaturesBadge(skill)?.cls">
-            {{ getFeaturesBadge(skill)?.label }}
-          </span>
-          <span v-if="getSourceBadge(skill)" class="source-badge">{{ getSourceBadge(skill) }}</span>
-          <!-- RFC-090 §4.2 — Source label, used-by count, lessons count -->
-          <span class="source-label" :class="getSourceClass(skill)">{{ getSourceLabel(skill) }}</span>
-          <span v-if="getUsedByCount(skill) > 0" class="usedby-badge" :title="t('skills.usedByTitle')">
-            👥 {{ getUsedByCount(skill) }}
-          </span>
-          <span v-if="getLessonsCount(skill) > 0" class="lessons-badge" :title="t('skills.lessonsCountTitle')" @click.stop="openDetailDrawer(skill); detailTab = 'lessons'">
-            💡 {{ getLessonsCount(skill) }}
-          </span>
-          <span v-if="getRuntimePath(skill)" class="skill-source-path">{{ getRuntimePath(skill) }}</span>
-        </div>
-        <!-- Missing Dependencies Detail -->
-        <div v-if="getMissingDeps(skill).length > 0" class="runtime-deps-missing">
-          Missing: {{ getMissingDeps(skill).join(', ') }}
-        </div>
-        <!-- Security Findings Summary -->
-        <div v-if="getSecurityFindingsSummary(skill)" class="runtime-security-detail">
-          {{ getSecurityFindingsSummary(skill) }}
-        </div>
-        <div v-if="getRuntimeError(skill)" class="runtime-error">{{ getRuntimeError(skill) }}</div>
-
-        <!-- RFC-042 §2.3 — persisted findings panel + rescan control -->
-        <div
-          v-if="skill.securityScanStatus === 'FAILED' && expandedFindings[String(skill.id)]"
-          class="scan-findings-panel"
-        >
-          <div class="scan-findings-header">
-            <span class="scan-findings-title">
-              {{ t('skills.security.findingsTitle') }}
-              <span v-if="skill.securityScanTime" class="scan-findings-time">
-                · {{ formatScanTime(skill.securityScanTime) }}
-              </span>
-            </span>
-            <button
-              class="scan-rescan-btn"
-              :disabled="rescanning[String(skill.id)]"
-              @click="rescanSkill(skill)"
-            >
-              {{ rescanning[String(skill.id)] ? t('skills.security.rescanning') : t('skills.security.rescan') }}
-            </button>
-          </div>
-          <ul v-if="parsedFindings(skill).length > 0" class="scan-findings-list">
-            <li
-              v-for="(f, idx) in parsedFindings(skill)"
-              :key="`${skill.id}-f-${idx}`"
-              class="scan-finding-item"
-              :class="`sev-${(f.severity || 'info').toLowerCase()}`"
-            >
-              <div class="scan-finding-head">
-                <span class="scan-finding-sev">[{{ f.severity || 'INFO' }}]</span>
-                <span class="scan-finding-id">{{ f.ruleId || f.category || '—' }}</span>
-                <span v-if="f.filePath" class="scan-finding-loc">
-                  {{ f.filePath }}<span v-if="f.lineNumber">:{{ f.lineNumber }}</span>
-                </span>
+            <div class="skill-footer" @click.stop>
+              <span v-if="skill.author" class="skill-author">by {{ skill.author }}</span>
+              <div class="skill-actions">
+                <button
+                  v-if="needsSetup(skill)"
+                  class="skill-btn skill-btn-setup"
+                  :title="t('skills.actions.setUp')"
+                  @click="openPreflight(skill)"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c0 .66.26 1.3.73 1.77.47.47 1.11.73 1.77.73H21a2 2 0 1 1 0 4h-.09c-.66 0-1.3.26-1.77.73-.47.47-.73 1.11-.73 1.77z"/>
+                  </svg>
+                </button>
+                <button
+                  class="skill-btn"
+                  :title="t('skills.actions.configure')"
+                  @click="openEditModal(skill)"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                </button>
+                <button
+                  v-if="skill.skillType !== 'builtin'"
+                  class="skill-btn danger"
+                  :title="t('skills.actions.delete')"
+                  @click="deleteSkill(skill)"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                  </svg>
+                </button>
               </div>
-              <div v-if="f.title" class="scan-finding-title">{{ f.title }}</div>
-              <div v-if="f.description" class="scan-finding-desc">{{ f.description }}</div>
-              <div v-if="f.remediation" class="scan-finding-fix">
-                {{ t('skills.security.fix') }}: {{ f.remediation }}
-              </div>
-            </li>
-          </ul>
-          <div v-else class="scan-findings-empty">
-            {{ t('skills.security.noPersistedFindings') }}
-          </div>
-        </div>
-
-        <div class="skill-tags" v-if="skill.tags">
-          <span v-for="tag in parseTags(skill.tags)" :key="tag" class="skill-tag">{{ tag }}</span>
-        </div>
-        <div class="skill-footer">
-          <span v-if="skill.author" class="skill-author">by {{ skill.author }}</span>
-          <div class="skill-actions">
-            <!-- RFC-090 §4.2 [Set Up] — surfaced when card is Setup
-                 Needed; opens the preflight dialog with install hints -->
-            <button v-if="needsSetup(skill)" class="skill-btn skill-btn-setup" @click="openPreflight(skill)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c0 .66.26 1.3.73 1.77.47.47 1.11.73 1.77.73H21a2 2 0 1 1 0 4h-.09c-.66 0-1.3.26-1.77.73-.47.47-.73 1.11-.73 1.77z"/>
-              </svg>
-              {{ t('skills.actions.setUp') }}
-            </button>
-            <button class="skill-btn" @click="openDetailDrawer(skill)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/>
-              </svg>
-              {{ t('skills.actions.view') }}
-            </button>
-            <button class="skill-btn" @click="openEditModal(skill)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
-              {{ t('skills.actions.configure') }}
-            </button>
-            <button v-if="skill.skillType !== 'builtin'" class="skill-btn danger" @click="deleteSkill(skill)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="3 6 5 6 21 6"/>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-              </svg>
-              {{ t('skills.actions.delete') }}
-            </button>
-          </div>
-        </div>
+            </div>
           </div>
         </div>
 
@@ -285,6 +197,9 @@
             {{ t('skills.detail.features') }}
             <span v-if="detailFeaturesCount > 0" class="tab-count">{{ detailFeaturesCount }}</span>
           </button>
+          <button class="detail-tab" :class="{ active: detailTab === 'security' }" @click="detailTab = 'security'">
+            {{ t('skills.detail.security') }}
+          </button>
           <button class="detail-tab" :class="{ active: detailTab === 'lessons' }" @click="detailTab = 'lessons'">
             {{ t('skills.detail.lessons') }}
           </button>
@@ -334,6 +249,72 @@
             </li>
           </ul>
         </div>
+        <!-- Security tab — consolidates scan status, findings, missing deps,
+             runtime error, and resolved skill path. Lifted off the card. -->
+        <div v-if="detailTab === 'security'" class="detail-section">
+          <div class="detail-security-row">
+            <span class="detail-meta-key">{{ t('skills.detail.scanStatus') }}:</span>
+            <span class="status-pill" :class="getScanPillCls(detailSkill)">
+              {{ getScanPillLabel(detailSkill) }}
+            </span>
+            <span v-if="detailSkill.securityScanTime" class="scan-findings-time">
+              · {{ formatScanTime(detailSkill.securityScanTime) }}
+            </span>
+            <button
+              class="scan-rescan-btn"
+              :disabled="rescanning[String(detailSkill.id)]"
+              @click="rescanSkill(detailSkill)"
+            >
+              {{ rescanning[String(detailSkill.id)] ? t('skills.security.rescanning') : t('skills.security.rescan') }}
+            </button>
+          </div>
+
+          <ul v-if="parsedFindings(detailSkill).length > 0" class="scan-findings-list">
+            <li
+              v-for="(f, idx) in parsedFindings(detailSkill)"
+              :key="`${detailSkill.id}-f-${idx}`"
+              class="scan-finding-item"
+              :class="`sev-${(f.severity || 'info').toLowerCase()}`"
+            >
+              <div class="scan-finding-head">
+                <span class="scan-finding-sev">[{{ f.severity || 'INFO' }}]</span>
+                <span class="scan-finding-id">{{ f.ruleId || f.category || '—' }}</span>
+                <span v-if="f.filePath" class="scan-finding-loc">
+                  {{ f.filePath }}<span v-if="f.lineNumber">:{{ f.lineNumber }}</span>
+                </span>
+              </div>
+              <div v-if="f.title" class="scan-finding-title">{{ f.title }}</div>
+              <div v-if="f.description" class="scan-finding-desc">{{ f.description }}</div>
+              <div v-if="f.remediation" class="scan-finding-fix">
+                {{ t('skills.security.fix') }}: {{ f.remediation }}
+              </div>
+            </li>
+          </ul>
+          <div v-else-if="detailSkill.securityScanStatus === 'FAILED'" class="scan-findings-empty">
+            {{ t('skills.security.noPersistedFindings') }}
+          </div>
+
+          <div v-if="getMissingDeps(detailSkill).length > 0" class="detail-security-block">
+            <span class="detail-meta-key">{{ t('skills.detail.missingDeps') }}:</span>
+            <code>{{ getMissingDeps(detailSkill).join(', ') }}</code>
+          </div>
+
+          <div v-if="getRuntimeError(detailSkill)" class="detail-security-block detail-security-error">
+            <span class="detail-meta-key">{{ t('skills.detail.runtimeError') }}:</span>
+            <span>{{ getRuntimeError(detailSkill) }}</span>
+          </div>
+
+          <div v-if="getRuntimePath(detailSkill)" class="detail-security-block">
+            <span class="detail-meta-key">{{ t('skills.detail.path') }}:</span>
+            <code class="detail-path-code">{{ getRuntimePath(detailSkill) }}</code>
+          </div>
+
+          <div v-if="detailSkill.sourceConversationId" class="detail-security-block">
+            <span class="detail-meta-key">{{ t('skills.detail.synthesized') }}:</span>
+            <span>🤖 {{ t('skills.source.synthesized') }}</span>
+          </div>
+        </div>
+
         <!-- RFC-090 §4.2 — Memory tab: cross-reference bound agents +
              pointer to per-agent memory pages. Programmatic
              cross-reference (search MEMORY.md across agents) is a
@@ -506,15 +487,11 @@ const rescanning = ref<Record<string, boolean>>({})
 /** RFC-090 Phase 3 — detail drawer state. */
 const detailDrawerVisible = ref(false)
 const detailSkill = ref<Skill | null>(null)
-const detailTab = ref<'manifest' | 'tools' | 'features' | 'lessons' | 'memory'>('manifest')
+const detailTab = ref<'manifest' | 'tools' | 'features' | 'security' | 'lessons' | 'memory'>('manifest')
 const detailLessonsRaw = ref<string>('')
 const detailLessonsLoading = ref(false)
 const detailEmployees = ref<Array<{ id: number; name: string; icon?: string; binding?: 'explicit' | 'implicit' }>>([])
 const detailEmployeesLoading = ref(false)
-
-/** RFC-090 §4.2 card surface — per-skill side data (lessons count, used-by). */
-const lessonsCountBySkill = ref<Record<string, number>>({})
-const usedByBySkill = ref<Record<string, number>>({})
 
 /** RFC-090 §4.4 — pre-flight dialog state. */
 const preflightVisible = ref(false)
@@ -661,7 +638,12 @@ function parseTags(tags: string): string[] {
 onMounted(loadAll)
 
 async function loadAll() {
-  await Promise.all([loadSkills(), loadCounts(), loadRuntimeStatus()])
+  // Only block on the skill list itself; counts and runtime status fill in
+  // reactively as their fetches resolve. The card's status pill renders a
+  // transient "checking" state until runtimeStatusMap populates.
+  loadCounts()
+  loadRuntimeStatus()
+  await loadSkills()
 }
 
 /** Coalesce keyword edits into one server call per 300ms so typing doesn't thrash. */
@@ -722,9 +704,6 @@ async function loadSkills() {
     } else {
       total.value = 0
     }
-    // RFC-090 §4.2 — fire-and-forget load card side data (lessons /
-    // used-by counts) for the currently visible page.
-    loadCardSideData()
   } catch (e) {
     skills.value = []
     total.value = 0
@@ -949,6 +928,48 @@ function getRuntimeError(skill: Skill): string {
   return rt?.resolutionError || ''
 }
 
+// ==================== Security tab helpers (drawer) ====================
+
+function getScanPillCls(skill: Skill): string {
+  if (skill.securityScanStatus === 'FAILED') return 'st-blocked'
+  if (skill.securityScanStatus === 'PASSED') return 'st-ready'
+  return 'st-disabled'
+}
+
+function getScanPillLabel(skill: Skill): string {
+  if (skill.securityScanStatus === 'FAILED') return t('skills.security.scanFailed')
+  if (skill.securityScanStatus === 'PASSED') return t('skills.security.scanned')
+  return t('skills.security.notScanned')
+}
+
+// ==================== Unified Status Pill ====================
+
+/**
+ * Single status pill for the card. Folds runtime / security / dependency /
+ * features matrices into one of six mutually-exclusive states so the card
+ * surfaces *one* color, not five. Detail-drawer Security tab carries the
+ * granular breakdown for users who want it.
+ */
+function getStatusPill(skill: Skill): { label: string; cls: string } {
+  if (!skill.enabled) {
+    return { label: t('skills.status.disabled'), cls: 'st-disabled' }
+  }
+  const rt = getRuntimeStatus(skill)
+  if (!rt) {
+    return { label: t('skills.status.checking'), cls: 'st-checking' }
+  }
+  if (rt.securityBlocked || skill.securityScanStatus === 'FAILED') {
+    return { label: t('skills.status.blocked'), cls: 'st-blocked' }
+  }
+  if (needsSetup(skill)) {
+    return { label: t('skills.status.setupNeeded'), cls: 'st-setup' }
+  }
+  if (!rt.runtimeAvailable) {
+    return { label: t('skills.status.unresolved'), cls: 'st-error' }
+  }
+  return { label: t('skills.status.ready'), cls: 'st-ready' }
+}
+
 // ==================== Security & Dependency Helpers ====================
 
 function getSecurityBadge(skill: Skill): { label: string; cls: string } | null {
@@ -1070,10 +1091,6 @@ function getSourceClass(skill: Skill): string {
   return 'src-local'
 }
 
-function getLessonsCount(skill: Skill): number {
-  return lessonsCountBySkill.value[String(skill.id)] || 0
-}
-
 /**
  * RFC-090 §4.2 — does this skill need the [Set Up] button surfaced?
  * Yes iff: enabled, not security-blocked, AND either:
@@ -1091,34 +1108,6 @@ function needsSetup(skill: Skill): boolean {
     return ready < total
   }
   return rt.dependencyReady === false
-}
-
-function getUsedByCount(skill: Skill): number {
-  return usedByBySkill.value[String(skill.id)] || 0
-}
-
-/**
- * Batch-load lessons count + used-by count for the currently rendered
- * skill list. Called after each loadSkills(); failures are silenced
- * per-skill so a single 404 doesn't blank the entire counts map.
- */
-async function loadCardSideData() {
-  const items = skills.value
-  if (items.length === 0) return
-  const tasks = items.map(async (skill) => {
-    const id = String(skill.id)
-    const calls = [
-      skillApi.getLessons(skill.id).then((res: any) => {
-        lessonsCountBySkill.value[id] = res?.data?.entryCount || 0
-      }).catch(() => { lessonsCountBySkill.value[id] = 0 }),
-      skillApi.employees(skill.id).then((res: any) => {
-        usedByBySkill.value[id] = Array.isArray(res?.data) ? res.data.length : 0
-      }).catch(() => { usedByBySkill.value[id] = 0 }),
-    ]
-    await Promise.all(calls)
-  })
-  // Don't block on the whole batch; render whatever lands first.
-  await Promise.allSettled(tasks)
 }
 
 function getSkillIcon(type: string) {
@@ -1350,10 +1339,20 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 
 /* 技能网格 */
 .skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
-.skill-card { padding: 18px; transition: all 0.15s; display: flex; flex-direction: column; min-height: 280px; }
+.skill-card {
+  padding: 18px;
+  transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 200px;
+  cursor: pointer;
+  outline: none;
+}
 .skill-card:hover { border-color: var(--mc-primary-light); box-shadow: var(--mc-shadow-medium); transform: translateY(-2px); }
+.skill-card:focus-visible { border-color: var(--mc-primary); box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.18); }
 .skill-card.disabled { opacity: 0.6; }
-.skill-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
+.skill-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 0; }
 .skill-icon-wrap { width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .bg-blue { background: var(--mc-primary-bg); }
 .bg-purple { background: var(--mc-primary-bg); }
@@ -1364,13 +1363,27 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 .skill-name { font-size: 16px; font-weight: 700; color: var(--mc-text-primary); margin: 0 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* RFC-042 §2.2 — slug printed under the i18n display name when they differ */
 .skill-slug { font-size: 11px; color: var(--mc-text-tertiary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.skill-meta-row { display: flex; align-items: center; gap: 6px; }
-.skill-type-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
-.badge-blue { background: var(--mc-primary-bg); color: var(--mc-primary); }
-.badge-purple { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }
-.badge-green { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }
-.badge-gray { background: var(--mc-bg-sunken); color: var(--mc-text-secondary); }
-.skill-version { font-size: 11px; color: var(--mc-text-tertiary); }
+.skill-version { font-size: 11px; color: var(--mc-text-tertiary); margin-left: auto; }
+
+/* Phase 1 slim — single status row replaces the runtime/security/deps badge wall */
+.skill-status-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0; }
+.status-pill {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.status-pill.st-ready    { background: rgba(34, 197, 94, 0.12); color: #16a34a; }
+.status-pill.st-setup    { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }
+.status-pill.st-blocked  { background: var(--mc-danger-bg); color: var(--mc-danger); }
+.status-pill.st-error    { background: var(--mc-danger-bg); color: var(--mc-danger); }
+.status-pill.st-disabled { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
+.status-pill.st-checking { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); font-weight: 500; }
+:root.dark .status-pill.st-ready { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
 .toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; cursor: pointer; flex-shrink: 0; }
 .toggle-switch input { opacity: 0; width: 0; height: 0; }
 .toggle-slider { position: absolute; inset: 0; background: var(--mc-border); border-radius: 20px; transition: 0.2s; }
@@ -1504,6 +1517,43 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 .binding-implicit { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
 .memory-link-btn { padding: 4px 10px; border: 1px solid var(--mc-border); background: var(--mc-bg-elevated); color: var(--mc-primary); border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 500; }
 .memory-link-btn:hover { background: var(--mc-primary-bg); border-color: var(--mc-primary); }
+
+/* Drawer Security tab */
+.detail-security-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.detail-security-block {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--mc-bg-muted);
+  border: 1px solid var(--mc-border-light);
+  font-size: 12px;
+  line-height: 1.5;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.detail-security-block code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  background: var(--mc-bg-sunken);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--mc-text-primary);
+  word-break: break-all;
+}
+.detail-security-block.detail-security-error {
+  background: var(--mc-danger-bg);
+  border-color: rgba(239, 68, 68, 0.22);
+  color: var(--mc-danger);
+}
+.detail-path-code { max-width: 100%; }
 
 .lessons-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .lessons-clear-btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--mc-border); background: var(--mc-bg-muted); color: var(--mc-text-secondary); cursor: pointer; font-size: 12px; }
