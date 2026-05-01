@@ -3,10 +3,13 @@ package vip.mate.skill.runtime.model;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Builder;
 import lombok.Data;
+import vip.mate.skill.manifest.SkillManifest;
 
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 运行时已解析的技能包
@@ -17,6 +20,9 @@ import java.util.Map;
 public class ResolvedSkill {
 
     // ==================== 基础信息 ====================
+
+    /** RFC-090 Phase 2 — 技能实体主键，便于按 id 反查。 */
+    private Long id;
 
     /** 技能名称 */
     private String name;
@@ -95,6 +101,84 @@ public class ResolvedSkill {
 
     /** 依赖状态摘要 */
     private String dependencySummary;
+
+    // ==================== RFC-090 §14.1 — features 矩阵 ====================
+
+    /**
+     * Parsed manifest (RFC-090 §14.6 SoT). Null for legacy skills with no
+     * frontmatter; in that case feature/manifest-aware code falls back to
+     * legacy fields above.
+     */
+    private SkillManifest manifest;
+
+    /**
+     * Per-feature status keyed by {@code feature.id}. Values come from
+     * {@code SkillDependencyChecker.FeatureCheckResult.status}: one of
+     * {@code READY / SETUP_NEEDED / UNSUPPORTED}.
+     *
+     * <p>For backward compat: if the manifest declares no {@code features[]}
+     * block, the resolver synthesizes a single feature {@code "default"}
+     * carrying the top-level requires + platforms.
+     */
+    @Builder.Default
+    private Map<String, String> featureStatuses = Map.of();
+
+    /**
+     * Set of feature IDs whose status is READY. Derived from
+     * {@link #featureStatuses}; populated by the resolver.
+     */
+    @Builder.Default
+    private Set<String> activeFeatures = Set.of();
+
+    /** RFC-090 §14.1 — replacement filter for {@code dependencyReady}. */
+    public boolean hasAnyActiveFeature() {
+        return activeFeatures != null && !activeFeatures.isEmpty();
+    }
+
+    /**
+     * RFC-090 §14.2 — tools that should be advertised to the LLM, given
+     * the current feature statuses.
+     *
+     * <p>Behavior:
+     * <ul>
+     *   <li>No manifest at all → {@link Set#of()} (caller should treat as
+     *       "no skill-derived tools" and rely on legacy paths).</li>
+     *   <li>Manifest with no {@code features[]} → return {@code allowedTools}
+     *       wholesale (legacy behavior).</li>
+     *   <li>Manifest with features → only tools whose owning feature is
+     *       READY. A feature with empty {@code feature.tools} is treated as
+     *       "inherit the manifest-level allowed-tools" so a single-feature
+     *       skill matches the no-features case.</li>
+     * </ul>
+     */
+    public Set<String> getEffectiveAllowedTools() {
+        if (manifest == null) return Set.of();
+        List<String> base = manifest.getAllowedTools();
+        if (base == null) base = List.of();
+
+        // No features → wholesale allowedTools
+        if (manifest.getFeatures() == null || manifest.getFeatures().isEmpty()) {
+            return base.isEmpty() ? Set.of() : new LinkedHashSet<>(base);
+        }
+
+        Set<String> out = new LinkedHashSet<>();
+        Set<String> active = activeFeatures == null ? Set.of() : activeFeatures;
+        boolean anyFeatureUsedInheritance = false;
+        for (SkillManifest.FeatureDef f : manifest.getFeatures()) {
+            if (!active.contains(f.getId())) continue;
+            if (f.getTools() == null || f.getTools().isEmpty()) {
+                // Inherit manifest-level allowed-tools for any active
+                // feature that doesn't carve out a tool subset.
+                anyFeatureUsedInheritance = true;
+                continue;
+            }
+            out.addAll(f.getTools());
+        }
+        if (anyFeatureUsedInheritance) {
+            out.addAll(base);
+        }
+        return out;
+    }
 
     // ==================== 综合状态 ====================
 

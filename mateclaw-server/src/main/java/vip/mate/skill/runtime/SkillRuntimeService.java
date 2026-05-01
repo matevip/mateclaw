@@ -85,7 +85,12 @@ public class SkillRuntimeService {
             .filter(ResolvedSkill::isEnabled)
             .filter(ResolvedSkill::isRuntimeAvailable)
             .filter(s -> !s.isSecurityBlocked())
-            .filter(ResolvedSkill::isDependencyReady)
+            // RFC-090 §14.1 — features-aware gate. When a manifest is
+            // present, require at least one READY feature. Legacy skills
+            // (no manifest) fall back to the old dependencyReady boolean.
+            .filter(s -> s.getManifest() == null
+                    ? s.isDependencyReady()
+                    : s.hasAnyActiveFeature())
             .collect(Collectors.toList());
 
         activeSkillsCache.put(CACHE_KEY, resolved);

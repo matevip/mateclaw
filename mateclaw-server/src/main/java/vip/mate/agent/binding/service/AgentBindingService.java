@@ -3,6 +3,8 @@ package vip.mate.agent.binding.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import vip.mate.agent.binding.model.AgentProviderPreference;
 import vip.mate.agent.binding.model.AgentSkillBinding;
@@ -10,8 +12,11 @@ import vip.mate.agent.binding.model.AgentToolBinding;
 import vip.mate.agent.binding.repository.AgentProviderPreferenceMapper;
 import vip.mate.agent.binding.repository.AgentSkillBindingMapper;
 import vip.mate.agent.binding.repository.AgentToolBindingMapper;
+import vip.mate.skill.runtime.SkillRuntimeService;
+import vip.mate.skill.runtime.model.ResolvedSkill;
 
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -27,12 +32,28 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class AgentBindingService {
 
     private final AgentSkillBindingMapper skillBindingMapper;
     private final AgentToolBindingMapper toolBindingMapper;
     private final AgentProviderPreferenceMapper providerPreferenceMapper;
+    /**
+     * {@code @Lazy} — SkillRuntimeService and AgentBindingService both sit
+     * near the agent boot path; the lazy proxy avoids a circular bean
+     * graph when SkillRuntimeService initializes after binding.
+     */
+    private final SkillRuntimeService skillRuntimeService;
+
+    @Autowired
+    public AgentBindingService(AgentSkillBindingMapper skillBindingMapper,
+                               AgentToolBindingMapper toolBindingMapper,
+                               AgentProviderPreferenceMapper providerPreferenceMapper,
+                               @Lazy SkillRuntimeService skillRuntimeService) {
+        this.skillBindingMapper = skillBindingMapper;
+        this.toolBindingMapper = toolBindingMapper;
+        this.providerPreferenceMapper = providerPreferenceMapper;
+        this.skillRuntimeService = skillRuntimeService;
+    }
 
     // ==================== Skill Bindings ====================
 
@@ -126,6 +147,72 @@ public class AgentBindingService {
                 .filter(b -> Boolean.TRUE.equals(b.getEnabled()))
                 .map(AgentToolBinding::getToolName)
                 .collect(Collectors.toSet());
+    }
+
+    /**
+     * RFC-090 §14.2 — single entry point that maps an agent's bindings to
+     * the set of tool names allowed at runtime.
+     *
+     * <p>Three-state semantics (mirrors {@link #getBoundSkillIds} /
+     * {@link #getBoundToolNames}):
+     * <ul>
+     *   <li><b>{@code null} bound skills + {@code null} bound tools</b> →
+     *       returns {@code null}. Caller treats this as "no agent-level
+     *       restriction; let the upstream {@code ToolSet} pass through
+     *       its global default".</li>
+     *   <li><b>at least one side non-null</b> → returns the union, which
+     *       may be empty (= "this agent is explicitly restricted to no
+     *       tools"). The caller must distinguish empty from null.</li>
+     * </ul>
+     *
+     * <p>Skill expansion rules (§14.2):
+     * <ul>
+     *   <li>Resolved skill found → contribute
+     *       {@code ResolvedSkill.getEffectiveAllowedTools()} — only tools
+     *       whose owning feature is READY (unavailable features stay
+     *       hidden from the LLM, §10.2 Q8).</li>
+     *   <li>Skill bound but unresolved (e.g. legacy or missing manifest)
+     *       → contribute nothing through this path; legacy SKILL.md prompt
+     *       enhancement still runs separately.</li>
+     * </ul>
+     */
+    public Set<String> getEffectiveToolNames(Long agentId) {
+        Set<Long> boundSkillIds = getBoundSkillIds(agentId);
+        Set<String> directTools = getBoundToolNames(agentId);
+
+        // (1) null + null → no restriction; defer to the global default.
+        if (boundSkillIds == null && directTools == null) {
+            return null;
+        }
+
+        Set<String> merged = new LinkedHashSet<>();
+
+        if (boundSkillIds != null) {
+            for (Long skillId : boundSkillIds) {
+                ResolvedSkill resolved = findResolvedSkillById(skillId);
+                if (resolved == null) continue;
+                Set<String> skillTools = resolved.getEffectiveAllowedTools();
+                if (skillTools != null && !skillTools.isEmpty()) merged.addAll(skillTools);
+            }
+        }
+
+        if (directTools != null) {
+            // ∪ Advanced 直选的原子 tool（§9.2 调整 B）
+            merged.addAll(directTools);
+        }
+
+        return merged;
+    }
+
+    private ResolvedSkill findResolvedSkillById(Long skillId) {
+        if (skillId == null || skillRuntimeService == null) return null;
+        // resolveAllSkillsStatus returns every skill in the catalog, not
+        // just the active ones, so we still see READY/SETUP_NEEDED status
+        // for bound but partially-unsatisfied skills.
+        return skillRuntimeService.resolveAllSkillsStatus().stream()
+                .filter(s -> s != null && skillId.equals(s.getId()))
+                .findFirst()
+                .orElse(null);
     }
 
     public AgentToolBinding bindTool(Long agentId, String toolName) {

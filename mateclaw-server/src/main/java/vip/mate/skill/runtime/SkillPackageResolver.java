@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import vip.mate.skill.manifest.SkillManifest;
+import vip.mate.skill.manifest.SkillManifestParser;
 import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.repository.SkillMapper;
 import vip.mate.skill.runtime.model.ResolvedSkill;
@@ -14,9 +16,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -37,6 +43,7 @@ import java.util.stream.Collectors;
 public class SkillPackageResolver {
 
     private final SkillFrontmatterParser frontmatterParser;
+    private final SkillManifestParser manifestParser;
     private final SkillDirectoryScanner directoryScanner;
     private final SkillSecurityService securityService;
     private final SkillDependencyChecker dependencyChecker;
@@ -74,11 +81,15 @@ public class SkillPackageResolver {
         // 3. 依赖检查
         applyDependencyCheck(resolved);
 
-        // 4. 综合判定 runtimeAvailable
+        // 4. RFC-090 §14.1 — manifest + features 矩阵
+        applyManifestAndFeatures(resolved);
+
+        // 5. 综合判定 runtimeAvailable
         resolveRuntimeAvailability(resolved);
 
-        // 5. RFC-042 §2.3 — persist the scan outcome so the admin UI can show
-        //    findings after a restart (previously they lived only in memory).
+        // 6. RFC-042 §2.3 + RFC-090 §14.6 — persist scan outcome and
+        //    project manifest_json back to the row so legacy columns
+        //    stay in sync.
         persistScanOutcome(entity, resolved);
 
         return resolved;
@@ -99,10 +110,32 @@ public class SkillPackageResolver {
 
         String newStatus = deriveScanStatus(resolved);
         String newJson = serializeFindings(resolved.getSecurityFindings());
+        String newManifestJson = serializeManifest(resolved.getManifest());
+
         boolean statusChanged = !Objects.equals(entity.getSecurityScanStatus(), newStatus);
         boolean findingsChanged = !Objects.equals(entity.getSecurityScanResult(), newJson);
+        boolean manifestChanged = !Objects.equals(entity.getManifestJson(), newManifestJson);
 
-        if (!statusChanged && !findingsChanged) {
+        // RFC-090 §14.6 — column projection from manifest (SoT).
+        // Snapshot pre-projection values so we know which legacy columns
+        // need a row-level update. Skipped when the manifest is null.
+        String newSkillType = entity.getSkillType();
+        String newIcon = entity.getIcon();
+        String newVersion = entity.getVersion();
+        String newAuthor = entity.getAuthor();
+        if (resolved.getManifest() != null) {
+            SkillManifest m = resolved.getManifest();
+            if (m.getType() != null && !m.getType().isBlank()) newSkillType = m.getType();
+            if (m.getIcon() != null && !m.getIcon().isBlank()) newIcon = m.getIcon();
+            if (m.getVersion() != null && !m.getVersion().isBlank()) newVersion = m.getVersion();
+            if (m.getAuthor() != null && !m.getAuthor().isBlank()) newAuthor = m.getAuthor();
+        }
+        boolean projectionChanged = !Objects.equals(entity.getSkillType(), newSkillType)
+                || !Objects.equals(entity.getIcon(), newIcon)
+                || !Objects.equals(entity.getVersion(), newVersion)
+                || !Objects.equals(entity.getAuthor(), newAuthor);
+
+        if (!statusChanged && !findingsChanged && !manifestChanged && !projectionChanged) {
             return;
         }
 
@@ -110,23 +143,50 @@ public class SkillPackageResolver {
             // Whitelist via LambdaUpdateWrapper (issue #45): SkillEntity has
             // several @TableField(updateStrategy = FieldStrategy.ALWAYS)
             // columns (skill_content, config_json, source_code, name_zh,
-            // name_en, security_scan_result). Calling updateById with a
-            // partial entity would tell MyBatis Plus to write NULL to every
-            // ALWAYS column not set on the partial — wiping the imported
+            // name_en, security_scan_result, manifest_json). Calling updateById
+            // with a partial entity would tell MyBatis Plus to write NULL to
+            // every ALWAYS column not set on the partial — wiping the imported
             // skill content on every scan write-back.
             LocalDateTime now = LocalDateTime.now();
-            skillMapper.update(null, new LambdaUpdateWrapper<SkillEntity>()
-                    .eq(SkillEntity::getId, entity.getId())
-                    .set(SkillEntity::getSecurityScanStatus, newStatus)
-                    .set(SkillEntity::getSecurityScanResult, newJson)
-                    .set(SkillEntity::getSecurityScanTime, now));
+            LambdaUpdateWrapper<SkillEntity> wrapper = new LambdaUpdateWrapper<SkillEntity>()
+                    .eq(SkillEntity::getId, entity.getId());
+            if (statusChanged) wrapper.set(SkillEntity::getSecurityScanStatus, newStatus);
+            if (findingsChanged) wrapper.set(SkillEntity::getSecurityScanResult, newJson);
+            if (manifestChanged) wrapper.set(SkillEntity::getManifestJson, newManifestJson);
+            if (projectionChanged) {
+                wrapper.set(SkillEntity::getSkillType, newSkillType)
+                        .set(SkillEntity::getIcon, newIcon)
+                        .set(SkillEntity::getVersion, newVersion)
+                        .set(SkillEntity::getAuthor, newAuthor);
+            }
+            // Always update scan time when something changed so we have a
+            // freshness indicator for the admin UI.
+            if (statusChanged || findingsChanged) wrapper.set(SkillEntity::getSecurityScanTime, now);
+            skillMapper.update(null, wrapper);
             // Keep the in-memory entity coherent with the DB so the next
             // resolve in the same tick doesn't redundantly write again.
-            entity.setSecurityScanStatus(newStatus);
-            entity.setSecurityScanResult(newJson);
-            entity.setSecurityScanTime(now);
+            if (statusChanged) entity.setSecurityScanStatus(newStatus);
+            if (findingsChanged) entity.setSecurityScanResult(newJson);
+            if (statusChanged || findingsChanged) entity.setSecurityScanTime(now);
+            if (manifestChanged) entity.setManifestJson(newManifestJson);
+            if (projectionChanged) {
+                entity.setSkillType(newSkillType);
+                entity.setIcon(newIcon);
+                entity.setVersion(newVersion);
+                entity.setAuthor(newAuthor);
+            }
         } catch (Exception e) {
             log.warn("Failed to persist scan outcome for skill '{}': {}", entity.getName(), e.getMessage());
+        }
+    }
+
+    private String serializeManifest(SkillManifest manifest) {
+        if (manifest == null) return null;
+        try {
+            return objectMapper.writeValueAsString(manifest);
+        } catch (Exception e) {
+            log.debug("Failed to serialize manifest: {}", e.getMessage());
+            return null;
         }
     }
 
@@ -177,6 +237,7 @@ public class SkillPackageResolver {
         Map<String, Object> scripts = directoryScanner.buildDirectoryTree(skillDir.resolve("scripts"));
 
         return ResolvedSkill.builder()
+            .id(entity.getId())
             .name(entity.getName())
             .description(description)
             .content(content)
@@ -216,6 +277,7 @@ public class SkillPackageResolver {
         }
 
         return ResolvedSkill.builder()
+            .id(entity.getId())
             .name(entity.getName())
             .description(description)
             .content(content)
@@ -314,6 +376,70 @@ public class SkillPackageResolver {
             log.error("Dependency check failed for skill '{}': {}", resolved.getName(), e.getMessage());
             resolved.setDependencyReady(true); // 检查失败不阻断
             resolved.setDependencySummary("Dependency check error: " + e.getMessage());
+        }
+    }
+
+    // ==================== 阶段 3.5：manifest + features (RFC-090 §14.1 / §14.6) ====================
+
+    /**
+     * Parse the SKILL.md frontmatter into a typed manifest and evaluate
+     * the {@code features[]} matrix.
+     *
+     * <p>Backward compat: when the manifest declares no {@code features[]},
+     * we synthesize a single feature {@code "default"} that inherits the
+     * top-level requires + platforms — giving legacy skills the same status
+     * (READY iff all top-level requirements are satisfied) without code
+     * changes upstream.
+     */
+    private void applyManifestAndFeatures(ResolvedSkill resolved) {
+        try {
+            String content = resolved.getContent();
+            SkillManifest manifest = manifestParser.parse(content);
+            if (manifest == null) {
+                // No frontmatter at all: leave manifest null and let
+                // legacy callers continue using dependencyReady.
+                return;
+            }
+            resolved.setManifest(manifest);
+
+            // Build requirement lookup for feature checks.
+            Map<String, SkillManifest.RequirementDef> reqByKey = new LinkedHashMap<>();
+            for (SkillManifest.RequirementDef r : manifest.getRequires()) {
+                if (r.getKey() != null) reqByKey.put(r.getKey(), r);
+            }
+
+            List<SkillManifest.FeatureDef> features = manifest.getFeatures();
+            List<SkillManifest.FeatureDef> effectiveFeatures;
+            if (features == null || features.isEmpty()) {
+                // Synthesized "default" feature carrying top-level requires
+                // + platforms so legacy skills get the same status path.
+                List<String> defaultRequires = new ArrayList<>();
+                for (SkillManifest.RequirementDef r : manifest.getRequires()) {
+                    if (r.getKey() != null && !r.isOptional()) defaultRequires.add(r.getKey());
+                }
+                effectiveFeatures = List.of(SkillManifest.FeatureDef.builder()
+                        .id("default")
+                        .label(manifest.getName() != null ? manifest.getName() : "default")
+                        .requires(defaultRequires)
+                        .platforms(manifest.getPlatforms())
+                        .build());
+            } else {
+                effectiveFeatures = features;
+            }
+
+            Map<String, String> statuses = new LinkedHashMap<>();
+            Set<String> active = new LinkedHashSet<>();
+            for (SkillManifest.FeatureDef f : effectiveFeatures) {
+                if (f.getId() == null || f.getId().isBlank()) continue;
+                SkillDependencyChecker.FeatureCheckResult res = dependencyChecker.checkFeature(f, reqByKey);
+                statuses.put(f.getId(), res.getStatus());
+                if ("READY".equals(res.getStatus())) active.add(f.getId());
+            }
+            resolved.setFeatureStatuses(statuses);
+            resolved.setActiveFeatures(active);
+        } catch (Exception e) {
+            log.warn("Manifest/feature evaluation failed for skill '{}': {}",
+                    resolved.getName(), e.getMessage());
         }
     }
 

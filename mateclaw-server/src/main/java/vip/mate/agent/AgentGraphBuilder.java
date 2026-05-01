@@ -141,8 +141,12 @@ public class AgentGraphBuilder {
         // 过滤掉 denied 工具，使模型完全看不到它们（防止 prompt injection 利用 schema）
         toolSet = toolSet.withDeniedToolsFiltered(toolGuardConfigService.getDeniedTools());
 
-        // Per-agent tool 绑定过滤：如果 agent 有自定义 tool 绑定，则只保留绑定的工具
-        Set<String> boundTools = agentBindingService.getBoundToolNames(entity.getId());
+        // RFC-090 §14.2 — single entry point that merges:
+        //   (a) tools expanded from bound skills' active features, and
+        //   (b) directly bound atomic tools (the Advanced bypass, §9.2 调整 B).
+        // Three-state semantics: null = no agent-level restriction (use
+        // global default); non-null (possibly empty) = explicit allowlist.
+        Set<String> boundTools = agentBindingService.getEffectiveToolNames(entity.getId());
         toolSet = toolSet.withAllowedToolsOnly(boundTools); // null = 全局默认
 
         // 统一使用全局默认模型（AgentEntity.modelName 为历史残留字段，不参与运行时选择）
