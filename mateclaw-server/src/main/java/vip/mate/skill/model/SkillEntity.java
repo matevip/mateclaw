@@ -79,6 +79,15 @@ public class SkillEntity {
     @TableField(value = "skill_content", updateStrategy = FieldStrategy.ALWAYS)
     private String skillContent;
 
+    /**
+     * RFC-090 Phase 2 — full parsed SKILL.md frontmatter as JSON.
+     * Source of truth (§14.6); existing columns (skill_type/icon/version/
+     * author) become index projections written by
+     * {@code SkillPackageResolver} after each resolve.
+     */
+    @TableField(value = "manifest_json", updateStrategy = FieldStrategy.ALWAYS)
+    private String manifestJson;
+
     /** 是否启用 */
     private Boolean enabled;
 
