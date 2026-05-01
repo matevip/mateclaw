@@ -198,6 +198,14 @@
         <div class="skill-footer">
           <span v-if="skill.author" class="skill-author">by {{ skill.author }}</span>
           <div class="skill-actions">
+            <!-- RFC-090 §4.2 [Set Up] — surfaced when card is Setup
+                 Needed; opens the preflight dialog with install hints -->
+            <button v-if="needsSetup(skill)" class="skill-btn skill-btn-setup" @click="openPreflight(skill)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c0 .66.26 1.3.73 1.77.47.47 1.11.73 1.77.73H21a2 2 0 1 1 0 4h-.09c-.66 0-1.3.26-1.77.73-.47.47-.73 1.11-.73 1.77z"/>
+              </svg>
+              {{ t('skills.actions.setUp') }}
+            </button>
             <button class="skill-btn" @click="openDetailDrawer(skill)">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/>
@@ -248,6 +256,13 @@
 
     <!-- Import Hub Dialog -->
     <ImportHubDialog v-model:visible="showImportDialog" @installed="loadAll" />
+
+    <!-- RFC-090 §4.4 Pre-flight install dialog -->
+    <PreflightInstallDialog
+      v-model:visible="preflightVisible"
+      :skill-id="preflightSkillId"
+      :skill-name="preflightSkillName"
+    />
 
     <!-- RFC-090 Phase 3 — Skill detail drawer (Manifest / Tools / Features) -->
     <el-drawer
@@ -429,6 +444,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { skillApi, skillInstallApi } from '@/api/index'
 import type { Skill, SkillRuntimeStatus, SkillSecurityFinding } from '@/types/index'
 import ImportHubDialog from '@/components/skill/ImportHubDialog.vue'
+import PreflightInstallDialog from '@/components/skill/PreflightInstallDialog.vue'
 import { useSkillName } from '@/composables/useSkillName'
 
 const { t } = useI18n()
@@ -466,6 +482,17 @@ const detailLessonsLoading = ref(false)
 /** RFC-090 §4.2 card surface — per-skill side data (lessons count, used-by). */
 const lessonsCountBySkill = ref<Record<string, number>>({})
 const usedByBySkill = ref<Record<string, number>>({})
+
+/** RFC-090 §4.4 — pre-flight dialog state. */
+const preflightVisible = ref(false)
+const preflightSkillId = ref<number | string | null>(null)
+const preflightSkillName = ref('')
+
+function openPreflight(skill: Skill) {
+  preflightSkillId.value = skill.id
+  preflightSkillName.value = resolveSkillName(skill)
+  preflightVisible.value = true
+}
 
 const detailRuntime = computed(() =>
   detailSkill.value ? runtimeStatusMap.value[detailSkill.value.name] || null : null,
@@ -979,6 +1006,25 @@ function getLessonsCount(skill: Skill): number {
   return lessonsCountBySkill.value[String(skill.id)] || 0
 }
 
+/**
+ * RFC-090 §4.2 — does this skill need the [Set Up] button surfaced?
+ * Yes iff: enabled, not security-blocked, AND either:
+ *   - manifest features exist with at least one not-READY, OR
+ *   - legacy dependencyReady is false.
+ */
+function needsSetup(skill: Skill): boolean {
+  if (!skill.enabled) return false
+  const rt = getRuntimeStatus(skill)
+  if (!rt) return false
+  if (rt.securityBlocked) return false
+  if (rt.manifest && Array.isArray(rt.manifest.features) && rt.manifest.features.length > 0) {
+    const total = rt.manifest.features.length
+    const ready = (rt.activeFeatures || []).length
+    return ready < total
+  }
+  return rt.dependencyReady === false
+}
+
 function getUsedByCount(skill: Skill): number {
   return usedByBySkill.value[String(skill.id)] || 0
 }
@@ -1292,6 +1338,10 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 .usedby-badge, .lessons-badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--mc-bg-sunken); color: var(--mc-text-secondary); }
 .lessons-badge { cursor: pointer; }
 .lessons-badge:hover { background: var(--mc-primary-bg); color: var(--mc-primary); }
+
+/* RFC-090 §4.2 — [Set Up] button highlight */
+.skill-btn-setup { background: var(--mc-primary-bg); color: var(--mc-primary); border-color: rgba(217, 109, 70, 0.18); font-weight: 600; }
+.skill-btn-setup:hover { background: var(--mc-primary); color: white; }
 :root.dark .rt-features-ready { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
 :root.dark .rt-features-mixed { background: rgba(129, 140, 248, 0.18); color: #a5b4fc; }
 .rt-disabled { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
