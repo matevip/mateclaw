@@ -98,16 +98,16 @@
           </template>
         </div>
 
-        <!-- Element Plus pagination — auto-hidden when results fit a
-             single page (total <= pageSize). User feedback: showing
-             pager on a 5-row dataset is noise. -->
+        <!-- Element Plus pagination. We use a single guard:
+             total > pageSize on the wrapper so EP itself doesn't have
+             to negotiate hide-on-single-page (which in EP 2.9.x can
+             return null and leave the .pagination wrapper empty). -->
         <div v-if="total > pageSize" class="pagination">
           <el-pagination
             v-model:current-page="page"
             v-model:page-size="pageSize"
             :total="total"
             :page-sizes="[20, 50, 100]"
-            :hide-on-single-page="true"
             background
             layout="total, sizes, prev, pager, next, jumper"
             @size-change="onPageSizeChange"
@@ -370,7 +370,11 @@ async function loadEvents() {
       size: pageSize.value,
     })
     events.value = res.data?.records || []
-    total.value = res.data?.total || 0
+    // Force Number coercion — backend sometimes serializes Long as
+    // string (Jackson big-number safety), and 'total > pageSize'
+    // would fall back to string comparison ('30' > 20 → true by
+    // accident, '5' > 20 → also true!). Keep arithmetic numeric.
+    total.value = Number(res.data?.total ?? 0) || 0
   } catch {
     events.value = []
   } finally {
