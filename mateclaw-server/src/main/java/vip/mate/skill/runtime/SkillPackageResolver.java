@@ -7,6 +7,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
+import vip.mate.skill.knowledge.AcpSkillWrapperToolFactory;
 import vip.mate.skill.knowledge.WikiSkillWrapperToolFactory;
 import vip.mate.skill.manifest.SkillManifest;
 import vip.mate.skill.manifest.SkillManifestParser;
@@ -60,6 +61,13 @@ public class SkillPackageResolver {
      */
     private final WikiSkillWrapperToolFactory wikiWrapperFactory;
     /**
+     * RFC-090 Phase 7b — type=acp skill wrapper factory.
+     * Same {@code @Lazy} treatment because it pulls in
+     * AcpEndpointService → mybatis mapper which boots later in the
+     * Spring lifecycle.
+     */
+    private final AcpSkillWrapperToolFactory acpWrapperFactory;
+    /**
      * {@code @Lazy} on ToolRegistry — same lazy-resolution loop as
      * {@code SkillDependencyChecker}; without this we'd reach for the
      * registry before its plugin tools have wired up.
@@ -84,6 +92,7 @@ public class SkillPackageResolver {
                                  SkillWorkspaceManager workspaceManager,
                                  SkillMapper skillMapper,
                                  @Lazy WikiSkillWrapperToolFactory wikiWrapperFactory,
+                                 @Lazy AcpSkillWrapperToolFactory acpWrapperFactory,
                                  @Lazy ToolRegistry toolRegistry) {
         this.frontmatterParser = frontmatterParser;
         this.manifestParser = manifestParser;
@@ -94,6 +103,7 @@ public class SkillPackageResolver {
         this.workspaceManager = workspaceManager;
         this.skillMapper = skillMapper;
         this.wikiWrapperFactory = wikiWrapperFactory;
+        this.acpWrapperFactory = acpWrapperFactory;
         this.toolRegistry = toolRegistry;
     }
 
@@ -445,7 +455,7 @@ public class SkillPackageResolver {
                 // No frontmatter at all: leave manifest null and let
                 // legacy callers continue using dependencyReady. Also
                 // make sure no wrapper tools linger from a prior shape.
-                deregisterKnowledgeWrappers(resolved.getId());
+                deregisterSkillWrappers(resolved.getId());
                 return;
             }
             resolved.setManifest(manifest);
@@ -456,6 +466,12 @@ public class SkillPackageResolver {
             // wrapper names are part of allowedTools when
             // getEffectiveAllowedTools() runs.
             applyKnowledgeWrappers(resolved, manifest);
+
+            // RFC-090 Phase 7b — type=acp gets its own wrapper that
+            // delegates to the configured ACP endpoint. Parallel
+            // structure to knowledge wrappers; tracked under the same
+            // registeredWrappers map so deregistration covers both.
+            applyAcpWrappers(resolved, manifest);
 
             // Build requirement lookup for feature checks.
             Map<String, SkillManifest.RequirementDef> reqByKey = new LinkedHashMap<>();
@@ -525,7 +541,7 @@ public class SkillPackageResolver {
                 && manifest.getKnowledge().getBindKb() != null
                 && !manifest.getKnowledge().getBindKb().isBlank();
         if (!isKnowledge || !resolved.isEnabled()) {
-            deregisterKnowledgeWrappers(resolved.getId());
+            deregisterSkillWrappers(resolved.getId());
             return;
         }
 
@@ -535,7 +551,7 @@ public class SkillPackageResolver {
             if (kbId == null) {
                 log.warn("Skill '{}' has type=knowledge but bind_kb '{}' did not resolve to a KB",
                         resolved.getName(), manifest.getKnowledge().getBindKb());
-                deregisterKnowledgeWrappers(resolved.getId());
+                deregisterSkillWrappers(resolved.getId());
                 // Still surface the resolution failure as a missing
                 // requirement so the UI shows the skill as
                 // SETUP_NEEDED rather than READY-but-broken.
@@ -549,7 +565,7 @@ public class SkillPackageResolver {
         // Fresh build to keep wrapper state in lockstep with the
         // current kbId — if the user repointed bind_kb, the old
         // wrappers must go.
-        deregisterKnowledgeWrappers(resolved.getId());
+        deregisterSkillWrappers(resolved.getId());
 
         java.util.List<ToolCallback> wrappers = wikiWrapperFactory.buildWrappers(manifest, kbId);
         if (wrappers.isEmpty()) {
@@ -582,7 +598,7 @@ public class SkillPackageResolver {
         manifest.setAllowedTools(mergedAllowed);
     }
 
-    private void deregisterKnowledgeWrappers(Long skillId) {
+    private void deregisterSkillWrappers(Long skillId) {
         if (skillId == null) return;
         java.util.Set<String> previous = registeredWrappers.remove(skillId);
         if (previous == null || previous.isEmpty()) return;
@@ -593,6 +609,77 @@ public class SkillPackageResolver {
                 log.debug("unregister wrapper {} failed: {}", name, e.getMessage());
             }
         }
+    }
+
+    /**
+     * RFC-090 Phase 7b — register / refresh / deregister wrapper tools
+     * for a single ACP skill. Mirrors {@link #applyKnowledgeWrappers}.
+     *
+     * <p>Endpoint resolution semantics match the knowledge path:
+     * <ul>
+     *   <li>{@code type != acp} or skill disabled → deregister.</li>
+     *   <li>{@code endpoint} unresolvable → deregister + add a missing-
+     *       dependency hint so the UI shows SETUP_NEEDED.</li>
+     *   <li>Otherwise: register one wrapper, append name to
+     *       {@code manifest.allowedTools} so the LLM advertisement
+     *       picks it up.</li>
+     * </ul>
+     */
+    private void applyAcpWrappers(ResolvedSkill resolved, SkillManifest manifest) {
+        boolean isAcp = "acp".equalsIgnoreCase(manifest.getType())
+                && manifest.getAcp() != null
+                && manifest.getAcp().getEndpoint() != null
+                && !manifest.getAcp().getEndpoint().isBlank();
+        if (!isAcp || !resolved.isEnabled()) {
+            // applyKnowledgeWrappers already cleared registrations for
+            // type=knowledge; we don't double-clear when this branch
+            // also runs for the same skill — type is single-valued so
+            // only one branch ever holds wrappers at a time.
+            return;
+        }
+
+        Long endpointId = manifest.getAcp().getResolvedEndpointId();
+        if (endpointId == null) {
+            endpointId = acpWrapperFactory.resolveEndpointId(manifest.getAcp().getEndpoint());
+            if (endpointId == null) {
+                log.warn("Skill '{}' type=acp but endpoint '{}' did not resolve",
+                        resolved.getName(), manifest.getAcp().getEndpoint());
+                deregisterSkillWrappers(resolved.getId());
+                resolved.setMissingDependencies(java.util.List.of(
+                        "acp:" + manifest.getAcp().getEndpoint()));
+                return;
+            }
+            manifest.getAcp().setResolvedEndpointId(endpointId);
+        }
+
+        // Fresh build: drop any prior knowledge-wrapper registration
+        // (impossible in practice since type is single-valued, but
+        // makes the lifecycle safe across edits where the user flips
+        // type from knowledge to acp).
+        deregisterSkillWrappers(resolved.getId());
+
+        java.util.List<ToolCallback> wrappers = acpWrapperFactory.buildWrappers(manifest);
+        if (wrappers.isEmpty()) return;
+        java.util.Set<String> registered = new java.util.LinkedHashSet<>();
+        Long entityId = resolved.getId();
+        for (ToolCallback cb : wrappers) {
+            String name = cb.getToolDefinition().name();
+            registered.add(name);
+            toolRegistry.registerPluginTool(cb, () ->
+                    entityId != null && resolved.isEnabled());
+        }
+        if (entityId != null) {
+            registeredWrappers.put(entityId, registered);
+        }
+
+        // Append wrapper names to allowedTools so getEffectiveAllowedTools
+        // surfaces them like any other manifest-declared tool.
+        java.util.List<String> mergedAllowed = new java.util.ArrayList<>(
+                manifest.getAllowedTools() == null ? java.util.List.of() : manifest.getAllowedTools());
+        for (String wrapperName : acpWrapperFactory.wrapperNames(manifest)) {
+            if (!mergedAllowed.contains(wrapperName)) mergedAllowed.add(wrapperName);
+        }
+        manifest.setAllowedTools(mergedAllowed);
     }
 
     // ==================== 阶段 4：综合判定 ====================

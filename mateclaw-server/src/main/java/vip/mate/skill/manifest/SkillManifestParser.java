@@ -39,6 +39,7 @@ public class SkillManifestParser {
             "dependencies",
             "dashboard", "self-evolution", "self_evolution",
             "knowledge",
+            "acp",
             // legacy / housekeeping fields that aren't manifest-relevant
             "metadata"
     );
@@ -88,6 +89,7 @@ public class SkillManifestParser {
                 .dashboardMetrics(parseDashboard(fm.get("dashboard")))
                 .selfEvolution(parseSelfEvolution(coalesce(fm, "self-evolution", "self_evolution")))
                 .knowledge(parseKnowledge(fm.get("knowledge")))
+                .acp(parseAcp(fm.get("acp")))
                 .extras(extractUnknown(fm));
 
         return b.build();
@@ -244,6 +246,26 @@ public class SkillManifestParser {
                 .citation(stringOrDefault(m, "citation", "optional"))
                 .rerank(bool(m, "rerank", false))
                 .boundKbId(resolvedId)
+                .build();
+    }
+
+    @SuppressWarnings("unchecked")
+    private SkillManifest.AcpBinding parseAcp(Object raw) {
+        if (!(raw instanceof Map<?, ?> map)) return null;
+        Map<String, Object> m = (Map<String, Object>) map;
+        Long resolvedId = null;
+        Object idVal = m.get("resolvedEndpointId");
+        if (idVal == null) idVal = m.get("resolved_endpoint_id");
+        if (idVal instanceof Number n) resolvedId = n.longValue();
+        else if (idVal instanceof String s && !s.isBlank()) {
+            try { resolvedId = Long.parseLong(s.trim()); } catch (NumberFormatException ignored) { /* leave null */ }
+        }
+        return SkillManifest.AcpBinding.builder()
+                .endpoint(string(m, "endpoint"))
+                .systemPrefix(stringOrDefault(m, "system_prefix",
+                        stringOrDefault(m, "systemPrefix", null)))
+                .cwd(string(m, "cwd"))
+                .resolvedEndpointId(resolvedId)
                 .build();
     }
 

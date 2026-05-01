@@ -18,6 +18,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * RFC-090 Phase 7 — minimal Java ACP (Agent Communication Protocol)
@@ -60,6 +62,28 @@ public class AcpStdioClient implements AutoCloseable {
     private final AtomicLong nextRequestId = new AtomicLong(1);
     private final Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
     private volatile boolean closed = false;
+
+    /**
+     * RFC-090 Phase 7b — invoked when the agent sends a JSON-RPC
+     * notification (no id). Notification objects passed in have shape
+     * {@code {jsonrpc, method, params}}; the most common is
+     * {@code session/update} carrying agent message chunks.
+     *
+     * <p>Default no-op so existing test-only callers don't need to set
+     * a handler. {@link AcpDelegationService} installs an accumulator
+     * that scrapes {@code agent_message_chunk} text into a
+     * {@code StringBuilder}.
+     */
+    private volatile Consumer<JsonNode> notificationHandler = msg -> { /* drop */ };
+
+    /**
+     * RFC-090 Phase 7b — invoked when the agent sends a JSON-RPC
+     * request (has id). The handler returns the JSON-RPC
+     * {@code result} object (or null to send back -32601 method-not-
+     * implemented). Used for {@code session/request_permission};
+     * trusted endpoints auto-allow, untrusted ones cancel.
+     */
+    private volatile Function<JsonNode, JsonNode> requestHandler = msg -> null;
 
     private AcpStdioClient(ObjectMapper mapper, Process process) {
         this.mapper = mapper;
@@ -216,7 +240,11 @@ public class AcpStdioClient implements AutoCloseable {
 
     private void routeMessage(JsonNode msg) {
         JsonNode idNode = msg.get("id");
-        if (idNode != null && idNode.isNumber()) {
+        boolean hasId = idNode != null && !idNode.isNull();
+        boolean hasMethod = msg.has("method");
+
+        // (1) Response to one of *our* outbound requests.
+        if (hasId && idNode.isNumber() && !hasMethod) {
             long id = idNode.asLong();
             CompletableFuture<JsonNode> future = pending.remove(id);
             if (future != null) {
@@ -230,29 +258,68 @@ public class AcpStdioClient implements AutoCloseable {
                 return;
             }
         }
-        // Server-initiated request or notification — for the test path
-        // we only need to politely decline. A future bidirectional
-        // session loop will dispatch these to handlers.
-        if (msg.has("method") && msg.has("id")) {
-            // Reply with a "method not implemented" so the agent doesn't hang.
+
+        // (2) Server-initiated request — has both method and id.
+        if (hasMethod && hasId) {
+            JsonNode result = null;
             try {
-                ObjectNode reply = mapper.createObjectNode();
-                reply.put("jsonrpc", "2.0");
-                reply.set("id", msg.get("id"));
-                ObjectNode error = mapper.createObjectNode();
-                error.put("code", -32601);
-                error.put("message", "Method not implemented in test client: "
-                        + msg.path("method").asText(""));
-                reply.set("error", error);
-                synchronized (stdin) {
-                    stdin.write(mapper.writeValueAsString(reply));
-                    stdin.write('\n');
-                    stdin.flush();
-                }
-            } catch (IOException e) {
-                log.debug("ACP failed to reply to server-initiated request: {}", e.getMessage());
+                result = requestHandler.apply(msg);
+            } catch (Exception e) {
+                log.warn("ACP requestHandler threw on method '{}': {}",
+                        msg.path("method").asText(""), e.getMessage());
+            }
+            sendReplyTo(idNode, result, msg.path("method").asText(""));
+            return;
+        }
+
+        // (3) Notification — has method but no id.
+        if (hasMethod) {
+            try {
+                notificationHandler.accept(msg);
+            } catch (Exception e) {
+                log.warn("ACP notificationHandler threw on method '{}': {}",
+                        msg.path("method").asText(""), e.getMessage());
             }
         }
+    }
+
+    private void sendReplyTo(JsonNode idNode, JsonNode result, String method) {
+        try {
+            ObjectNode reply = mapper.createObjectNode();
+            reply.put("jsonrpc", "2.0");
+            reply.set("id", idNode);
+            if (result != null) {
+                reply.set("result", result);
+            } else {
+                ObjectNode error = mapper.createObjectNode();
+                error.put("code", -32601);
+                error.put("message", "Method not implemented: " + method);
+                reply.set("error", error);
+            }
+            synchronized (stdin) {
+                stdin.write(mapper.writeValueAsString(reply));
+                stdin.write('\n');
+                stdin.flush();
+            }
+        } catch (IOException e) {
+            log.debug("ACP failed to reply to server-initiated request '{}': {}", method, e.getMessage());
+        }
+    }
+
+    /**
+     * Replace the notification handler. Pass {@code null} to fall back
+     * to the no-op default.
+     */
+    public void setNotificationHandler(Consumer<JsonNode> handler) {
+        this.notificationHandler = handler != null ? handler : msg -> {};
+    }
+
+    /**
+     * Replace the server-request handler. Pass {@code null} to fall
+     * back to the default which returns -32601 for every method.
+     */
+    public void setRequestHandler(Function<JsonNode, JsonNode> handler) {
+        this.requestHandler = handler != null ? handler : msg -> null;
     }
 
     @Override

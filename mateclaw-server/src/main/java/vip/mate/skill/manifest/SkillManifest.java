@@ -86,6 +86,11 @@ public class SkillManifest {
 
     private KnowledgeBinding knowledge;
 
+    // ==================== Phase 7b — type=acp binding ====================
+
+    /** Set when {@code type=acp}. Resolves to a {@code mate_acp_endpoint} row. */
+    private AcpBinding acp;
+
     // ==================== Forward-compat catch-all ====================
 
     /** Unknown frontmatter keys are stashed here so a future field
@@ -167,6 +172,30 @@ public class SkillManifest {
         public static SelfEvolution defaults() {
             return SelfEvolution.builder().build();
         }
+    }
+
+    @Data
+    @Builder
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    public static class AcpBinding {
+        /** ACP endpoint slug (matches {@code mate_acp_endpoint.name}). */
+        private String endpoint;
+        /**
+         * Optional system-prompt override delivered to the upstream agent
+         * before the user's message. Useful when a single ACP CLI is
+         * shared across several MateClaw skills with different personas.
+         */
+        private String systemPrefix;
+        /**
+         * Working directory hint for the spawned ACP process; defaults
+         * to the current MateClaw workspace path when null.
+         */
+        private String cwd;
+        /**
+         * Resolved endpoint id, written at install time. Null when the
+         * endpoint slug couldn't be resolved.
+         */
+        private Long resolvedEndpointId;
     }
 
     @Data
