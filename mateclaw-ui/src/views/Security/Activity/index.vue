@@ -98,17 +98,16 @@
           </template>
         </div>
 
-        <!-- Element Plus pagination — supports size switcher / jumper /
-             total. When total fits the smallest page size we still render
-             so the user can adjust pageSize without it disappearing on
-             low-volume instances. -->
-        <div v-if="total > 0" class="pagination">
+        <!-- Element Plus pagination — auto-hidden when results fit a
+             single page (total <= pageSize). User feedback: showing
+             pager on a 5-row dataset is noise. -->
+        <div v-if="total > pageSize" class="pagination">
           <el-pagination
             v-model:current-page="page"
             v-model:page-size="pageSize"
             :total="total"
             :page-sizes="[20, 50, 100]"
-            :hide-on-single-page="false"
+            :hide-on-single-page="true"
             background
             layout="total, sizes, prev, pager, next, jumper"
             @size-change="onPageSizeChange"
