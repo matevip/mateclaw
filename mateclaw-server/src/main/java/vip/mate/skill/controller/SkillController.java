@@ -6,6 +6,11 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
+import vip.mate.agent.AgentService;
+import vip.mate.agent.binding.model.AgentSkillBinding;
+import vip.mate.agent.binding.repository.AgentSkillBindingMapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import vip.mate.agent.model.AgentEntity;
 import vip.mate.skill.lessons.SkillLessonsService;
 import vip.mate.skill.manifest.SkillManifest;
 import vip.mate.skill.model.SkillEntity;
@@ -41,6 +46,8 @@ public class SkillController {
     private final SkillSynthesisService synthesisService;
     private final SkillDependencyChecker dependencyChecker;
     private final SkillLessonsService lessonsService;
+    private final AgentSkillBindingMapper agentSkillBindingMapper;
+    private final AgentService agentService;
 
     @Operation(summary = "获取技能分页列表（RFC-042 §2.1）")
     @GetMapping
@@ -220,6 +227,38 @@ public class SkillController {
         ));
     }
 
+    // ==================== Reverse lookup (RFC-090 §7) ====================
+
+    /**
+     * RFC-090 §7 — list agents (employees) currently bound to this
+     * skill so the skill card can render "Used by N employees" with a
+     * click-through. Returns lightweight {id, name, icon} rows; the
+     * full agent object would balloon the card payload.
+     */
+    @Operation(summary = "List agents bound to this skill (RFC-090)")
+    @GetMapping("/{id}/employees")
+    public R<List<Map<String, Object>>> employees(@PathVariable Long id) {
+        List<AgentSkillBinding> bindings = agentSkillBindingMapper.selectList(
+                new LambdaQueryWrapper<AgentSkillBinding>()
+                        .eq(AgentSkillBinding::getSkillId, id)
+                        .eq(AgentSkillBinding::getEnabled, true));
+        List<Map<String, Object>> rows = new ArrayList<>(bindings.size());
+        for (AgentSkillBinding b : bindings) {
+            try {
+                AgentEntity agent = agentService.getAgent(b.getAgentId());
+                if (agent == null) continue;
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("id", agent.getId());
+                row.put("name", agent.getName());
+                row.put("icon", agent.getIcon());
+                rows.add(row);
+            } catch (Exception ignored) {
+                // agent may have been deleted; skip rather than fail the whole list
+            }
+        }
+        return R.ok(rows);
+    }
+
     // ==================== Lessons API (RFC-090 §7 + §11.4) ====================
 
     /**
@@ -235,10 +274,24 @@ public class SkillController {
                 .orElse(null);
         if (resolved == null) return R.fail("Skill not found: " + id);
         String body = lessonsService.readLessons(resolved);
+        // entryCount = number of "## " headed sections (RFC-090 §11.4 "💡 N entries" badge).
+        int entryCount = 0;
+        if (body != null && !body.isBlank()) {
+            int from = 0;
+            while (true) {
+                int idx = body.indexOf("\n## ", from);
+                if (idx < 0) break;
+                entryCount++;
+                from = idx + 1;
+            }
+            // Also count a leading "## " (no preceding newline) at start of file.
+            if (body.startsWith("## ")) entryCount++;
+        }
         return R.ok(Map.of(
                 "skillId", id,
                 "skillName", resolved.getName(),
-                "raw", body == null ? "" : body
+                "raw", body == null ? "" : body,
+                "entryCount", entryCount
         ));
     }
 

@@ -126,6 +126,14 @@
             {{ getFeaturesBadge(skill)?.label }}
           </span>
           <span v-if="getSourceBadge(skill)" class="source-badge">{{ getSourceBadge(skill) }}</span>
+          <!-- RFC-090 §4.2 — Source label, used-by count, lessons count -->
+          <span class="source-label" :class="getSourceClass(skill)">{{ getSourceLabel(skill) }}</span>
+          <span v-if="getUsedByCount(skill) > 0" class="usedby-badge" :title="t('skills.usedByTitle')">
+            👥 {{ getUsedByCount(skill) }}
+          </span>
+          <span v-if="getLessonsCount(skill) > 0" class="lessons-badge" :title="t('skills.lessonsCountTitle')" @click.stop="openDetailDrawer(skill); detailTab = 'lessons'">
+            💡 {{ getLessonsCount(skill) }}
+          </span>
           <span v-if="getRuntimePath(skill)" class="skill-source-path">{{ getRuntimePath(skill) }}</span>
         </div>
         <!-- Missing Dependencies Detail -->
@@ -455,6 +463,10 @@ const detailTab = ref<'manifest' | 'tools' | 'features' | 'lessons'>('manifest')
 const detailLessonsRaw = ref<string>('')
 const detailLessonsLoading = ref(false)
 
+/** RFC-090 §4.2 card surface — per-skill side data (lessons count, used-by). */
+const lessonsCountBySkill = ref<Record<string, number>>({})
+const usedByBySkill = ref<Record<string, number>>({})
+
 const detailRuntime = computed(() =>
   detailSkill.value ? runtimeStatusMap.value[detailSkill.value.name] || null : null,
 )
@@ -615,6 +627,9 @@ async function loadSkills() {
     } else {
       total.value = 0
     }
+    // RFC-090 §4.2 — fire-and-forget load card side data (lessons /
+    // used-by counts) for the currently visible page.
+    loadCardSideData()
   } catch (e) {
     skills.value = []
     total.value = 0
@@ -928,6 +943,70 @@ function getSourceBadge(skill: Skill): string {
   return ''
 }
 
+/**
+ * RFC-090 §4.2 — Source label for the skill card.
+ *
+ * Derivation precedence:
+ *   1. builtin=true       → "Built-in"
+ *   2. skillType=mcp      → "MCP"
+ *   3. skillType=acp      → "ACP" (Phase 7)
+ *   4. sourceConversationId set → "AI Synthesized" (RFC-023)
+ *   5. configJson.source.type / upstream → "ClawHub" / "GitHub"
+ *   6. fallback           → "Local"
+ */
+function getSourceLabel(skill: Skill): string {
+  if (skill.builtin) return t('skills.source.builtin')
+  if (skill.skillType === 'mcp') return 'MCP'
+  if (skill.skillType === 'acp') return 'ACP'
+  if (skill.sourceConversationId) return t('skills.source.synthesized')
+  try {
+    const config = skill.configJson ? JSON.parse(skill.configJson) : null
+    const sourceType = config?.source?.type || config?.upstream
+    if (sourceType === 'clawhub') return 'ClawHub'
+    if (sourceType === 'github') return 'GitHub'
+  } catch { /* ignore */ }
+  return t('skills.source.local')
+}
+
+function getSourceClass(skill: Skill): string {
+  if (skill.builtin) return 'src-builtin'
+  if (skill.skillType === 'mcp' || skill.skillType === 'acp') return 'src-protocol'
+  if (skill.sourceConversationId) return 'src-synth'
+  return 'src-local'
+}
+
+function getLessonsCount(skill: Skill): number {
+  return lessonsCountBySkill.value[String(skill.id)] || 0
+}
+
+function getUsedByCount(skill: Skill): number {
+  return usedByBySkill.value[String(skill.id)] || 0
+}
+
+/**
+ * Batch-load lessons count + used-by count for the currently rendered
+ * skill list. Called after each loadSkills(); failures are silenced
+ * per-skill so a single 404 doesn't blank the entire counts map.
+ */
+async function loadCardSideData() {
+  const items = skills.value
+  if (items.length === 0) return
+  const tasks = items.map(async (skill) => {
+    const id = String(skill.id)
+    const calls = [
+      skillApi.getLessons(skill.id).then((res: any) => {
+        lessonsCountBySkill.value[id] = res?.data?.entryCount || 0
+      }).catch(() => { lessonsCountBySkill.value[id] = 0 }),
+      skillApi.employees(skill.id).then((res: any) => {
+        usedByBySkill.value[id] = Array.isArray(res?.data) ? res.data.length : 0
+      }).catch(() => { usedByBySkill.value[id] = 0 }),
+    ]
+    await Promise.all(calls)
+  })
+  // Don't block on the whole batch; render whatever lands first.
+  await Promise.allSettled(tasks)
+}
+
 function getSkillIcon(type: string) {
   return { builtin: '🔧', mcp: '🔌', dynamic: '📦' }[type] ?? '🛠️'
 }
@@ -1203,6 +1282,16 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 /* RFC-090 §14.1 — features 矩阵徽标 */
 .rt-features-ready { background: rgba(34, 197, 94, 0.12); color: #16a34a; }
 .rt-features-mixed { background: rgba(99, 102, 241, 0.12); color: #6366f1; }
+
+/* RFC-090 §4.2 — Source label + Used-by + Lessons count */
+.source-label { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
+.source-label.src-builtin { background: rgba(34, 197, 94, 0.12); color: #16a34a; }
+.source-label.src-protocol { background: rgba(99, 102, 241, 0.12); color: #6366f1; }
+.source-label.src-synth { background: rgba(168, 85, 247, 0.12); color: #a855f7; }
+.source-label.src-local { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
+.usedby-badge, .lessons-badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--mc-bg-sunken); color: var(--mc-text-secondary); }
+.lessons-badge { cursor: pointer; }
+.lessons-badge:hover { background: var(--mc-primary-bg); color: var(--mc-primary); }
 :root.dark .rt-features-ready { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
 :root.dark .rt-features-mixed { background: rgba(129, 140, 248, 0.18); color: #a5b4fc; }
 .rt-disabled { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }

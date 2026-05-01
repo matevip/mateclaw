@@ -1998,6 +1998,13 @@ export default {
       mcp: 'MCP',
       dynamic: '动态',
     },
+    source: {
+      builtin: '内置',
+      synthesized: 'AI 合成',
+      local: '本地',
+    },
+    usedByTitle: '已绑定此技能的 Agent 数量',
+    lessonsCountTitle: '已记录的 lessons — 点击查看',
     actions: {
       configure: '配置',
       view: '查看',

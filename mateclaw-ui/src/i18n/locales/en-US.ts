@@ -1996,6 +1996,13 @@ export default {
       mcp: 'MCP',
       dynamic: 'Dynamic',
     },
+    source: {
+      builtin: 'Built-in',
+      synthesized: 'AI Synthesized',
+      local: 'Local',
+    },
+    usedByTitle: 'Number of agents that have this skill bound',
+    lessonsCountTitle: 'Lessons recorded — click to view',
     actions: {
       configure: 'Configure',
       view: 'View',
