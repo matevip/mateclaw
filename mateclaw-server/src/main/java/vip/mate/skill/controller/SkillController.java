@@ -50,6 +50,7 @@ public class SkillController {
     private final AgentSkillBindingMapper agentSkillBindingMapper;
     private final AgentService agentService;
     private final AgentBindingService agentBindingService;
+    private final vip.mate.skill.mcp.McpSkillBridge mcpSkillBridge;
 
     @Operation(summary = "获取技能分页列表（RFC-042 §2.1）")
     @GetMapping
@@ -60,7 +61,39 @@ public class SkillController {
             @RequestParam(required = false) String skillType,
             @RequestParam(required = false) Boolean enabled,
             @RequestParam(required = false) String scanStatus) {
-        return R.ok(skillService.pageSkills(page, size, keyword, skillType, enabled, scanStatus));
+        IPage<SkillEntity> dbPage = skillService.pageSkills(page, size, keyword, skillType, enabled, scanStatus);
+
+        // RFC-090 §3.2 — surface MCP servers as virtual skills on the
+        // first page so users see GitHub / Filesystem / etc. as cards
+        // alongside built-in and uploaded skills. Restricted to page 1
+        // because virtual rows are unpaginated; a follow-up can push
+        // them through proper SQL UNION ALL when MCP server count gets
+        // into the dozens.
+        if (page == 1 && (skillType == null || skillType.isBlank() || "mcp".equalsIgnoreCase(skillType))) {
+            try {
+                List<SkillEntity> mcpSkills = mcpSkillBridge.listMcpDerivedSkillEntities();
+                if (!mcpSkills.isEmpty()) {
+                    // In-memory filter mirrors the DB filters so the
+                    // user's filter chips still apply to virtual rows.
+                    String kw = keyword == null ? "" : keyword.trim().toLowerCase();
+                    List<SkillEntity> filtered = mcpSkills.stream()
+                            .filter(s -> kw.isEmpty()
+                                    || (s.getName() != null && s.getName().toLowerCase().contains(kw))
+                                    || (s.getDescription() != null && s.getDescription().toLowerCase().contains(kw)))
+                            .filter(s -> enabled == null || enabled.equals(s.getEnabled()))
+                            .toList();
+                    if (!filtered.isEmpty()) {
+                        java.util.List<SkillEntity> merged = new java.util.ArrayList<>(filtered);
+                        merged.addAll(dbPage.getRecords());
+                        dbPage.setRecords(merged);
+                        dbPage.setTotal(dbPage.getTotal() + filtered.size());
+                    }
+                }
+            } catch (Exception e) {
+                // Bridge failure must not break the Skills page.
+            }
+        }
+        return R.ok(dbPage);
     }
 
     @Operation(summary = "获取各类型技能计数（tab 徽章用）")
@@ -96,6 +129,16 @@ public class SkillController {
     @Operation(summary = "获取技能详情")
     @GetMapping("/{id}")
     public R<SkillEntity> get(@PathVariable Long id) {
+        // RFC-090 §3.2 — virtual MCP-derived skills synthesize a row
+        // on demand from the live MCP server entity.
+        if (vip.mate.skill.mcp.McpSkillBridge.isVirtualMcpSkillId(id)) {
+            List<SkillEntity> virt = mcpSkillBridge.listMcpDerivedSkillEntities();
+            return virt.stream()
+                    .filter(s -> id.equals(s.getId()))
+                    .findFirst()
+                    .map(R::ok)
+                    .orElse(R.fail("MCP-derived skill not found: " + id));
+        }
         return R.ok(skillService.getSkill(id));
     }
 

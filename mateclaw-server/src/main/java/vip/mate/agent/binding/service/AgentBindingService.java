@@ -191,6 +191,14 @@ public class AgentBindingService {
             for (Long skillId : boundSkillIds) {
                 ResolvedSkill resolved = findResolvedSkillById(skillId);
                 if (resolved == null) continue;
+                if (!vip.mate.skill.runtime.SkillRuntimeService.passesActiveGate(resolved)) {
+                    // §14.2 fix: a disabled / security-blocked / setup-needed
+                    // skill must not contribute tools to the LLM
+                    // advertisement even if it's still bound. Without this
+                    // guard, users see ghost tools for skills they thought
+                    // were off.
+                    continue;
+                }
                 Set<String> skillTools = resolved.getEffectiveAllowedTools();
                 if (skillTools != null && !skillTools.isEmpty()) merged.addAll(skillTools);
             }
@@ -201,8 +209,45 @@ public class AgentBindingService {
             merged.addAll(directTools);
         }
 
+        // System-level tools that don't belong to any single skill but
+        // are agent-wide capabilities. Without this carve-out, binding
+        // any skill silently strips record_lesson / remember / structured-
+        // memory tools, breaking the §11 self-evolution loop entirely
+        // (the LLM stops being able to write to LESSONS.md / MEMORY.md).
+        merged.addAll(SYSTEM_LEVEL_TOOLS);
+
         return merged;
     }
+
+    /**
+     * RFC-090 §11 — tools that exist outside the skill scope and must
+     * survive any agent-level skill binding restriction.
+     *
+     * <p>Add new entries here only after verifying the tool is genuinely
+     * agent-wide, not skill-specific. Tools added here bypass the
+     * {@link #getEffectiveToolNames} allowlist completely.
+     */
+    private static final Set<String> SYSTEM_LEVEL_TOOLS = Set.of(
+            // Memory write/read primitives — every agent needs these
+            // regardless of skill bindings, otherwise the self-evolution
+            // path collapses (§11.3 / §11.4).
+            "record_lesson",
+            "remember",
+            "remember_structured",
+            "recall_structured",
+            "forget_structured",
+            // Workspace memory file CRUD (PROFILE.md / MEMORY.md / SOUL.md)
+            "read_workspace_file",
+            "write_workspace_file",
+            "list_workspace_files",
+            // Skill discovery / dispatch — skills are docs, not callables;
+            // these helpers let the LLM read SKILL.md / run scripts.
+            "readSkillFile",
+            "runSkillScript",
+            // Date/time + delegate — fundamental cross-skill utilities
+            "datetime",
+            "delegate_agent"
+    );
 
     private ResolvedSkill findResolvedSkillById(Long skillId) {
         if (skillId == null || skillRuntimeService == null) return null;

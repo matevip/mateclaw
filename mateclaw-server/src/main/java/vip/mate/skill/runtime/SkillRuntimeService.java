@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import vip.mate.skill.lessons.SkillLessonsService;
 import vip.mate.skill.manifest.SkillManifest;
+import vip.mate.skill.mcp.McpSkillBridge;
 import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.runtime.model.ResolvedSkill;
 import vip.mate.skill.service.SkillService;
@@ -40,14 +41,22 @@ public class SkillRuntimeService {
      * constructor below.
      */
     private final SkillLessonsService lessonsService;
+    /**
+     * RFC-090 §3.2 / §10.2 Q2 — MCP-server → virtual-skill bridge.
+     * {@code @Lazy} because the bridge depends on McpClientManager
+     * which boots later in the lifecycle.
+     */
+    private final McpSkillBridge mcpSkillBridge;
 
     @Autowired
     public SkillRuntimeService(SkillService skillService,
                                SkillPackageResolver packageResolver,
-                               @Lazy SkillLessonsService lessonsService) {
+                               @Lazy SkillLessonsService lessonsService,
+                               @Lazy McpSkillBridge mcpSkillBridge) {
         this.skillService = skillService;
         this.packageResolver = packageResolver;
         this.lessonsService = lessonsService;
+        this.mcpSkillBridge = mcpSkillBridge;
     }
 
     // 缓存已解析的 active skills（5分钟过期）
@@ -125,6 +134,16 @@ public class SkillRuntimeService {
             .map(packageResolver::resolve)
             .filter(SkillRuntimeService::passesActiveGate)
             .collect(Collectors.toList());
+        try {
+            // RFC-090 §3.2 — MCP-derived virtual skills go through the
+            // same active gate so a disconnected MCP server doesn't
+            // pollute the prompt enhancement.
+            for (ResolvedSkill virt : mcpSkillBridge.listMcpDerivedResolvedSkills()) {
+                if (passesActiveGate(virt)) resolved.add(virt);
+            }
+        } catch (Exception e) {
+            log.warn("MCP skill bridge active merge failed: {}", e.getMessage());
+        }
 
         activeSkillsCache.put(CACHE_KEY, resolved);
         log.info("Refreshed active skills: {} enabled", resolved.size());
@@ -134,12 +153,23 @@ public class SkillRuntimeService {
 
     /**
      * 解析所有技能的运行时状态（管理页面使用，包含 disabled 和 error 信息）
+     *
+     * <p>RFC-090 §3.2 — appends virtual MCP-derived skills so the Skills
+     * page can render MCP servers as first-class skill cards. Real
+     * skills resolve through the full pipeline; virtual ones come
+     * pre-built from {@link McpSkillBridge}.
      */
     public List<ResolvedSkill> resolveAllSkillsStatus() {
         List<SkillEntity> allSkills = skillService.listSkills();
-        return allSkills.stream()
+        List<ResolvedSkill> resolved = allSkills.stream()
             .map(packageResolver::resolve)
             .collect(Collectors.toList());
+        try {
+            resolved.addAll(mcpSkillBridge.listMcpDerivedResolvedSkills());
+        } catch (Exception e) {
+            log.warn("MCP skill bridge merge failed: {}", e.getMessage());
+        }
+        return resolved;
     }
 
     /**
