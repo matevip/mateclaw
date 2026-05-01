@@ -243,6 +243,23 @@ public class CronJobService implements ApplicationRunner {
      * No {@code @TableLogic} on this entity — {@code deleted=0} must be
      * filtered explicitly.
      */
+    /**
+     * Issue #50 review #6 — excluding-self variant for the update path.
+     * Same lookup as {@link #findActiveDuplicate} but skips the row
+     * currently being edited so a no-op save (same name, same agent)
+     * doesn't false-positive as a duplicate.
+     */
+    private CronJobEntity findActiveDuplicateExcluding(Long workspaceId, Long agentId, String name, Long excludeId) {
+        if (workspaceId == null || agentId == null || name == null) return null;
+        LambdaQueryWrapper<CronJobEntity> q = new LambdaQueryWrapper<CronJobEntity>()
+                .eq(CronJobEntity::getWorkspaceId, workspaceId)
+                .eq(CronJobEntity::getAgentId, agentId)
+                .eq(CronJobEntity::getName, name)
+                .eq(CronJobEntity::getDeleted, 0);
+        if (excludeId != null) q.ne(CronJobEntity::getId, excludeId);
+        return cronJobMapper.selectOne(q);
+    }
+
     private CronJobEntity findActiveDuplicate(Long workspaceId, Long agentId, String name) {
         if (workspaceId == null || agentId == null || name == null) return null;
         return cronJobMapper.selectOne(
@@ -264,6 +281,22 @@ public class CronJobService implements ApplicationRunner {
         validateDto(dto);
         String springCron = toSpringCron(dto.getCronExpression());
 
+        // Issue #50 review #6: excluding-self duplicate check. Without
+        // this, renaming a job onto an existing (workspace, agent, name)
+        // tuple surfaces as a raw DataIntegrityViolationException from
+        // the V69 unique index instead of a controlled validation
+        // error. Try app-level check first; the catch below is the
+        // race-protection net.
+        Long newAgentId = dto.getAgentId();
+        String newName = dto.getName();
+        if (newName != null && newAgentId != null) {
+            CronJobEntity collision = findActiveDuplicateExcluding(workspaceId, newAgentId, newName, id);
+            if (collision != null) {
+                throw new MateClawException("err.cron.duplicate_name",
+                        "已存在同名定时任务: name=" + newName + ", agentId=" + newAgentId);
+            }
+        }
+
         existing.setName(dto.getName());
         existing.setCronExpression(dto.getCronExpression());
         existing.setTimezone(dto.getTimezone() != null ? dto.getTimezone() : "Asia/Shanghai");
@@ -276,7 +309,16 @@ public class CronJobService implements ApplicationRunner {
         }
         existing.setNextRunTime(calcNextRunTime(springCron, existing.getTimezone()));
 
-        cronJobMapper.updateById(existing);
+        try {
+            cronJobMapper.updateById(existing);
+        } catch (DuplicateKeyException e) {
+            // Race: another concurrent rename grabbed the natural key
+            // between our app-level check and the UPDATE. Translate to
+            // a clean validation error so the controller can 4xx instead
+            // of a 500 leaking the unique-key constraint name.
+            throw new MateClawException("err.cron.duplicate_name",
+                    "已存在同名定时任务: name=" + dto.getName() + ", agentId=" + dto.getAgentId());
+        }
 
         // 加锁保证 cancel + register 的原子性（ReentrantLock 支持同线程重入）
         schedulerLock.lock();

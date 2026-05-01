@@ -555,14 +555,13 @@ public class SkillPackageResolver {
         if (kbId == null) {
             kbId = wikiWrapperFactory.resolveKbId(manifest.getKnowledge().getBindKb());
             if (kbId == null) {
+                String slug = manifest.getKnowledge().getBindKb();
                 log.warn("Skill '{}' has type=knowledge but bind_kb '{}' did not resolve to a KB",
-                        resolved.getName(), manifest.getKnowledge().getBindKb());
+                        resolved.getName(), slug);
                 deregisterSkillWrappers(resolved.getId());
-                // Still surface the resolution failure as a missing
-                // requirement so the UI shows the skill as
-                // SETUP_NEEDED rather than READY-but-broken.
-                resolved.setMissingDependencies(java.util.List.of(
-                        "kb:" + manifest.getKnowledge().getBindKb()));
+                markBindingFailure(resolved,
+                        "kb:" + slug,
+                        "Knowledge skill bind_kb '" + slug + "' did not resolve to any Wiki KB");
                 return;
             }
             manifest.getKnowledge().setBoundKbId(kbId);
@@ -604,7 +603,48 @@ public class SkillPackageResolver {
         manifest.setAllowedTools(mergedAllowed);
     }
 
-    private void deregisterSkillWrappers(Long skillId) {
+    /**
+     * RFC-090 review #2 — when a knowledge / acp skill's external
+     * binding (bind_kb / endpoint) cannot be resolved, downgrade the
+     * resolved view so {@code passesActiveGate} fails. Without this,
+     * the synthesized default feature still evaluates READY (because
+     * the unresolved binding isn't expressed as a manifest requirement
+     * the dependency checker can fail), the skill enters the active
+     * set, and the LLM advertises tools it can never actually use.
+     *
+     * <p>Triple-belt-and-braces:
+     * <ol>
+     *   <li>{@code missingDependencies} populated for the UI.</li>
+     *   <li>{@code dependencyReady=false} so legacy gate path also fails.</li>
+     *   <li>{@code runtimeAvailable=false} so the manifest-aware path
+     *       in {@code passesActiveGate} fails too — even though the
+     *       feature would otherwise be READY.</li>
+     * </ol>
+     * The later {@code resolveRuntimeAvailability} step won't undo
+     * these because it only flips {@code runtimeAvailable=false}, it
+     * never flips it back to true.
+     */
+    private void markBindingFailure(ResolvedSkill resolved, String missingKey, String summary) {
+        resolved.setMissingDependencies(java.util.List.of(missingKey));
+        resolved.setDependencyReady(false);
+        resolved.setDependencySummary(summary);
+        resolved.setRuntimeAvailable(false);
+        if (resolved.getResolutionError() == null) {
+            resolved.setResolutionError(summary);
+        }
+    }
+
+    /**
+     * RFC-090 review #3 — explicit deregistration entry point. Called
+     * from {@code SkillService.toggleSkill (disable)} / uninstall /
+     * hardDelete so wrapper tools don't outlive the skill's lifecycle.
+     *
+     * <p>Without this, the {@code availabilityCheck} supplier closes
+     * over the {@link ResolvedSkill} captured at registration time
+     * and keeps returning {@code enabled=true} forever. Stale wrapper
+     * advertisements survive a disable/uninstall.
+     */
+    public void deregisterSkillWrappers(Long skillId) {
         if (skillId == null) return;
         java.util.Set<String> previous = registeredWrappers.remove(skillId);
         if (previous == null || previous.isEmpty()) return;
@@ -615,6 +655,7 @@ public class SkillPackageResolver {
                 log.debug("unregister wrapper {} failed: {}", name, e.getMessage());
             }
         }
+        log.info("Deregistered {} wrapper tool(s) for skill id={}", previous.size(), skillId);
     }
 
     /**
@@ -648,11 +689,13 @@ public class SkillPackageResolver {
         if (endpointId == null) {
             endpointId = acpWrapperFactory.resolveEndpointId(manifest.getAcp().getEndpoint());
             if (endpointId == null) {
+                String slug = manifest.getAcp().getEndpoint();
                 log.warn("Skill '{}' type=acp but endpoint '{}' did not resolve",
-                        resolved.getName(), manifest.getAcp().getEndpoint());
+                        resolved.getName(), slug);
                 deregisterSkillWrappers(resolved.getId());
-                resolved.setMissingDependencies(java.util.List.of(
-                        "acp:" + manifest.getAcp().getEndpoint()));
+                markBindingFailure(resolved,
+                        "acp:" + slug,
+                        "ACP skill endpoint '" + slug + "' did not resolve to any registered ACP endpoint");
                 return;
             }
             manifest.getAcp().setResolvedEndpointId(endpointId);

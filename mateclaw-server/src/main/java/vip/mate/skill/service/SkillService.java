@@ -303,7 +303,11 @@ public class SkillService {
         if ("archive".equals(workspaceProperties.getDeletePolicy())) {
             workspaceManager.archiveWorkspace(skill.getName());
         }
+        // RFC-090 review #3 — refresh won't deregister wrappers for a
+        // soft-deleted row (it only resolves rows still in
+        // listEnabledSkills), so do it explicitly here.
         if (runtimeService != null) {
+            runtimeService.deregisterSkillWrappers(id);
             runtimeService.refreshActiveSkills();
         }
     }
@@ -328,7 +332,9 @@ public class SkillService {
 
         workspaceManager.purgeWorkspace(skill.getName());
 
+        // RFC-090 review #3 — same explicit deregister as uninstall.
         if (runtimeService != null) {
+            runtimeService.deregisterSkillWrappers(id);
             runtimeService.refreshActiveSkills();
         }
     }
@@ -356,6 +362,14 @@ public class SkillService {
         skill.setEnabled(enabled);
         skillMapper.updateById(skill);
         log.info("Skill {} {}", skill.getName(), enabled ? "enabled" : "disabled");
+
+        // RFC-090 review #3 — when disabling, explicitly tear down any
+        // registered wrapper tools (knowledge / acp). Without this the
+        // wrappers stay advertised because the availability supplier
+        // closes over the snapshot ResolvedSkill captured at registration.
+        if (!enabled && runtimeService != null) {
+            runtimeService.deregisterSkillWrappers(id);
+        }
 
         // 刷新 runtime cache
         if (runtimeService != null) {

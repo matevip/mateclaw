@@ -188,6 +188,19 @@ public class SkillRuntimeService {
     }
 
     /**
+     * RFC-090 review #3 — explicit lifecycle hook so SkillService
+     * can deregister wrapper tools without poking at the resolver
+     * directly. Safe to call for skill ids that never had wrappers.
+     */
+    public void deregisterSkillWrappers(Long skillId) {
+        try {
+            packageResolver.deregisterSkillWrappers(skillId);
+        } catch (Exception e) {
+            log.warn("Failed to deregister wrappers for skill {}: {}", skillId, e.getMessage());
+        }
+    }
+
+    /**
      * 根据名称查找 active skill
      */
     public ResolvedSkill findActiveSkill(String name) {
