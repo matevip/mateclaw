@@ -38,7 +38,9 @@ public class ImageGenerationResult {
                 .providerName(providerName)
                 .submitted(true)
                 .completed(false)
-                .message("图片生成任务已提交（任务 ID: " + taskId + "）。预计 30 秒 - 2 分钟完成，完成后会自动显示在对话中。")
+                // Format MUST keep `taskId=...` so the frontend reconnect detector
+                // (useChat.ts TASK_ID_PATTERN) can extract it from the tool result.
+                .message("图片生成任务已提交（taskId=" + taskId + ", provider=" + providerName + "）。预计 30 秒 - 2 分钟完成，完成后会自动显示在对话中。")
                 .build();
     }
 

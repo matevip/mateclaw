@@ -255,6 +255,38 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     headers: streamHeaders,
   })
 
+  // ===== Async-task lifecycle bridge =====
+  // Generative tools (music / video / image) return a taskId synchronously and
+  // finish asynchronously via `async_task_completed`. If the upstream provider
+  // is slow (MiniMax music ~2-3 min) the agent's reasoning turn finishes long
+  // before the audio is ready, the SSE stream emits `done`, and any later
+  // `async_task_completed` event lands on a closed emitter. We track which
+  // taskIds are still pending here, and when `done` fires with non-empty set
+  // we re-attach to the same conversation's stream so buffered + future async
+  // events can flow through. ChatStreamTracker.attach was extended (RFC P0)
+  // to keep the new emitter subscribed even when state.done=true.
+  const pendingAsyncTaskIds = new Set<string>()
+  // 16-hex taskId emitted by AsyncTaskService.createTask. Tool result text
+  // varies — `taskId=xxx` is the canonical form (music/video/image), but
+  // earlier video/image versions used 中文「任务 ID: xxx」 and old strings may
+  // still flow through if the LLM cached them. Match both defensively.
+  const TASK_ID_PATTERNS: RegExp[] = [
+    /taskId[=:"\s]+([a-f0-9]{16})/i,
+    /任务\s*ID[=:"\s]+([a-f0-9]{16})/i,
+    /task[_\s]*id[=:"\s]+([a-f0-9]{16})/i,
+  ]
+  const ASYNC_TOOL_NAMES = new Set(['music_generate', 'video_generate', 'image_generate'])
+  let reconnectingForAsyncTasks = false
+
+  function extractTaskId(result: unknown): string | null {
+    if (typeof result !== 'string') return null
+    for (const re of TASK_ID_PATTERNS) {
+      const m = result.match(re)
+      if (m) return m[1]
+    }
+    return null
+  }
+
   // ===== SSE event handlers =====
 
   stream.on('content_delta', (data) => {
@@ -449,6 +481,28 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       persisted: data.persisted,
       messageCount: data.messageCount,
     })
+
+    // Re-attach SSE if any generative task is still in flight, so the eventual
+    // async_task_completed event reaches us live (otherwise the user has to
+    // refresh). Skip if we're already in a reconnect cycle, or for non-completed
+    // terminal statuses where reconnect is misleading.
+    const reconnectableStatus = !data.status
+      || data.status === 'completed'
+      || data.status === 'idle'
+    if (reconnectableStatus
+        && !reconnectingForAsyncTasks
+        && pendingAsyncTaskIds.size > 0
+        && streamConversationId) {
+      const targetConv = streamConversationId
+      reconnectingForAsyncTasks = true
+      // Defer one tick so the current 'done' handler chain finishes before
+      // disconnect() fires inside connect().
+      setTimeout(() => {
+        stream.connect({ conversationId: targetConv, reconnect: true })
+          .catch(() => { /* swallow — handled by stream.error event */ })
+          .finally(() => { reconnectingForAsyncTasks = false })
+      }, 50)
+    }
   })
 
   let errorFired = false
@@ -578,6 +632,14 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         toolSeg.toolSuccess = data.success
       }
       flushSegmentsToMessage()
+    }
+
+    // Track async generative tools whose taskId is in the result string.
+    if (data.success !== false && ASYNC_TOOL_NAMES.has(data.toolName)) {
+      const taskId = extractTaskId(data.result)
+      if (taskId) {
+        pendingAsyncTaskIds.add(taskId)
+      }
     }
   })
 
@@ -1080,50 +1142,78 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     phaseInfo.value = null
   })
 
-  // ===== Async task completion events (video generation, image generation, etc.) =====
+  // ===== Async task completion events (video / image / music generation) =====
   stream.on('async_task_completed', (data) => {
     if (isStaleEvent(data)) return
-    if (data.success && streamConversationId) {
-      let mediaPart: MessageContentPart | null = null
-      if (data.videoUrl) {
-        mediaPart = {
-          type: 'video',
-          fileUrl: data.videoUrl,
-          fileName: `video_${data.taskId}.mp4`,
-          contentType: 'video/mp4',
-        } as MessageContentPart
-      } else if (data.imageUrl) {
-        mediaPart = {
-          type: 'image',
-          fileUrl: data.imageUrl,
-          fileName: `image_${data.taskId}.png`,
-          contentType: 'image/png',
-        } as MessageContentPart
-      }
+    if (!streamConversationId) return
 
-      if (!mediaPart) return
+    // Mark this taskId resolved so done-after-pending reconnect logic
+    // doesn't keep the SSE alive longer than needed.
+    if (data.taskId) pendingAsyncTaskIds.delete(data.taskId)
 
-      // Prefer appending to the current assistant message (avoids image appearing above the text reply)
-      if (currentAssistantId.value) {
-        const msg = getMessage(currentAssistantId.value)
-        if (msg) {
-          const existingParts = (msg as any).contentParts || []
-          updateMessage(currentAssistantId.value, {
-            contentParts: [...existingParts, mediaPart],
-          } as any)
-          return
-        }
-      }
-
-      // Fallback: agent already finished — create a standalone message
+    // Failure path — surface error so user knows the task is over.
+    if (!data.success) {
+      const taskLabel = data.taskType === 'music_generation' ? '音乐'
+        : data.taskType === 'video_generation' ? '视频'
+        : data.taskType === 'image_generation' ? '图片'
+        : '任务'
       addMessage({
         role: 'assistant',
-        content: '',
-        contentParts: [mediaPart],
+        content: `${taskLabel}生成失败: ${data.errorMessage || '未知错误'}`,
+        contentParts: [],
         status: 'completed',
         conversationId: streamConversationId,
       })
+      return
     }
+
+    let mediaPart: MessageContentPart | null = null
+    if (data.videoUrl) {
+      mediaPart = {
+        type: 'video',
+        fileUrl: data.videoUrl,
+        fileName: `video_${data.taskId}.mp4`,
+        contentType: 'video/mp4',
+      } as MessageContentPart
+    } else if (data.imageUrl) {
+      mediaPart = {
+        type: 'image',
+        fileUrl: data.imageUrl,
+        fileName: `image_${data.taskId}.png`,
+        contentType: 'image/png',
+      } as MessageContentPart
+    } else if (data.audioUrl) {
+      const fmt = (data.format || 'mp3') as string
+      mediaPart = {
+        type: 'audio',
+        fileUrl: data.audioUrl,
+        fileName: `music_${data.taskId}.${fmt}`,
+        contentType: fmt === 'wav' ? 'audio/wav' : 'audio/mpeg',
+      } as MessageContentPart
+    }
+
+    if (!mediaPart) return
+
+    // Prefer appending to the current assistant message (avoids media appearing above the text reply)
+    if (currentAssistantId.value) {
+      const msg = getMessage(currentAssistantId.value)
+      if (msg) {
+        const existingParts = (msg as any).contentParts || []
+        updateMessage(currentAssistantId.value, {
+          contentParts: [...existingParts, mediaPart],
+        } as any)
+        return
+      }
+    }
+
+    // Fallback: agent already finished — create a standalone message
+    addMessage({
+      role: 'assistant',
+      content: '',
+      contentParts: [mediaPart],
+      status: 'completed',
+      conversationId: streamConversationId,
+    })
   })
 
   // ===== Auto TTS =====

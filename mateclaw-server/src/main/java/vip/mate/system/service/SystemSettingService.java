@@ -61,6 +61,7 @@ public class SystemSettingService {
     private static final String KLING_SECRET_KEY_KEY = "klingSecretKey";
     private static final String RUNWAY_API_KEY_KEY = "runwayApiKey";
     private static final String MINIMAX_API_KEY_KEY = "minimaxApiKey";
+    private static final String MINIMAX_REGION_KEY = "minimaxRegion";
 
     private final SystemSettingMapper systemSettingMapper;
 
@@ -107,6 +108,7 @@ public class SystemSettingService {
         dto.setKlingSecretKeyMasked(maskApiKey(getValue(KLING_SECRET_KEY_KEY, "")));
         dto.setRunwayApiKeyMasked(maskApiKey(getValue(RUNWAY_API_KEY_KEY, "")));
         dto.setMinimaxApiKeyMasked(maskApiKey(getValue(MINIMAX_API_KEY_KEY, "")));
+        dto.setMinimaxRegion(getValue(MINIMAX_REGION_KEY, "global"));
 
         // 图片生成配置
         dto.setImageEnabled(Boolean.parseBoolean(getValue(IMAGE_ENABLED_KEY, "false")));
@@ -236,6 +238,9 @@ public class SystemSettingService {
         }
         if (dto.getMinimaxApiKey() != null && !dto.getMinimaxApiKey().isBlank()) {
             saveValue(MINIMAX_API_KEY_KEY, dto.getMinimaxApiKey(), "MiniMax API Key");
+        }
+        if (dto.getMinimaxRegion() != null && !dto.getMinimaxRegion().isBlank()) {
+            saveValue(MINIMAX_REGION_KEY, dto.getMinimaxRegion(), "MiniMax API 区域 (global / cn)");
         }
 
         // 图片生成配置

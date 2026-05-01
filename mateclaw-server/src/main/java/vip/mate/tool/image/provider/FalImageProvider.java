@@ -89,8 +89,9 @@ public class FalImageProvider implements ImageGenerationProvider {
             ObjectNode body = objectMapper.createObjectNode();
             body.put("prompt", request.getPrompt());
 
-            // fal.ai 使用 image_size 对象或字符串
-            String size = normalizeSize(request.getSize(), request.getAspectRatio());
+            // request.size already normalized by ImageGenerationService to one of supportedSizes.
+            // fal.ai expects image_size as a {width, height} object.
+            String size = request.getSize();
             ObjectNode imageSize = body.putObject("image_size");
             String[] parts = size.split("x");
             imageSize.put("width", Integer.parseInt(parts[0]));
@@ -177,22 +178,6 @@ public class FalImageProvider implements ImageGenerationProvider {
             log.error("[Fal Image] Poll error for task {}: {}", providerTaskId, e.getMessage());
             return null;
         }
-    }
-
-    private String normalizeSize(String size, String aspectRatio) {
-        if (size != null && !size.isBlank()) {
-            return size;
-        }
-        if (aspectRatio != null) {
-            return switch (aspectRatio) {
-                case "16:9" -> "1536x1024";
-                case "9:16" -> "1024x1536";
-                case "4:3" -> "1024x768";
-                case "3:4" -> "768x1024";
-                default -> "1024x1024";
-            };
-        }
-        return "1024x1024";
     }
 
     private String extractImageUrl(JsonNode result) {

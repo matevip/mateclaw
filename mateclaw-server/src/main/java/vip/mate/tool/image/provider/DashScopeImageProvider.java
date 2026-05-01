@@ -100,9 +100,11 @@ public class DashScopeImageProvider implements ImageGenerationProvider {
             input.put("prompt", request.getPrompt());
 
             ObjectNode parameters = body.putObject("parameters");
-            String size = aspectRatioToSize(request.getAspectRatio());
-            if (size != null) {
-                parameters.put("size", size);
+            // request.size already normalized by ImageGenerationService to one of supportedSizes.
+            // DashScope API uses '*' separator instead of 'x'.
+            String size = request.getSize();
+            if (size != null && !size.isBlank()) {
+                parameters.put("size", size.replace("x", "*"));
             }
             int count = request.getCount() != null ? Math.min(request.getCount(), 4) : 1;
             parameters.put("n", count);
@@ -175,15 +177,6 @@ public class DashScopeImageProvider implements ImageGenerationProvider {
         } catch (Exception e) {
             return null;
         }
-    }
-
-    private String aspectRatioToSize(String aspectRatio) {
-        if (aspectRatio == null) return "1024*1024";
-        return switch (aspectRatio) {
-            case "16:9" -> "1280*720";
-            case "9:16" -> "720*1280";
-            default -> "1024*1024";
-        };
     }
 
     private String extractImageUrl(JsonNode output) {

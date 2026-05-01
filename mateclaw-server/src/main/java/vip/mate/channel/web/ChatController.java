@@ -1374,8 +1374,13 @@ public class ChatController {
      * 注册 SseEmitter 的完整生命周期回调
      */
     private void registerEmitterCallbacks(SseEmitter emitter, String conversationId) {
-        emitter.onCompletion(() ->
-                log.debug("SSE emitter completed: conversationId={}", conversationId));
+        emitter.onCompletion(() -> {
+            log.debug("SSE emitter completed: conversationId={}", conversationId);
+            // Detach immediately so a subsequent broadcast (heartbeat / async_task_*)
+            // doesn't waste a send call on the zombie emitter and emit
+            // "Removing dead subscriber ... ResponseBodyEmitter has already completed".
+            streamTracker.detach(conversationId, emitter);
+        });
         emitter.onTimeout(() -> {
             log.debug("SSE emitter timeout: conversationId={}", conversationId);
             streamTracker.detach(conversationId, emitter);

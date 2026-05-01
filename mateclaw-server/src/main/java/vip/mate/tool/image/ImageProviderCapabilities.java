@@ -39,20 +39,50 @@ public class ImageProviderCapabilities {
     private List<String> models = List.of();
 
     /**
-     * 将请求的 size 就近匹配到 provider 支持的值
+     * Match the requested size against supported sizes by area only.
+     * Orientation-blind — prefer {@link #normalizeSize(String, String)} when an
+     * aspect ratio is available so portrait/landscape intent is preserved.
      */
     public String normalizeSize(String requested) {
-        if (requested == null || requested.isBlank()) {
-            return supportedSizes.isEmpty() ? "1024x1024" : supportedSizes.get(0);
+        return normalizeSize(requested, null);
+    }
+
+    /**
+     * Match the requested size against supported sizes, preserving orientation.
+     * <p>Resolution order:
+     * <ol>
+     *   <li>If {@code requestedSize} is already in {@code supportedSizes}, return it.</li>
+     *   <li>If {@code requestedAspectRatio} is given, narrow {@code supportedSizes}
+     *       to those whose orientation matches (portrait / landscape / square),
+     *       then pick by closest area.</li>
+     *   <li>Otherwise pick by closest area across all supported sizes.</li>
+     * </ol>
+     */
+    public String normalizeSize(String requestedSize, String requestedAspectRatio) {
+        if (supportedSizes.isEmpty()) {
+            return "1024x1024";
         }
-        if (supportedSizes.contains(requested)) {
-            return requested;
+        if (requestedSize != null && supportedSizes.contains(requestedSize)) {
+            return requestedSize;
         }
-        // 就近匹配：解析面积，找最接近的
-        long reqArea = parseArea(requested);
-        String closest = supportedSizes.get(0);
+
+        Orientation targetOrientation = orientationFor(requestedAspectRatio);
+        List<String> candidates = supportedSizes;
+        if (targetOrientation != null) {
+            List<String> matching = supportedSizes.stream()
+                    .filter(s -> orientationOf(s) == targetOrientation)
+                    .toList();
+            if (!matching.isEmpty()) {
+                candidates = matching;
+            }
+        }
+
+        long reqArea = (requestedSize == null || requestedSize.isBlank())
+                ? 1024L * 1024L
+                : parseArea(requestedSize);
+        String closest = candidates.get(0);
         long minDiff = Math.abs(reqArea - parseArea(closest));
-        for (String s : supportedSizes) {
+        for (String s : candidates) {
             long diff = Math.abs(reqArea - parseArea(s));
             if (diff < minDiff) {
                 minDiff = diff;
@@ -60,6 +90,34 @@ public class ImageProviderCapabilities {
             }
         }
         return closest;
+    }
+
+    private enum Orientation { PORTRAIT, LANDSCAPE, SQUARE }
+
+    private static Orientation orientationFor(String aspectRatio) {
+        if (aspectRatio == null || aspectRatio.isBlank()) return null;
+        String[] parts = aspectRatio.split(":");
+        if (parts.length != 2) return null;
+        try {
+            double w = Double.parseDouble(parts[0].trim());
+            double h = Double.parseDouble(parts[1].trim());
+            if (w == h) return Orientation.SQUARE;
+            return w > h ? Orientation.LANDSCAPE : Orientation.PORTRAIT;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static Orientation orientationOf(String size) {
+        try {
+            String[] parts = size.toLowerCase().split("x");
+            long w = Long.parseLong(parts[0].trim());
+            long h = Long.parseLong(parts[1].trim());
+            if (w == h) return Orientation.SQUARE;
+            return w > h ? Orientation.LANDSCAPE : Orientation.PORTRAIT;
+        } catch (Exception e) {
+            return Orientation.SQUARE;
+        }
     }
 
     /**

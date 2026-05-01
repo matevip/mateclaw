@@ -196,6 +196,18 @@
             />
             <span class="message-attachment-video__name">{{ attachment.name }}</span>
           </div>
+          <div
+            v-for="attachment in audioAttachments"
+            :key="'audio-' + attachment.storedName"
+            class="message-attachment-audio"
+          >
+            <audio
+              :src="getDisplayUrl(attachment)"
+              controls
+              preload="metadata"
+            />
+            <span class="message-attachment-audio__name">{{ attachment.name }}</span>
+          </div>
           <button
             v-for="attachment in fileAttachments"
             :key="attachment.storedName"
@@ -295,7 +307,7 @@ import type { ChatErrorInfo } from '@/types/chatError'
 const { renderMarkdown } = useMarkdownRenderer()
 const { t } = useI18n()
 const { getToolLabel } = useToolLabel()
-const { blobUrls, loadAllImages, loadAllVideos, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
+const { blobUrls, loadAllImages, loadAllVideos, loadAllAudios, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
 
 interface Props {
   message: Message
@@ -545,19 +557,64 @@ onBeforeUnmount(() => {
 })
 
 // --- 附件 ---
-const attachments = computed(() => props.message.attachments || [])
+// MessageContentPart media (image/audio/video produced by generation tools) live
+// in `contentParts` rather than `attachments`. Synthesize virtual attachment
+// entries so the existing render + auth-blob loader works for them too.
+//
+// Dedup against `props.message.attachments` by URL — user-uploaded images often
+// land in BOTH lists (the upload endpoint registers them as ChatAttachment AND
+// the message persistence echoes them back as a `type: 'image'` MessageContentPart).
+// Without this guard each user image shows twice in the bubble.
+const mediaPartAttachments = computed<ChatAttachment[]>(() => {
+  const parts = (props.message as any).contentParts as Array<any> | undefined
+  if (!parts || !parts.length) return []
+  const existingUrls = new Set(
+    (props.message.attachments || []).map(a => a.url).filter(Boolean)
+  )
+  const out: ChatAttachment[] = []
+  const seen = new Set<string>()
+  for (const p of parts) {
+    if (!p || !p.fileUrl) continue
+    if (p.type !== 'image' && p.type !== 'audio' && p.type !== 'video') continue
+    if (existingUrls.has(p.fileUrl) || seen.has(p.fileUrl)) continue
+    seen.add(p.fileUrl)
+    const fileName = p.fileName || p.fileUrl.split('/').pop() || `${p.type}-${out.length}`
+    const ct = p.contentType
+        || (p.type === 'image' ? 'image/png' : p.type === 'audio' ? 'audio/mpeg' : 'video/mp4')
+    out.push({
+      name: fileName,
+      size: 0,
+      url: p.fileUrl,
+      storedName: fileName,
+      path: p.fileUrl,
+      contentType: ct,
+    })
+  }
+  return out
+})
+
+const attachments = computed(() => [
+  ...(props.message.attachments || []),
+  ...mediaPartAttachments.value,
+])
 const imageAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('image/')))
 const videoAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('video/')))
+const audioAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('audio/')))
 const fileAttachments = computed(() => attachments.value.filter(a =>
-  !a.contentType?.startsWith('image/') && !a.contentType?.startsWith('video/')
+  !a.contentType?.startsWith('image/')
+    && !a.contentType?.startsWith('video/')
+    && !a.contentType?.startsWith('audio/')
 ))
 
-// 增量加载图片/视频附件的鉴权 blob URL（watch 覆盖首次 + 后续变化）
+// 增量加载图片/视频/音频附件的鉴权 blob URL（watch 覆盖首次 + 后续变化）
 watch(imageAttachments, (atts) => {
   if (atts.length > 0) loadAllImages(atts)
 }, { immediate: true })
 watch(videoAttachments, (atts) => {
   if (atts.length > 0) loadAllVideos(atts)
+}, { immediate: true })
+watch(audioAttachments, (atts) => {
+  if (atts.length > 0) loadAllAudios(atts)
 }, { immediate: true })
 
 // --- 时间 ---
@@ -1365,6 +1422,27 @@ watch(isGenerating, (generating) => {
 }
 
 .message-attachment-video__name {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.76;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-attachment-audio {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.message-attachment-audio audio {
+  width: 100%;
+  max-width: 400px;
+  display: block;
+}
+
+.message-attachment-audio__name {
   display: block;
   margin-top: 4px;
   font-size: 12px;

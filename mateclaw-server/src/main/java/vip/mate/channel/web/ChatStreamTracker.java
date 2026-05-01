@@ -246,33 +246,73 @@ public class ChatStreamTracker {
     }
 
     /**
-     * 广播事件到所有订阅者并缓存到 buffer
-     * 注意："done" 事件即使在流已完成状态下也会被发送，确保客户端能收到完成信号
+     * 广播事件到所有订阅者并缓存到 buffer.
+     * <p>
+     * Two event categories survive {@code state.done=true}:
+     * <ul>
+     *   <li>{@code "done"} — the lifecycle marker itself. If a client missed
+     *       this on a broken pipe and reconnects within the 5-minute retention
+     *       window, replay surfaces it so the UI exits "生成中" state.</li>
+     *   <li>{@code "async_task_*"} — task lifecycle events from
+     *       {@code AsyncTaskService} (image/video/music generation). These
+     *       routinely fire <em>after</em> the agent's reasoning turn finishes
+     *       (long-running upstream calls). Without this carve-out the events
+     *       are silently dropped and the UI never sees the audio/error.</li>
+     * </ul>
+     * For all other events, the prior {@code state==null || state.done}
+     * early-return remains.
      */
     public void broadcast(String conversationId, String eventName, String jsonData) {
         RunState state = runs.get(conversationId);
 
-        // 特殊处理 "done" 事件：即使流已完成，仍然尝试发送给所有订阅者，
-        // 并且**也必须入 buffer**——这样如果客户端在生成期间 SSE 断了
-        // (broken pipe / 浏览器 tab throttle / 网络抖动)，刷新页面重连
-        // 时仍能从 buffer 回放 done 事件，UI 不再永远卡在"生成中"。
-        // 之前的设计 done 不入 buffer，配合 complete() 立即 runs.remove()
-        // 一起，使得 SSE 中途断开 = done 永远丢，是这次故障的根源。
-        if ("done".equals(eventName)) {
-            if (state != null) {
-                SseEvent doneEvent = new SseEvent(eventName, jsonData);
-                synchronized (state.lock) {
-                    state.buffer.add(doneEvent);
-                    Iterator<SseEmitter> it = state.subscribers.iterator();
-                    while (it.hasNext()) {
-                        SseEmitter emitter = it.next();
-                        try {
-                            emitter.send(SseEmitter.event().name(eventName).data(jsonData));
+        boolean isDone = "done".equals(eventName);
+        boolean isAsyncTask = eventName != null && eventName.startsWith("async_task_");
+        boolean isHeartbeat = "heartbeat".equals(eventName);
+
+        if (isDone || isAsyncTask) {
+            if (state == null) return;
+            SseEvent ev = new SseEvent(eventName, jsonData);
+            synchronized (state.lock) {
+                state.buffer.add(ev);
+                if (state.buffer.size() > MAX_BUFFER_SIZE) {
+                    trimBuffer(state.buffer);
+                }
+                Iterator<SseEmitter> it = state.subscribers.iterator();
+                while (it.hasNext()) {
+                    SseEmitter emitter = it.next();
+                    try {
+                        emitter.send(SseEmitter.event().name(eventName).data(jsonData));
+                        if (isDone) {
                             log.debug("Sent final 'done' event to subscriber for {}", conversationId);
-                        } catch (IOException | IllegalStateException e) {
-                            log.debug("Removing dead subscriber for {} while sending done event: {}", conversationId, e.getMessage());
-                            it.remove();
                         }
+                    } catch (IOException | IllegalStateException e) {
+                        log.debug("Removing dead subscriber for {} while sending {} event: {}",
+                                conversationId, eventName, e.getMessage());
+                        it.remove();
+                    }
+                }
+            }
+            // done events do not flow through eventRelays; async_task_* should
+            // also short-circuit since relays exist for delta-style streaming
+            // events, not lifecycle markers.
+            return;
+        }
+
+        // Heartbeat is ephemeral keep-alive — must reach subscribers even when
+        // state.done=true (e.g. a reconnected emitter waiting for late
+        // async_task_* events). Skip the buffer (heartbeats are not replayable).
+        if (isHeartbeat) {
+            if (state == null) return;
+            synchronized (state.lock) {
+                Iterator<SseEmitter> it = state.subscribers.iterator();
+                while (it.hasNext()) {
+                    SseEmitter emitter = it.next();
+                    try {
+                        emitter.send(SseEmitter.event().name(eventName).data(jsonData));
+                    } catch (IOException | IllegalStateException e) {
+                        log.debug("Removing dead subscriber for {} while sending heartbeat: {}",
+                                conversationId, e.getMessage());
+                        it.remove();
                     }
                 }
             }
@@ -382,18 +422,26 @@ public class ChatStreamTracker {
                     return false;
                 }
             }
-            // 流已完成：buffer 已回放完毕（含 done event），不需要订阅后续事件
+            // Stream complete: buffer replayed (including the `done` event itself).
+            // We DO NOT auto-complete the emitter here — keep it subscribed so any
+            // late-arriving async_task_* events (image/video/music generation that
+            // outlasts the agent's reasoning turn) reach the client live. Idle
+            // emitters are pruned naturally when:
+            //   - the next broadcast hits a broken pipe and removes the dead subscriber
+            //   - cleanupStaleRuns() removes the RunState after DONE_RETENTION_MS (5 min)
+            //   - the frontend explicitly disconnects (component unmount / navigation)
+            // Without this, async_task_completed fired after `done` would be silently
+            // dropped, leaving the chat UI stuck on the "正在生成中" placeholder.
+            state.subscribers.add(emitter);
             if (state.done) {
-                log.info("[SSE] Replayed {} buffered events to reconnecting client for completed stream: {}",
+                log.info("[SSE] Replayed {} buffered events; emitter stays subscribed for late async events: {}",
                         state.buffer.size(), conversationId);
-                try {
-                    emitter.complete();
-                } catch (Exception ignored) {
-                    // emitter 已被 servlet 容器关掉了，无需处理
-                }
+                // Restart heartbeat so the proxy/Tomcat 60s idle timeout doesn't
+                // close the reconnected emitter before the async_task_* event fires.
+                // The scheduler self-stops once subscribers go empty (see startHeartbeat).
+                startHeartbeat(conversationId);
                 return true;
             }
-            state.subscribers.add(emitter);
         }
         log.info("[SSE] Client reconnected for conversation={}, replaying {} buffered events",
                 conversationId, state.buffer.size());
@@ -527,7 +575,16 @@ public class ChatStreamTracker {
         state.heartbeatFuture = heartbeatScheduler.scheduleAtFixedRate(() -> {
             try {
                 RunState s = runs.get(conversationId);
-                if (s == null || s.done) {
+                if (s == null) {
+                    stopHeartbeat(conversationId);
+                    return;
+                }
+                // Continue heartbeating post-done as long as someone is still listening
+                // (reconnected emitter waiting for late async_task_* events). Stop only
+                // when the run is done AND the subscribers list is empty — otherwise the
+                // 60s idle proxy timeout drops the reconnected emitter and async events
+                // never reach the client live.
+                if (s.done && s.subscribers.isEmpty()) {
                     stopHeartbeat(conversationId);
                     return;
                 }

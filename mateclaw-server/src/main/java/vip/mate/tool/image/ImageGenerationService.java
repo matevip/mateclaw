@@ -253,8 +253,10 @@ public class ImageGenerationService {
         ImageProviderCapabilities caps = provider.detailedCapabilities();
         if (caps == null) return;
 
-        request.setSize(caps.normalizeSize(request.getSize()));
-        request.setAspectRatio(caps.normalizeAspectRatio(request.getAspectRatio()));
+        // Resolve aspect ratio first so size normalization can preserve orientation.
+        String aspectRatio = caps.normalizeAspectRatio(request.getAspectRatio());
+        request.setAspectRatio(aspectRatio);
+        request.setSize(caps.normalizeSize(request.getSize(), aspectRatio));
         if (request.getCount() != null) {
             request.setCount(caps.normalizeCount(request.getCount()));
         }
