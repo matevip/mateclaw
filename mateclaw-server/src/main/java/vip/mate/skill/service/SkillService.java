@@ -279,26 +279,73 @@ public class SkillService {
     }
 
     /**
-     * 删除技能
-     * 内置技能不可删除
+     * RFC-090 §14.5 — uninstall path: logical delete (row stays in DB
+     * with {@code deleted=1}) + archive workspace to
+     * {@code .archived/}.
+     *
+     * <p>Recoverable: the user can re-install a skill of the same name
+     * later, since the archived workspace and soft-deleted row stay
+     * out of every standard query but on disk.
+     *
+     * <p>Builtin skills are protected: uninstalling a builtin would
+     * leave the seed re-creating it on next boot, so we surface a
+     * clear error instead of doing partial work.
      */
-    public void deleteSkill(Long id) {
+    public void uninstallSkill(Long id) {
         SkillEntity skill = getSkill(id);
         if (Boolean.TRUE.equals(skill.getBuiltin())) {
-            throw new MateClawException("err.skill.builtin_readonly", "内置技能不可删除: " + skill.getName());
+            throw new MateClawException("err.skill.builtin_readonly",
+                    "内置技能不可卸载: " + skill.getName());
         }
-        skillMapper.deleteById(id);
-        log.info("Deleted skill: {}", skill.getName());
+        skillMapper.deleteById(id); // logical delete (deleted=1)
+        log.info("Uninstalled skill (logical delete + archive): {}", skill.getName());
 
-        // 归档工作区目录
         if ("archive".equals(workspaceProperties.getDeletePolicy())) {
             workspaceManager.archiveWorkspace(skill.getName());
         }
-
-        // 刷新 runtime cache
         if (runtimeService != null) {
             runtimeService.refreshActiveSkills();
         }
+    }
+
+    /**
+     * RFC-090 §14.5 — hard-delete path: physical SQL delete + workspace
+     * purge. Admin only. Not recoverable.
+     *
+     * <p>Use this when you need to free the slug for an unrelated skill
+     * or scrub a row that's been corrupted. UI buttons should call
+     * {@link #uninstallSkill} instead unless the user explicitly chose
+     * "permanently delete".
+     */
+    public void hardDeleteSkill(Long id) {
+        SkillEntity skill = getSkill(id);
+        if (Boolean.TRUE.equals(skill.getBuiltin())) {
+            throw new MateClawException("err.skill.builtin_readonly",
+                    "内置技能不可硬删除: " + skill.getName());
+        }
+        skillMapper.hardDeleteById(id); // bypass the logical-delete flag
+        log.info("Hard-deleted skill (physical delete + purge): {}", skill.getName());
+
+        workspaceManager.purgeWorkspace(skill.getName());
+
+        if (runtimeService != null) {
+            runtimeService.refreshActiveSkills();
+        }
+    }
+
+    /**
+     * Legacy alias maintained for callers that still use {@code
+     * deleteSkill}. Routes to the user-friendly uninstall semantics
+     * (logical delete + archive). New code should pick {@link
+     * #uninstallSkill} or {@link #hardDeleteSkill} explicitly.
+     *
+     * @deprecated Use {@link #uninstallSkill} for user-facing UI delete
+     *             (recoverable) or {@link #hardDeleteSkill} for admin
+     *             "permanent" delete.
+     */
+    @Deprecated
+    public void deleteSkill(Long id) {
+        uninstallSkill(id);
     }
 
     /**

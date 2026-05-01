@@ -74,10 +74,12 @@ public class SkillInstaller {
     }
 
     /**
-     * 卸载 skill（归档 workspace + 删除数据库记录）
+     * RFC-090 §14.5 — user-facing uninstall: logical delete + workspace
+     * archive. Re-installing the same name later is supported. For
+     * admin-only physical removal, call
+     * {@code SkillService.hardDeleteSkill} via {@code DELETE /skills/{id}}.
      */
     public void uninstall(String skillName) {
-        // 先在数据库中查找
         List<SkillEntity> skills = skillService.listSkills();
         SkillEntity target = skills.stream()
                 .filter(s -> s.getName().equals(skillName))
@@ -85,10 +87,8 @@ public class SkillInstaller {
                 .orElse(null);
 
         if (target != null) {
-            skillService.deleteSkill(target.getId());
+            skillService.uninstallSkill(target.getId());
         }
-
-        // workspace 归档已在 SkillService.deleteSkill 中处理
         log.info("Uninstalled skill: {}", skillName);
     }
 

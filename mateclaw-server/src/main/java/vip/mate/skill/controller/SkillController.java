@@ -103,10 +103,19 @@ public class SkillController {
         return R.ok(skillService.updateSkill(skill));
     }
 
-    @Operation(summary = "删除技能")
+    /**
+     * RFC-090 §14.5 — admin-only hard delete: physical row removal +
+     * workspace purge. UI surfaces this as "permanently delete" and
+     * confirms with a destructive warning. The routine user-facing
+     * "remove" button on the skill card calls
+     * {@code DELETE /skills/install/{name}} instead, which goes through
+     * {@link vip.mate.skill.installer.SkillInstaller#uninstall} for the
+     * recoverable logical-delete + archive path.
+     */
+    @Operation(summary = "硬删除技能 (admin only — 物理删除 + 工作区清空)")
     @DeleteMapping("/{id}")
     public R<Void> delete(@PathVariable Long id) {
-        skillService.deleteSkill(id);
+        skillService.hardDeleteSkill(id);
         return R.ok();
     }
 

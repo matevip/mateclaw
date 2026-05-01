@@ -137,6 +137,33 @@ public class SkillWorkspaceManager {
     }
 
     /**
+     * RFC-090 §14.5 — physically remove the workspace directory. Used
+     * by hard-delete only; uninstall still calls
+     * {@link #archiveWorkspace} so users can recover by re-installing.
+     */
+    public void purgeWorkspace(String skillName) {
+        Path workspaceDir = resolveConventionPath(skillName);
+        if (!Files.exists(workspaceDir)) return;
+        try {
+            // Walk and delete bottom-up so non-empty dirs go away too.
+            try (var stream = Files.walk(workspaceDir)) {
+                stream.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try {
+                        Files.deleteIfExists(p);
+                    } catch (IOException ignored) {
+                        /* leave partial cleanup; best effort */
+                    }
+                });
+            }
+            log.info("Purged skill workspace: {}", workspaceDir);
+            eventPublisher.publishEvent(new SkillWorkspaceEvent(skillName,
+                    SkillWorkspaceEvent.Type.ARCHIVED, workspaceDir));
+        } catch (IOException e) {
+            log.warn("Failed to purge workspace for skill '{}': {}", skillName, e.getMessage());
+        }
+    }
+
+    /**
      * 归档 workspace 到 {root}/.archived/{name}-{timestamp}/
      */
     public void archiveWorkspace(String skillName) {
