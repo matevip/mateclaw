@@ -255,7 +255,7 @@
     </div>
 
     <!-- Import Hub Dialog -->
-    <ImportHubDialog v-model:visible="showImportDialog" @installed="loadAll" />
+    <ImportHubDialog v-model:visible="showImportDialog" @installed="onSkillInstalled" />
 
     <!-- RFC-090 §4.4 Pre-flight install dialog -->
     <PreflightInstallDialog
@@ -287,6 +287,10 @@
           </button>
           <button class="detail-tab" :class="{ active: detailTab === 'lessons' }" @click="detailTab = 'lessons'">
             {{ t('skills.detail.lessons') }}
+          </button>
+          <button class="detail-tab" :class="{ active: detailTab === 'memory' }" @click="detailTab = 'memory'">
+            {{ t('skills.detail.memory') }}
+            <span v-if="detailEmployees.length > 0" class="tab-count">{{ detailEmployees.length }}</span>
           </button>
         </div>
         <!-- Manifest tab -->
@@ -330,6 +334,26 @@
             </li>
           </ul>
         </div>
+        <!-- RFC-090 §4.2 — Memory tab: cross-reference bound agents +
+             pointer to per-agent memory pages. Programmatic
+             cross-reference (search MEMORY.md across agents) is a
+             future increment; v1 surfaces the agents so the user can
+             navigate. -->
+        <div v-if="detailTab === 'memory'" class="detail-section">
+          <p class="detail-hint">{{ t('skills.detail.memoryHint') }}</p>
+          <p v-if="detailEmployeesLoading" class="detail-empty">{{ t('common.loading') }}</p>
+          <p v-else-if="detailEmployees.length === 0" class="detail-empty">{{ t('skills.detail.noEmployees') }}</p>
+          <ul v-else class="memory-agent-list">
+            <li v-for="agent in detailEmployees" :key="agent.id" class="memory-agent-item">
+              <span class="memory-agent-icon">{{ agent.icon || '🤖' }}</span>
+              <span class="memory-agent-name">{{ agent.name }}</span>
+              <button class="memory-link-btn" @click="$router.push(`/memory?agentId=${agent.id}`)">
+                {{ t('skills.detail.openMemory') }}
+              </button>
+            </li>
+          </ul>
+        </div>
+
         <!-- RFC-090 §11.4 — Lessons tab -->
         <div v-if="detailTab === 'lessons'" class="detail-section">
           <div class="lessons-header">
@@ -475,9 +499,11 @@ const rescanning = ref<Record<string, boolean>>({})
 /** RFC-090 Phase 3 — detail drawer state. */
 const detailDrawerVisible = ref(false)
 const detailSkill = ref<Skill | null>(null)
-const detailTab = ref<'manifest' | 'tools' | 'features' | 'lessons'>('manifest')
+const detailTab = ref<'manifest' | 'tools' | 'features' | 'lessons' | 'memory'>('manifest')
 const detailLessonsRaw = ref<string>('')
 const detailLessonsLoading = ref(false)
+const detailEmployees = ref<Array<{ id: number; name: string; icon?: string }>>([])
+const detailEmployeesLoading = ref(false)
 
 /** RFC-090 §4.2 card surface — per-skill side data (lessons count, used-by). */
 const lessonsCountBySkill = ref<Record<string, number>>({})
@@ -492,6 +518,24 @@ function openPreflight(skill: Skill) {
   preflightSkillId.value = skill.id
   preflightSkillName.value = resolveSkillName(skill)
   preflightVisible.value = true
+}
+
+/**
+ * RFC-090 §4.4 — when ImportHubDialog reports a successful install,
+ * reload the catalog and, if the freshly-installed skill is not
+ * READY (has unresolved requirements), pop the preflight dialog so
+ * the user sees what they need to do next without hunting for the
+ * card. Backwards-compatible: if `payload.name` is missing (older
+ * dialog versions) we just reload silently.
+ */
+async function onSkillInstalled(payload?: { name?: string }) {
+  await loadAll()
+  if (!payload?.name) return
+  const installed = skills.value.find(s => s.name === payload.name)
+  if (!installed) return
+  if (needsSetup(installed)) {
+    openPreflight(installed)
+  }
 }
 
 const detailRuntime = computed(() =>
@@ -515,7 +559,21 @@ function openDetailDrawer(skill: Skill) {
   detailSkill.value = skill
   detailTab.value = 'manifest'
   detailLessonsRaw.value = ''
+  detailEmployees.value = []
   detailDrawerVisible.value = true
+}
+
+async function loadDetailEmployees() {
+  if (!detailSkill.value) return
+  detailEmployeesLoading.value = true
+  try {
+    const res: any = await skillApi.employees(detailSkill.value.id)
+    detailEmployees.value = res?.data || []
+  } catch {
+    detailEmployees.value = []
+  } finally {
+    detailEmployeesLoading.value = false
+  }
 }
 
 async function loadLessons() {
@@ -550,6 +608,9 @@ watch(detailTab, (tab) => {
   // don't want every drawer open to fire an extra request.
   if (tab === 'lessons' && detailDrawerVisible.value && !detailLessonsRaw.value && !detailLessonsLoading.value) {
     loadLessons()
+  }
+  if (tab === 'memory' && detailDrawerVisible.value && detailEmployees.value.length === 0 && !detailEmployeesLoading.value) {
+    loadDetailEmployees()
   }
 })
 
@@ -1424,6 +1485,14 @@ html.dark .scan-finding-item { background: rgba(255, 255, 255, 0.05); }
 .detail-meta-key { color: var(--mc-text-tertiary); margin-right: 4px; }
 .detail-feature-tag { padding: 2px 6px; background: var(--mc-bg-elevated); border-radius: 4px; font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace; color: var(--mc-text-primary); }
 .detail-feature-fallback { font-size: 11px; color: var(--mc-primary-hover); margin-top: 6px; font-style: italic; }
+
+/* RFC-090 §4.2 Memory tab — bound agents list */
+.memory-agent-list { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 8px; }
+.memory-agent-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--mc-border-light); border-radius: 10px; background: var(--mc-bg-muted); }
+.memory-agent-icon { font-size: 20px; }
+.memory-agent-name { flex: 1; font-weight: 600; color: var(--mc-text-primary); }
+.memory-link-btn { padding: 4px 10px; border: 1px solid var(--mc-border); background: var(--mc-bg-elevated); color: var(--mc-primary); border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 500; }
+.memory-link-btn:hover { background: var(--mc-primary-bg); border-color: var(--mc-primary); }
 
 .lessons-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .lessons-clear-btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--mc-border); background: var(--mc-bg-muted); color: var(--mc-text-secondary); cursor: pointer; font-size: 12px; }
