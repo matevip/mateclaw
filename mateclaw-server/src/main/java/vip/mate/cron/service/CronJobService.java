@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.scheduling.support.CronTrigger;
@@ -31,6 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -78,6 +80,19 @@ public class CronJobService implements ApplicationRunner {
      */
     private final ExecutorService cronExecutor = Executors.newThreadPerTaskExecutor(
             Thread.ofVirtual().name("cron-execute-", 0).factory());
+
+    /**
+     * Issue #50: cap concurrent cron run executions so that hundreds of jobs
+     * firing at the same minute boundary cannot exhaust the JDBC pool. Each
+     * run holds 3-4 connections in sequence (three REQUIRES_NEW segments in
+     * {@link CronJobLifecycleService} plus {@link #updateRunTimes}); without
+     * a limit, virtual threads launch unboundedly and starve the channel
+     * monitor / web traffic. Tuned alongside Hikari maximum-pool-size — keep
+     * this value well below the pool size so non-cron paths still get
+     * connections.
+     */
+    private static final int MAX_CONCURRENT_CRON_RUNS = 8;
+    private final Semaphore cronConcurrencyLimiter = new Semaphore(MAX_CONCURRENT_CRON_RUNS);
 
     // ==================== 初始化与销毁 ====================
 
@@ -181,6 +196,18 @@ public class CronJobService implements ApplicationRunner {
         // toSpringCron 校验表达式合法性，结果复用于后续 calcNextRunTime 和 register
         String springCron = toSpringCron(dto.getCronExpression());
 
+        // Issue #50: dedup by (workspace_id, agent_id, name). LLM-driven
+        // creators (CronJobTool) call this on every retry; without this guard
+        // a single instruction can produce N identical rows that all fire on
+        // the same tick. App-level check covers the common case; the unique
+        // index added in V67 protects against races (handled below).
+        CronJobEntity duplicate = findActiveDuplicate(workspaceId, dto.getAgentId(), dto.getName());
+        if (duplicate != null) {
+            log.info("[CronJob] create dedup hit: ws={} agent={} name={} → returning existing id={}",
+                    workspaceId, dto.getAgentId(), dto.getName(), duplicate.getId());
+            return getById(duplicate.getId(), workspaceId);
+        }
+
         CronJobEntity entity = dto.toEntity();
         // RFC-083: workspace stamped server-side from X-Workspace-Id; never
         // trust a client-supplied value (DTO.toEntity intentionally drops it).
@@ -190,7 +217,18 @@ public class CronJobService implements ApplicationRunner {
         if (entity.getEnabled() == null) entity.setEnabled(true);
 
         entity.setNextRunTime(calcNextRunTime(springCron, entity.getTimezone()));
-        cronJobMapper.insert(entity);
+        try {
+            cronJobMapper.insert(entity);
+        } catch (DuplicateKeyException e) {
+            // Race: another concurrent create won. Re-fetch and return that one.
+            CronJobEntity raced = findActiveDuplicate(workspaceId, dto.getAgentId(), dto.getName());
+            if (raced != null) {
+                log.info("[CronJob] create race resolved: ws={} agent={} name={} → existing id={}",
+                        workspaceId, dto.getAgentId(), dto.getName(), raced.getId());
+                return getById(raced.getId(), workspaceId);
+            }
+            throw e;
+        }
 
         if (Boolean.TRUE.equals(entity.getEnabled())) {
             // register() 内部会再次调用 toSpringCron，但表达式已校验过，不会抛异常
@@ -198,6 +236,22 @@ public class CronJobService implements ApplicationRunner {
         }
 
         return getById(entity.getId(), workspaceId);
+    }
+
+    /**
+     * Issue #50: lookup existing active row for the dedup natural key.
+     * No {@code @TableLogic} on this entity — {@code deleted=0} must be
+     * filtered explicitly.
+     */
+    private CronJobEntity findActiveDuplicate(Long workspaceId, Long agentId, String name) {
+        if (workspaceId == null || agentId == null || name == null) return null;
+        return cronJobMapper.selectOne(
+                new LambdaQueryWrapper<CronJobEntity>()
+                        .eq(CronJobEntity::getWorkspaceId, workspaceId)
+                        .eq(CronJobEntity::getAgentId, agentId)
+                        .eq(CronJobEntity::getName, name)
+                        .eq(CronJobEntity::getDeleted, 0)
+                        .last("LIMIT 1"));
     }
 
     public CronJobDTO update(Long id, CronJobDTO dto, Long workspaceId) {
@@ -290,13 +344,7 @@ public class CronJobService implements ApplicationRunner {
         // CronJobLifecycleService work as advertised. "manual" trigger type
         // distinguishes this from scheduler-driven runs in mate_cron_job_run.
         // Run on the virtual-thread cronExecutor — never block the scheduler.
-        cronExecutor.submit(() -> {
-            try {
-                cronJobRunner.executeJob(entity, "manual");
-            } finally {
-                updateRunTimes(entity.getId(), entity.getCronExpression(), entity.getTimezone());
-            }
-        });
+        cronExecutor.submit(() -> runWithBackpressure(entity, "manual"));
     }
 
     // ==================== 调度器管理 ====================
@@ -314,13 +362,7 @@ public class CronJobService implements ApplicationRunner {
             // worker (4 concurrent long crons would otherwise saturate the
             // pool and the 5th would miss its tick).
             ScheduledFuture<?> future = scheduler.schedule(() ->
-                    cronExecutor.submit(() -> {
-                        try {
-                            cronJobRunner.executeJob(job, "scheduled");
-                        } finally {
-                            updateRunTimes(job.getId(), job.getCronExpression(), job.getTimezone());
-                        }
-                    }), trigger);
+                    cronExecutor.submit(() -> runWithBackpressure(job, "scheduled")), trigger);
             scheduledTasks.put(job.getId(), future);
             log.info("[CronJob] Registered job {} ({}) ws={}, cron={}, tz={}",
                     job.getId(), job.getName(), job.getWorkspaceId(),
@@ -350,6 +392,37 @@ public class CronJobService implements ApplicationRunner {
     // Both register() and runNow() now delegate to cronJobRunner.executeJob;
     // see those methods above. The wrap below ensures next-run rolls forward
     // regardless of run outcome.
+
+    /**
+     * Issue #50: gate every run on {@link #cronConcurrencyLimiter} so that a
+     * minute-boundary stampede of N enabled jobs cannot fan out into N
+     * simultaneous JDBC connection acquisitions. Excess runs queue on the
+     * virtual thread (cheap) instead of competing for the pool.
+     *
+     * <p>The {@code updateRunTimes} write is intentionally inside the
+     * permit's hold so the next-run pointer advances under the same
+     * backpressure budget — otherwise a tail of bookkeeping writes could
+     * still pile up after the executor "finishes".
+     */
+    private void runWithBackpressure(CronJobEntity job, String triggerType) {
+        try {
+            cronConcurrencyLimiter.acquire();
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            log.warn("[CronJob] Interrupted while waiting to run job {} ({})",
+                    job.getId(), triggerType);
+            return;
+        }
+        try {
+            cronJobRunner.executeJob(job, triggerType);
+        } finally {
+            try {
+                updateRunTimes(job.getId(), job.getCronExpression(), job.getTimezone());
+            } finally {
+                cronConcurrencyLimiter.release();
+            }
+        }
+    }
 
     /**
      * 合并更新 lastRunTime 和 nextRunTime，单次 DB 写入替代原来的 4 次 selectById + updateById

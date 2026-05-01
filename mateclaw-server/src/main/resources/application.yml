@@ -25,6 +25,19 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password:
+    # Issue #50: explicit Hikari sizing. Default of 10 was being exhausted
+    # by O(100) cron jobs firing on minute boundaries (each run holds 3-4
+    # connections sequentially) plus ChannelHealthMonitor's per-minute scan.
+    # 30 leaves headroom for HTTP / SSE / channel adapters even with the
+    # cron concurrency limiter (CronJobService.MAX_CONCURRENT_CRON_RUNS=8)
+    # at full saturation.
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 60000
 
   # SQL 初始化由 DatabaseBootstrapRunner 接管，关闭 Spring 自动执行
   sql:

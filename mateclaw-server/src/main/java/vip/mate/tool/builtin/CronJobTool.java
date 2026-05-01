@@ -40,7 +40,10 @@ public class CronJobTool {
             + "DO NOT use this for plain reminders where the user already wrote the exact text they want delivered — "
             + "use create_reminder instead, otherwise the LLM will rephrase or echo the reminder. "
             + "Use 5-field cron expressions: minute hour day month weekday. "
-            + "Examples: '0 9 * * *' = daily at 9am, '0 9 * * 1-5' = weekdays at 9am, '*/30 * * * *' = every 30 minutes.")
+            + "Examples: '0 9 * * *' = daily at 9am, '0 9 * * 1-5' = weekdays at 9am, '*/30 * * * *' = every 30 minutes. "
+            + "If a task with the same name already exists for this agent, the existing one is returned "
+            + "(deduplicated=true in the response) — do NOT call this tool again with a different name "
+            + "just to retry; check list_cron_jobs first if unsure.")
     public String create_cron_job(
             @ToolParam(description = "Task name, e.g. 'Daily AI News Summary'") String name,
             @ToolParam(description = "5-field cron expression: minute hour day month weekday") String cronExpression,
@@ -114,7 +117,9 @@ public class CronJobTool {
             + "reminder text 'It's time to leave for the meeting'). "
             + "DO NOT use this if the message requires the agent to compute or look something up — use create_cron_job for that. "
             + "Use 5-field cron expressions: minute hour day month weekday. "
-            + "Examples: '0 15 * * *' = every day at 3pm, '0 9 * * 1' = every Monday at 9am.")
+            + "Examples: '0 15 * * *' = every day at 3pm, '0 9 * * 1' = every Monday at 9am. "
+            + "If a reminder with the same name already exists for this agent, the existing one is returned — "
+            + "do NOT retry with the same name to force a new row.")
     public String create_reminder(
             @ToolParam(description = "Reminder name, e.g. 'Meeting at Room 6'") String name,
             @ToolParam(description = "5-field cron expression: minute hour day month weekday") String cronExpression,
