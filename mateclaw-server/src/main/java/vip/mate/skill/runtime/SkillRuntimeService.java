@@ -17,11 +17,17 @@ import vip.mate.skill.service.SkillService;
 import vip.mate.skill.workspace.SkillWorkspaceEvent;
 
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -75,6 +81,26 @@ public class SkillRuntimeService {
 
     private static final String CACHE_KEY = "active_skills";
 
+    /**
+     * Debounce window for {@link #onWorkspaceEvent}. Startup typically
+     * fires one event per bundled skill (30+ in a row), and there's
+     * nothing useful to do until the whole batch settles. 500 ms is
+     * long enough to swallow the burst without making admin re-syncs
+     * feel laggy.
+     */
+    private static final long REFRESH_DEBOUNCE_MS = 500;
+
+    private final ScheduledExecutorService refreshScheduler =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "skill-refresh-debouncer");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /** Most recent pending refresh future — atomically swapped on each
+     *  event so the previous one can be cancelled. */
+    private final AtomicReference<ScheduledFuture<?>> pendingRefresh = new AtomicReference<>();
+
     @PostConstruct
     public void init() {
         log.info("SkillRuntimeService initialized");
@@ -90,8 +116,42 @@ public class SkillRuntimeService {
 
     @EventListener(SkillWorkspaceEvent.class)
     public void onWorkspaceEvent(SkillWorkspaceEvent event) {
-        log.info("Workspace event: {} {} at {}", event.type(), event.skillName(), event.workspacePath());
-        refreshActiveSkills();
+        // Coalesce bursts of workspace events (every bundled-skill sync at
+        // startup fires one) into a single refresh. Without debounce, a
+        // 30-skill startup triggered 30 sequential refreshActiveSkills()
+        // calls — each running the whole resolve+scan loop. With 500 ms
+        // debounce it collapses to one.
+        log.debug("Workspace event: {} {} (refresh scheduled in {}ms)",
+                event.type(), event.skillName(), REFRESH_DEBOUNCE_MS);
+        ScheduledFuture<?> previous = pendingRefresh.get();
+        if (previous != null && !previous.isDone()) {
+            previous.cancel(false);
+        }
+        ScheduledFuture<?> task = refreshScheduler.schedule(() -> {
+            try {
+                refreshActiveSkills();
+            } catch (Exception e) {
+                log.warn("Debounced refresh failed: {}", e.getMessage());
+            }
+        }, REFRESH_DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+        pendingRefresh.set(task);
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        // Drain any pending refresh so JVM shutdown doesn't hang on the
+        // daemon thread, even though it's marked daemon and would die anyway.
+        ScheduledFuture<?> pending = pendingRefresh.getAndSet(null);
+        if (pending != null) pending.cancel(true);
+        refreshScheduler.shutdown();
+        try {
+            if (!refreshScheduler.awaitTermination(2, TimeUnit.SECONDS)) {
+                refreshScheduler.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            refreshScheduler.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
@@ -261,63 +321,44 @@ public class SkillRuntimeService {
         } else {
             activeSkills = getActiveSkills();
         }
+        // Platform filter — drop skills whose `platforms:` frontmatter
+        // names a different OS than the runtime host. apple-notes /
+        // findmy etc. are macOS-only; surfacing them on Linux just
+        // burns prompt tokens for skills the user can never run.
+        // Empty / missing `platforms:` means "all platforms" (the default).
+        String currentOs = currentOsCanonical();
+        activeSkills = activeSkills.stream()
+                .filter(s -> matchesCurrentPlatform(s, currentOs))
+                .collect(java.util.stream.Collectors.toList());
         if (activeSkills.isEmpty()) {
             return "";
         }
 
-        // Issue #46 + #49 prompt rewrite. Stop-gap until RFC-090 lands the
-        // proper `type` enum and inlines `type: prompt` skill bodies into the
-        // system prompt directly. Today every skill is announced via this
-        // catalog and the LLM has to pull SKILL.md on demand. Two failure
-        // modes have been observed:
-        //   #46 — LLM treated the skill name as a tool ("tool_use{name=
-        //         RedisOps}"), so we lead with an explicit "NOT callable"
-        //         warning and surface the actual tool names readSkillFile /
-        //         runSkillScript.
-        //   #49 — On a docs-only skill (SKILL.md, no scripts/ dir), the LLM
-        //         tried to invoke a non-existent scripts/ file and never
-        //         followed SKILL.md's text guidance. The previous wording
-        //         "usually that means calling runSkillScript(...)" actively
-        //         pushed it that way. Fix: tell the model the two shapes
-        //         exist, mark each row's shape, and forbid invoking scripts
-        //         on docs-only skills.
+        // Compact preamble — was ~1 KB of warnings before. The two failure
+        // modes that drove the older wording (#46: LLM treats skill name
+        // as a tool; #49: LLM invokes runSkillScript on a docs-only skill)
+        // are now addressed in two cheaper spots:
+        //   - readSkillFile/runSkillScript tools have explicit "Tool not
+        //     found" errors that nudge the model to retry the right way.
+        //   - SKILL.md itself, once loaded via readSkillFile, tells the
+        //     model whether to invoke a script or just follow the prose.
+        // 49 skills × ~20 chars/row saved by dropping the Shape column +
+        // ~600 chars saved by trimming the preamble = ~1.5 KB / ~400
+        // tokens lighter on every chat request.
         StringBuilder sb = new StringBuilder();
-        sb.append("\n\n## Available Skills\n\n");
-        sb.append("⚠️  **Skills are documentation packages, NOT directly callable tools.**\n");
-        sb.append("Calling a skill name as a tool (e.g. tool_use{name=\"RedisOps\"}) will fail with \"Tool not found\". ");
-        sb.append("To use a skill:\n\n");
-        sb.append("1. ALWAYS first read its SKILL.md to learn how it works:\n");
-        sb.append("   `readSkillFile(skillName=\"<name>\", filePath=\"SKILL.md\")`\n");
-        sb.append("2. Then follow what SKILL.md says. Skills come in two shapes — check the **Shape** column below:\n");
-        sb.append("   - **docs only** — no `scripts/` directory exists. SKILL.md is the entire instruction set; follow its text guidance directly. Do NOT call `runSkillScript` on these — the script does not exist and the call will fail.\n");
-        sb.append("   - **scripts + docs** — `scripts/` is present. SKILL.md will name the script to run; invoke it with `runSkillScript(skillName=\"<name>\", scriptPath=\"scripts/<file>\")`.\n");
-        sb.append("   Either shape may also expose supplementary docs via `readSkillFile(skillName=\"<name>\", filePath=\"references/<file>\")`.\n\n");
-
-        // Concrete example anchored to the first enabled skill so the LLM
-        // sees a real name it just read in the listing below.
-        String exampleName = activeSkills.get(0).getName();
-        sb.append("Concrete example — to use the `").append(exampleName).append("` skill, START with:\n");
-        sb.append("  `readSkillFile(skillName=\"").append(exampleName).append("\", filePath=\"SKILL.md\")`\n\n");
-
-        sb.append("### Enabled skills\n");
-        sb.append("Pass these names as the `skillName=` argument to `readSkillFile` / `runSkillScript`. ");
-        sb.append("Do **not** call them as tools.\n\n");
-        sb.append("| Skill name | Shape | Description |\n");
-        sb.append("|------------|-------|-------------|\n");
+        sb.append("\n\n## Skills\n");
+        sb.append("Before answering, scan the skills below. If a skill matches your task, ");
+        sb.append("load it via `readSkillFile(skillName=<name>, filePath=\"SKILL.md\")` and follow its instructions. ");
+        sb.append("Skills are documentation packages — calling a skill name as a tool will fail. ");
+        sb.append("Skills with a `scripts/` directory expose `runSkillScript`; SKILL.md will name the script when needed.\n\n");
+        sb.append("| Skill | Description |\n");
+        sb.append("|-------|-------------|\n");
         for (ResolvedSkill skill : activeSkills) {
-            // `scripts` is populated by SkillDirectoryScanner — empty map both
-            // for "scripts/ directory absent" and "directory present but empty".
-            // Either way, runSkillScript has nothing to call, so we report the
-            // skill as docs-only. (Database-fallback skills also land here
-            // because SkillPackageResolver.resolveFromDatabase sets it to
-            // Map.of().) RFC-090's `type` field will replace this heuristic.
-            boolean hasScripts = skill.getScripts() != null && !skill.getScripts().isEmpty();
-            String shape = hasScripts ? "scripts + docs" : "docs only";
             sb.append("| `").append(skill.getName()).append("`");
             if (skill.getIcon() != null && !skill.getIcon().isBlank()) {
                 sb.append(" ").append(skill.getIcon());
             }
-            sb.append(" | ").append(shape).append(" | ");
+            sb.append(" | ");
             if (skill.getDescription() != null && !skill.getDescription().isBlank()) {
                 String desc = skill.getDescription();
                 if (desc.length() > 200) {
@@ -366,5 +407,37 @@ public class SkillRuntimeService {
             sb.append("Treat them as advisory hints — the canonical SKILL.md still wins on conflict.\n");
             sb.append(lessons);
         }
+    }
+
+    /**
+     * Map {@code System.getProperty("os.name")} to one of the canonical
+     * tokens used in SKILL.md {@code platforms:} ({@code macos / linux /
+     * windows}). Anything unrecognised → {@code "other"} which never
+     * matches a declared platform list, so the skill stays visible only
+     * if its platforms list is empty (the "all platforms" default).
+     */
+    static String currentOsCanonical() {
+        String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
+        if (os.contains("mac") || os.contains("darwin")) return "macos";
+        if (os.contains("nux") || os.contains("nix")) return "linux";
+        if (os.contains("win")) return "windows";
+        return "other";
+    }
+
+    /**
+     * True when the skill is compatible with {@code currentOs}. A skill
+     * with empty / null {@code platforms:} matches every OS (legacy
+     * default). Otherwise the canonical OS token must appear in the list.
+     */
+    static boolean matchesCurrentPlatform(ResolvedSkill skill, String currentOs) {
+        SkillManifest manifest = skill.getManifest();
+        if (manifest == null) return true;
+        List<String> platforms = manifest.getPlatforms();
+        if (platforms == null || platforms.isEmpty()) return true;
+        for (String p : platforms) {
+            if (p == null) continue;
+            if (currentOs.equalsIgnoreCase(p.trim())) return true;
+        }
+        return false;
     }
 }

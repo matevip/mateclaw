@@ -17,17 +17,22 @@ import vip.mate.skill.runtime.model.ResolvedSkill;
 import vip.mate.skill.workspace.SkillWorkspaceManager;
 import vip.mate.tool.ToolRegistry;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
 
 /**
@@ -81,6 +86,17 @@ public class SkillPackageResolver {
      */
     private final java.util.concurrent.ConcurrentHashMap<Long, java.util.Set<String>> registeredWrappers
             = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Content-hash → cached scan outcome, so a refresh on unchanged
+     * SKILL.md content reuses the previous result instead of running
+     * the security scanner again. Builtin skills already short-circuit
+     * up-front; this cache helps user-installed dynamic skills, where
+     * the same row gets re-resolved on every refresh.
+     */
+    private final ConcurrentMap<Long, CachedScanOutcome> securityScanCache = new ConcurrentHashMap<>();
+
+    private record CachedScanOutcome(String contentHash, SkillValidationResult result) {}
 
     @Autowired
     public SkillPackageResolver(SkillFrontmatterParser frontmatterParser,
@@ -365,8 +381,36 @@ public class SkillPackageResolver {
     // ==================== 阶段 2：安全扫描 ====================
 
     private void applySecurity(ResolvedSkill resolved) {
+        // Builtin skills come from classpath/jar — they're version-controlled
+        // upstream and the resolver flow already maps blocked findings to
+        // `trustedBuiltin` (warn but don't block). Running the full scanner
+        // on every refresh is pure overhead; with 30+ shipped skills this
+        // dominates the refresh budget. Mark them trusted up-front and
+        // skip — the persisted scan_result on mate_skill (written by the
+        // initial resolve) keeps the UI's audit trail intact.
+        if (resolved.isBuiltin()) {
+            resolved.setSecurityBlocked(false);
+            resolved.setSecuritySummary("Trusted builtin (runtime scan skipped)");
+            resolved.setSecurityWarnings(List.of());
+            return;
+        }
         try {
-            SkillValidationResult result = securityService.validate(resolved);
+            // Content-hash cache: refreshes on unchanged SKILL.md content
+            // skip the (potentially expensive) scanner. Hash drifts → fall
+            // through to a fresh scan and replace the cached entry.
+            String contentHash = sha256(resolved.getContent());
+            CachedScanOutcome cached = resolved.getId() != null
+                    ? securityScanCache.get(resolved.getId())
+                    : null;
+            SkillValidationResult result;
+            if (cached != null && cached.contentHash().equals(contentHash)) {
+                result = cached.result();
+            } else {
+                result = securityService.validate(resolved);
+                if (resolved.getId() != null) {
+                    securityScanCache.put(resolved.getId(), new CachedScanOutcome(contentHash, result));
+                }
+            }
             boolean trustedBuiltin = resolved.isBuiltin() && result.isBlocked();
             resolved.setSecurityBlocked(result.isBlocked() && !trustedBuiltin);
             resolved.setSecuritySeverity(result.getMaxSeverity() != null ? result.getMaxSeverity().name() : null);
@@ -658,6 +702,10 @@ public class SkillPackageResolver {
      */
     public void deregisterSkillWrappers(Long skillId) {
         if (skillId == null) return;
+        // Evict the security-scan cache entry too — a re-installed skill
+        // with the same id but different content needs a fresh scan, and
+        // a permanently-deleted skill should free the slot.
+        securityScanCache.remove(skillId);
         java.util.Set<String> previous = registeredWrappers.remove(skillId);
         if (previous == null || previous.isEmpty()) return;
         for (String name : previous) {
@@ -668,6 +716,19 @@ public class SkillPackageResolver {
             }
         }
         log.info("Deregistered {} wrapper tool(s) for skill id={}", previous.size(), skillId);
+    }
+
+    /** Hex-encoded SHA-256 of the input string (UTF-8). Empty/null → "". */
+    private static String sha256(String input) {
+        if (input == null || input.isEmpty()) return "";
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(md.digest(input.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            // SHA-256 is mandatory in the JRE — should never throw.
+            // Fall back to identity so the cache is just always-miss.
+            return input;
+        }
     }
 
     /**
