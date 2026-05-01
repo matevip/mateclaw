@@ -15,15 +15,23 @@
         <div class="settings-section activity-inner mc-surface-card">
     <!-- Filters -->
     <div class="filter-row">
-      <select v-model="filters.action" class="filter-select" @change="loadEvents">
+      <!-- RFC-090 §4.5 — source filter for the unified feed -->
+      <select v-model="filters.source" class="filter-select" @change="loadEvents">
+        <option value="">{{ t('security.activity.allSources') }}</option>
+        <option value="audit">{{ t('security.activity.sourceAudit') }}</option>
+        <option value="approval">{{ t('security.activity.sourceApproval') }}</option>
+      </select>
+      <select v-model="filters.action" class="filter-select" @change="filterEventsLocally">
         <option value="">{{ t('security.activity.allActions') }}</option>
         <option value="CREATE">CREATE</option>
         <option value="UPDATE">UPDATE</option>
         <option value="DELETE">DELETE</option>
         <option value="ENABLE">ENABLE</option>
         <option value="DISABLE">DISABLE</option>
+        <option value="APPROVAL_GRANTED">APPROVAL_GRANTED</option>
+        <option value="APPROVAL_DENIED">APPROVAL_DENIED</option>
       </select>
-      <select v-model="filters.resourceType" class="filter-select" @change="loadEvents">
+      <select v-model="filters.resourceType" class="filter-select" @change="filterEventsLocally">
         <option value="">{{ t('security.activity.allResources') }}</option>
         <option value="AGENT">Agent</option>
         <option value="CHANNEL">Channel</option>
@@ -31,6 +39,7 @@
         <option value="WIKI">Wiki</option>
         <option value="MEMBER">Member</option>
         <option value="WORKSPACE">Workspace</option>
+        <option value="TOOL_APPROVAL">Tool Approval</option>
       </select>
       <button class="btn-secondary" @click="loadEvents">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -46,6 +55,7 @@
         <thead>
           <tr>
             <th>{{ t('security.activity.columns.time') }}</th>
+            <th>{{ t('security.activity.columns.source') }}</th>
             <th>{{ t('security.activity.columns.user') }}</th>
             <th>{{ t('security.activity.columns.action') }}</th>
             <th>{{ t('security.activity.columns.resource') }}</th>
@@ -54,10 +64,13 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="event in events" :key="event.id">
-            <td class="cell-time">{{ formatTime(event.createTime) }}</td>
+          <tr v-for="event in filteredEvents" :key="event.id" class="data-row" @click="openDetail(event)">
+            <td class="cell-time">{{ formatTime(event.time || event.createTime) }}</td>
             <td>
-              <span class="user-tag">{{ event.username }}</span>
+              <span class="source-pill" :class="`src-${event.source || 'audit'}`">{{ event.source || 'audit' }}</span>
+            </td>
+            <td>
+              <span class="user-tag">{{ event.username || '—' }}</span>
             </td>
             <td>
               <span class="action-tag" :class="'action-' + event.action?.toLowerCase()">
@@ -76,6 +89,28 @@
       <div v-else-if="!events.length" class="empty-state">{{ t('security.activity.noEvents') }}</div>
     </div>
 
+    <!-- RFC-090 §4.5 detail drawer -->
+    <el-drawer
+      v-model="detailVisible"
+      :title="t('security.activity.detailTitle')"
+      direction="rtl"
+      size="520px"
+      :destroy-on-close="true"
+    >
+      <div v-if="detailEvent" class="detail-pane">
+        <div class="detail-row"><span class="detail-key">{{ t('security.activity.columns.time') }}</span><span>{{ formatTime(detailEvent.time || detailEvent.createTime) }}</span></div>
+        <div class="detail-row"><span class="detail-key">{{ t('security.activity.columns.source') }}</span><span class="source-pill" :class="`src-${detailEvent.source || 'audit'}`">{{ detailEvent.source }}</span></div>
+        <div class="detail-row"><span class="detail-key">{{ t('security.activity.columns.user') }}</span><span>{{ detailEvent.username || '—' }}</span></div>
+        <div class="detail-row"><span class="detail-key">{{ t('security.activity.columns.action') }}</span><span class="action-tag" :class="'action-' + detailEvent.action?.toLowerCase()">{{ detailEvent.action }}</span></div>
+        <div class="detail-row"><span class="detail-key">{{ t('security.activity.columns.resource') }}</span><span>{{ detailEvent.resourceType }}: <code>{{ detailEvent.resourceName || detailEvent.resourceId || '—' }}</code></span></div>
+        <div class="detail-row" v-if="detailEvent.ipAddress"><span class="detail-key">{{ t('security.activity.columns.ip') }}</span><code>{{ detailEvent.ipAddress }}</code></div>
+        <div class="detail-section" v-if="detailEvent.detail">
+          <div class="detail-section-title">{{ t('security.activity.detailDetails') }}</div>
+          <pre class="detail-pre">{{ JSON.stringify(detailEvent.detail, null, 2) }}</pre>
+        </div>
+      </div>
+    </el-drawer>
+
     <!-- Pagination -->
     <div v-if="total > pageSize" class="pagination">
       <button class="btn-secondary btn-sm" :disabled="page <= 1" @click="page--; loadEvents()">&laquo;</button>
@@ -89,9 +124,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { auditApi } from '@/api'
+import { activityApi } from '@/api'
 
 const { t } = useI18n()
 
@@ -100,14 +135,27 @@ const loading = ref(false)
 const page = ref(1)
 const pageSize = 20
 const total = ref(0)
-const filters = reactive({ action: '', resourceType: '' })
+// RFC-090 §4.5 — `source` filter goes to the server (audit / approval),
+// `action` and `resourceType` filter locally so users can refine the
+// merged feed without a roundtrip per change.
+const filters = reactive({ source: '', action: '', resourceType: '' })
+
+const detailVisible = ref(false)
+const detailEvent = ref<any | null>(null)
+
+const filteredEvents = computed(() => {
+  return events.value.filter(ev => {
+    if (filters.action && ev.action !== filters.action) return false
+    if (filters.resourceType && ev.resourceType !== filters.resourceType) return false
+    return true
+  })
+})
 
 async function loadEvents() {
   loading.value = true
   try {
-    const res: any = await auditApi.listEvents({
-      action: filters.action || undefined,
-      resourceType: filters.resourceType || undefined,
+    const res: any = await activityApi.feed({
+      source: filters.source || undefined,
       page: page.value,
       size: pageSize,
     })
@@ -118,6 +166,15 @@ async function loadEvents() {
   } finally {
     loading.value = false
   }
+}
+
+function filterEventsLocally() {
+  // Local filter only — events array stays loaded; computed re-derives.
+}
+
+function openDetail(event: any) {
+  detailEvent.value = event
+  detailVisible.value = true
 }
 
 function formatTime(dateStr: string) {
@@ -204,4 +261,18 @@ onMounted(() => {
 }
 
 .page-info { font-size: 13px; color: var(--mc-text-tertiary); }
+
+/* RFC-090 §4.5 — source pill + clickable rows + detail drawer */
+.source-pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.src-audit { background: var(--mc-primary-bg); color: var(--mc-primary); }
+.src-approval { background: rgba(99, 102, 241, 0.12); color: #6366f1; }
+.data-row { cursor: pointer; }
+.data-row:hover { background: var(--mc-bg-muted); }
+.detail-pane { padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+.detail-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--mc-border-light); font-size: 13px; }
+.detail-row:last-child { border-bottom: none; }
+.detail-key { width: 110px; flex-shrink: 0; color: var(--mc-text-tertiary); font-size: 12px; font-weight: 600; }
+.detail-section { margin-top: 6px; }
+.detail-section-title { font-size: 12px; font-weight: 700; color: var(--mc-text-secondary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+.detail-pre { background: var(--mc-bg-sunken); padding: 12px; border-radius: 8px; font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace; font-size: 11px; line-height: 1.5; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0; }
 </style>

@@ -177,6 +177,12 @@ export const skillApi = {
   employees: (id: string | number) => http.get(`/skills/${id}/employees`),
 }
 
+// ==================== Activity Feed (RFC-090 §4.5) ====================
+export const activityApi = {
+  feed: (params: { source?: string; page?: number; size?: number; workspaceId?: number } = {}) =>
+    http.get('/activity/feed', { params }),
+}
+
 // ==================== ACP Endpoints (RFC-090 Phase 7) ====================
 export const acpApi = {
   list: () => http.get('/acp/endpoints'),
