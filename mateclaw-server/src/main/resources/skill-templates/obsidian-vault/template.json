@@ -1,0 +1,29 @@
+{
+  "id": "obsidian-vault",
+  "name": "Obsidian Vault",
+  "category": "productivity",
+  "type": "prompt",
+  "icon": "📝",
+  "description": "Read, search, and create notes in an Obsidian vault.",
+  "fields": [
+    {
+      "key": "skill_name",
+      "label": "Skill 标识 (slug)",
+      "type": "text",
+      "required": true,
+      "placeholder": "my-obsidian"
+    },
+    {
+      "key": "vault_path",
+      "label": "笔记库路径 (绝对路径)",
+      "type": "text",
+      "required": true,
+      "placeholder": "/Users/me/Documents/MyVault",
+      "hint": "本机 Obsidian vault 的绝对路径，用于 fs 工具定位"
+    }
+  ],
+  "bundlePath": "skill-template-bundles/obsidian-vault",
+  "skillMd": "---\nname: '{{skill_name}}'\ndescription: Read, search, and create notes in the Obsidian vault.\nversion: 1.0.0\nauthor: ported\n---\n# Obsidian Vault\n\n**Location:** Set via `OBSIDIAN_VAULT_PATH` environment variable (e.g. in `~/.mateclaw/.env`).\n\nIf unset, defaults to `~/Documents/Obsidian Vault`.\n\nNote: Vault paths may contain spaces - always quote them.\n\n## Read a note\n\n```bash\nVAULT=\"${OBSIDIAN_VAULT_PATH:-$HOME/Documents/Obsidian Vault}\"\ncat \"$VAULT/Note Name.md\"\n```\n\n## List notes\n\n```bash\nVAULT=\"${OBSIDIAN_VAULT_PATH:-$HOME/Documents/Obsidian Vault}\"\n\n# All notes\nfind \"$VAULT\" -name \"*.md\" -type f\n\n# In a specific folder\nls \"$VAULT/Subfolder/\"\n```\n\n## Search\n\n```bash\nVAULT=\"${OBSIDIAN_VAULT_PATH:-$HOME/Documents/Obsidian Vault}\"\n\n# By filename\nfind \"$VAULT\" -name \"*.md\" -iname \"*keyword*\"\n\n# By content\ngrep -rli \"keyword\" \"$VAULT\" --include=\"*.md\"\n```\n\n## Create a note\n\n```bash\nVAULT=\"${OBSIDIAN_VAULT_PATH:-$HOME/Documents/Obsidian Vault}\"\ncat > \"$VAULT/New Note.md\" << 'ENDNOTE'\n# Title\n\nContent here.\nENDNOTE\n```\n\n## Append to a note\n\n```bash\nVAULT=\"${OBSIDIAN_VAULT_PATH:-$HOME/Documents/Obsidian Vault}\"\necho \"\nNew content here.\" >> \"$VAULT/Existing Note.md\"\n```\n\n## Wikilinks\n\nObsidian links notes with `[[Note Name]]` syntax. When creating notes, use these to link related content.\n",
+  "nameZh": "Obsidian 笔记库",
+  "descriptionZh": "管理 Obsidian 本地笔记库 —— 读、搜、新建。"
+}

@@ -29,6 +29,7 @@ import java.util.List;
 public class SkillWorkspaceBootstrapRunner implements ApplicationRunner {
 
     private final SkillWorkspaceManager workspaceManager;
+    private final BundledSkillSyncer bundledSkillSyncer;
 
     @Override
     public void run(ApplicationArguments args) {
@@ -36,7 +37,7 @@ public class SkillWorkspaceBootstrapRunner implements ApplicationRunner {
         log.info("Skill workspace root ready: {}", root);
 
         // 同步 classpath 下预置技能到 workspace
-        List<String> synced = workspaceManager.syncBundledSkills();
+        List<String> synced = bundledSkillSyncer.sync();
         if (!synced.isEmpty()) {
             log.info("Synced {} bundled skill(s) to workspace: {}", synced.size(), synced);
         }

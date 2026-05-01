@@ -20,6 +20,7 @@ import vip.mate.skill.service.SkillService;
 import vip.mate.skill.synthesis.SkillSynthesisService;
 import vip.mate.skill.runtime.SkillRuntimeService;
 import vip.mate.skill.runtime.model.ResolvedSkill;
+import vip.mate.skill.workspace.BundledSkillSyncer;
 import vip.mate.skill.workspace.SkillWorkspaceManager;
 
 import java.util.ArrayList;
@@ -44,6 +45,7 @@ public class SkillController {
     private final SkillService skillService;
     private final SkillRuntimeService skillRuntimeService;
     private final SkillWorkspaceManager workspaceManager;
+    private final BundledSkillSyncer bundledSkillSyncer;
     private final SkillSynthesisService synthesisService;
     private final SkillDependencyChecker dependencyChecker;
     private final SkillLessonsService lessonsService;
@@ -260,7 +262,7 @@ public class SkillController {
             @RequestParam(defaultValue = "false") boolean resync) {
         List<String> resynced = List.of();
         if (resync) {
-            resynced = workspaceManager.syncBundledSkills();
+            resynced = bundledSkillSyncer.sync();
         }
         List<ResolvedSkill> skills = skillRuntimeService.refreshActiveSkills();
         return R.ok(Map.of(

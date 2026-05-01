@@ -55,6 +55,19 @@ public class SkillTemplate {
      */
     private String skillMd;
 
+    /**
+     * Optional classpath-relative directory whose files should be copied
+     * into the new skill's workspace alongside the rendered SKILL.md —
+     * e.g. {@code skill-template-bundles/airtable}. Lets a template ship
+     * scripts/, references/, and assets that are too large or too binary
+     * to inline in {@link #skillMd}.
+     *
+     * <p>The top-level {@code SKILL.md} in the bundle (if any) is skipped
+     * automatically so the wizard's rendered manifest stays authoritative;
+     * see {@code MaterializeOptions.templateOverlay()}.
+     */
+    private String bundlePath;
+
     /** Forward-compat catch-all for fields the wizard hasn't typed yet. */
     @Builder.Default
     private Map<String, Object> extras = Map.of();

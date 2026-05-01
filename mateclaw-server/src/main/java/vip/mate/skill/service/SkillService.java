@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import vip.mate.exception.MateClawException;
 import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.repository.SkillMapper;
+import vip.mate.skill.secret.SkillSecretService;
 import vip.mate.skill.workspace.SkillWorkspaceManager;
 import vip.mate.skill.workspace.SkillWorkspaceProperties;
 
@@ -40,6 +41,7 @@ public class SkillService {
     private final SkillMapper skillMapper;
     private final SkillWorkspaceManager workspaceManager;
     private final SkillWorkspaceProperties workspaceProperties;
+    private final SkillSecretService skillSecretService;
     private vip.mate.skill.runtime.SkillRuntimeService runtimeService;
 
     /**
@@ -352,6 +354,17 @@ public class SkillService {
         }
         skillMapper.hardDeleteById(id); // bypass the logical-delete flag
         log.info("Hard-deleted skill (physical delete + purge): {}", skill.getName());
+
+        // RFC-091 settings bridge — purge any per-skill secrets so a
+        // future skill reusing this id doesn't inherit stale credentials.
+        try {
+            int purged = skillSecretService.purgeForSkill(id);
+            if (purged > 0) {
+                log.info("Purged {} secret(s) for hard-deleted skill {}", purged, skill.getName());
+            }
+        } catch (Exception e) {
+            log.warn("Failed to purge secrets for skill {}: {}", skill.getName(), e.getMessage());
+        }
 
         workspaceManager.purgeWorkspace(skill.getName());
 

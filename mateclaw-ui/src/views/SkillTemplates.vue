@@ -78,6 +78,14 @@
                 class="form-input"
                 :placeholder="field.placeholder || ''"
               />
+              <input
+                v-else-if="field.type === 'secret'"
+                v-model="form[field.key]"
+                type="password"
+                autocomplete="new-password"
+                class="form-input"
+                :placeholder="field.placeholder || ''"
+              />
               <textarea
                 v-else-if="field.type === 'textarea'"
                 v-model="form[field.key]"
@@ -178,6 +186,8 @@ interface SkillTemplate {
   category?: string
   fields?: TemplateField[]
   skillMd?: string
+  /** Backend metadata (RFC-091 multi-file bridge); unused by the wizard UI. */
+  bundlePath?: string
 }
 
 const { t } = useI18n()
@@ -232,12 +242,29 @@ const step1Valid = computed(() => {
   return true
 })
 
+/** Mask for preview substitutions of secret fields. The actual value is
+ *  still sent to the backend by installSkill(); only the visible preview
+ *  hides it so screenshots / "share my screen" don't leak credentials. */
+const SECRET_MASK = '••••••••'
+
 const renderedSkillMd = computed(() => {
   if (!selectedTemplate.value || !selectedTemplate.value.skillMd) return ''
   let out = selectedTemplate.value.skillMd
+  const secretKeys = new Set(
+    (selectedTemplate.value.fields || [])
+      .filter(f => f.type === 'secret')
+      .map(f => f.key),
+  )
   // Mirror the backend's auxiliary placeholders so the preview matches reality.
   const ctx: Record<string, string> = {}
-  for (const k of Object.keys(form)) ctx[k] = form[k]?.toString() ?? ''
+  for (const k of Object.keys(form)) {
+    if (secretKeys.has(k)) {
+      const v = form[k]
+      ctx[k] = v == null || v === '' ? '' : SECRET_MASK
+    } else {
+      ctx[k] = form[k]?.toString() ?? ''
+    }
+  }
   if ('citation_required' in form) {
     const req = !!form.citation_required
     ctx.citation_string = req ? 'required' : 'optional'
