@@ -658,7 +658,7 @@ onMounted(() => {
 .pagination {
   display: flex; align-items: center; justify-content: center;
   margin-top: 14px;
-  padding: 10px 14px;
+  padding: 8px 14px;
   border: 1px solid var(--mc-border-light);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.55);
@@ -668,32 +668,14 @@ onMounted(() => {
 :root.dark .pagination { background: rgba(34, 26, 22, 0.55); }
 .page-info { font-size: 12px; color: var(--mc-text-tertiary); }
 
-/* Element Plus pagination overrides — match the brand aesthetic so
-   the off-the-shelf component blends with our glass cards. */
+/* Element Plus pagination — keep EP defaults for buttons/numbers so
+   they stay readable; only inherit our font and tint the active page
+   with the brand color. The earlier overrides set button text to
+   secondary-grey on a translucent white pill, which against the
+   glass container effectively rendered numbers invisible. */
 .pagination :deep(.el-pagination) {
-  --el-pagination-bg-color: transparent;
-  --el-pagination-button-bg-color: transparent;
-  --el-pagination-button-color: var(--mc-text-secondary);
-  --el-pagination-hover-color: var(--mc-primary);
   font-family: inherit;
-}
-.pagination :deep(.el-pagination .btn-prev),
-.pagination :deep(.el-pagination .btn-next),
-.pagination :deep(.el-pager li) {
-  background: rgba(255, 255, 255, 0.6);
-  border-radius: 8px;
-  border: 1px solid var(--mc-border-light);
-  margin: 0 2px;
-}
-:root.dark .pagination :deep(.el-pagination .btn-prev),
-:root.dark .pagination :deep(.el-pagination .btn-next),
-:root.dark .pagination :deep(.el-pager li) {
-  background: rgba(42, 32, 26, 0.6);
-}
-.pagination :deep(.el-pager li.is-active) {
-  background: var(--mc-primary);
-  color: white;
-  border-color: var(--mc-primary);
+  --el-color-primary: var(--mc-primary);
 }
 
 /* Detail drawer — wider, no internal max-height frame */
