@@ -84,22 +84,6 @@ public class AcpRuntimeSupport {
      * and the cost of a false positive (a slightly more verbose error
      * banner) is much smaller than a false negative (user staring at a
      * raw JSON-RPC blob).
-     *
-     * <p>Special case: a claude-code endpoint returning {@code 403
-     * "Request not allowed"} is almost always the keychain-hijack
-     * scenario rather than a wrong API key. The third-party
-     * {@code @zed-industries/claude-agent-acp} package wraps
-     * {@code @anthropic-ai/claude-agent-sdk}, whose auth dispatcher
-     * checks the macOS keychain ({@code Claude Code-credentials}) /
-     * {@code ~/.claude/credentials.json} BEFORE the
-     * {@code ANTHROPIC_API_KEY} env var. So a host that's done
-     * {@code claude login} silently shadows whatever API key the user
-     * configured in the endpoint env, and Anthropic's API rejects the
-     * subscription OAuth token (first-party-only) with the very
-     * specific {@code "Request not allowed"} error string. We detect
-     * that exact combination and surface the keychain-clearing remedy
-     * instead of the generic "set ANTHROPIC_API_KEY" hint, which
-     * doesn't apply here.
      */
     public String translateAuthError(AcpEndpointEntity endpoint, String originalMessage) {
         if (originalMessage == null) return null;
@@ -115,32 +99,8 @@ public class AcpRuntimeSupport {
                 || lower.contains("authenticate");
         if (!looksLikeAuth) return null;
 
-        String name = endpoint != null && endpoint.getName() != null ? endpoint.getName() : "(unknown)";
-        String slug = lower(name);
-        String command = endpoint != null ? lower(endpoint.getCommand()) : "";
-
-        // Keychain-hijack detection — must come before the generic env-
-        // missing branch because both would superficially match.
-        boolean keychainHijack = lower.contains("request not allowed")
-                && (slug.contains("claude") || command.contains("claude-agent-acp"));
-        if (keychainHijack) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("ACP endpoint '").append(name).append("' upstream auth failed with ");
-            sb.append("'Request not allowed' — almost always means the host CLI's OAuth ");
-            sb.append("credentials are hijacking the SDK auth path. ");
-            sb.append("The Claude Agent SDK reads ~/.claude/ / macOS keychain BEFORE the ");
-            sb.append("ANTHROPIC_API_KEY env var, so the API key you configured here is ");
-            sb.append("never sent — Anthropic rejects the subscription OAuth token because ");
-            sb.append("third-party processes aren't allowed to use it. ");
-            sb.append("To fix: ");
-            sb.append("(macOS) run `claude logout`, or `security delete-generic-password ");
-            sb.append("-s \"Claude Code-credentials\"`; ");
-            sb.append("(Linux / Windows) delete ~/.claude/credentials.json. ");
-            sb.append("Then click Test connection again. Original: ").append(originalMessage);
-            return sb.toString();
-        }
-
         String envVar = expectedAuthEnvVar(endpoint);
+        String name = endpoint != null && endpoint.getName() != null ? endpoint.getName() : "(unknown)";
         StringBuilder sb = new StringBuilder();
         sb.append("ACP endpoint '").append(name).append("' upstream auth failed. ");
         sb.append("Most likely the endpoint env has no API key. ");
