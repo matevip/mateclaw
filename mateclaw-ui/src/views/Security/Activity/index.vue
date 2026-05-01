@@ -231,7 +231,9 @@ const events = ref<ActivityEvent[]>([])
 const loading = ref(false)
 const page = ref(1)
 // Element Plus pagination owns this ref; @size-change writes through.
-const pageSize = ref(30)
+// Default 20 to match the smallest entry in :page-sizes — anything
+// off-list leaves the size dropdown showing a blank current value.
+const pageSize = ref(20)
 const total = ref(0)
 const filters = reactive({ source: '', action: '', resourceType: '' })
 const showMoreFilters = ref(false)
