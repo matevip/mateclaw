@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 import vip.mate.approval.model.ToolApprovalEntity;
 import vip.mate.approval.repository.ToolApprovalMapper;
 import vip.mate.audit.model.AuditEventEntity;
+import vip.mate.audit.repository.AuditEventMapper;
 import vip.mate.audit.service.AuditEventService;
 import vip.mate.common.result.R;
 
@@ -49,8 +50,28 @@ import java.util.Map;
 public class ActivityFeedController {
 
     private final AuditEventService auditEventService;
+    private final AuditEventMapper auditEventMapper;
     private final ToolApprovalMapper toolApprovalMapper;
 
+    /**
+     * RFC-090 §4.5 — paginated activity feed.
+     *
+     * <p>Pagination strategy:
+     * <ul>
+     *   <li><b>Single-source filter</b> (source=audit | approval) →
+     *       direct {@code BaseMapper.selectPage(...)} on the matching
+     *       table. Both total and records are SQL-accurate.</li>
+     *   <li><b>Combined feed</b> (source unset) → fetch
+     *       {@code page*size} rows from each side, merge by time-desc,
+     *       slice to the requested window. {@code total} is the sum
+     *       of {@code selectCount} across both tables — exact for
+     *       count, best-effort for time-merge ordering at very deep
+     *       page numbers (the merge buffer is bounded but typical
+     *       use stays within a few hundred rows).</li>
+     * </ul>
+     *
+     * <p>Caps: {@code size} clamped to [1, 200]; {@code page} ≥ 1.
+     */
     @Operation(summary = "Unified activity feed (audit + approval + tool calls)")
     @GetMapping("/feed")
     public R<Map<String, Object>> feed(
@@ -58,44 +79,44 @@ public class ActivityFeedController {
             @RequestParam(required = false) String source,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        if (size <= 0 || size > 200) size = 20;
+        if (size <= 0) size = 20;
+        if (size > 200) size = 200;
         if (page <= 0) page = 1;
-
-        // Pull a chunk from each source large enough to cover the
-        // requested page after merge. We read at most page*size rows
-        // from each side; for stable cursors, future iterations should
-        // push the merge into SQL with a UNION ALL view.
-        int chunk = Math.max(size * page, 50);
-
-        List<ActivityRow> rows = new ArrayList<>();
 
         boolean wantAudit = source == null || source.isBlank() || "audit".equalsIgnoreCase(source);
         boolean wantApproval = source == null || source.isBlank() || "approval".equalsIgnoreCase(source);
 
-        if (wantAudit) {
-            try {
-                IPage<AuditEventEntity> audit = auditEventService.listEvents(
-                        workspaceId, null, null, null, null, 1, chunk);
-                for (AuditEventEntity ev : audit.getRecords()) {
-                    rows.add(fromAuditEvent(ev));
-                }
-            } catch (Exception ignored) { /* surface silence > one-source crash */ }
+        // ───── Single-source path: direct SQL pagination ─────
+        if (wantAudit && !wantApproval) {
+            return R.ok(pageAuditOnly(workspaceId, page, size));
         }
-        if (wantApproval) {
-            try {
-                Page<ToolApprovalEntity> p = new Page<>(1, chunk);
-                LambdaQueryWrapper<ToolApprovalEntity> qw = new LambdaQueryWrapper<ToolApprovalEntity>()
-                        .orderByDesc(ToolApprovalEntity::getCreatedAt);
-                IPage<ToolApprovalEntity> approvals = toolApprovalMapper.selectPage(p, qw);
-                for (ToolApprovalEntity ap : approvals.getRecords()) {
-                    rows.add(fromApproval(ap));
-                }
-            } catch (Exception ignored) { /* see above */ }
+        if (wantApproval && !wantAudit) {
+            return R.ok(pageApprovalOnly(page, size));
         }
 
+        // ───── Combined path: per-source paginate + merge ─────
+        // Fetch page*size from each side so the merged window contains
+        // the requested slice even in the worst case where one source
+        // dominates the timeline. This is wasteful at very deep pages
+        // but bounded — a follow-up can push merging into SQL via a
+        // UNION ALL view if event volume gets into 10k+/day territory.
+        int bufferSize = Math.max(size * page, 50);
+
+        LambdaQueryWrapper<AuditEventEntity> auditQ = new LambdaQueryWrapper<AuditEventEntity>()
+                .orderByDesc(AuditEventEntity::getCreateTime);
+        if (workspaceId != null) auditQ.eq(AuditEventEntity::getWorkspaceId, workspaceId);
+        IPage<AuditEventEntity> auditPage = auditEventMapper.selectPage(new Page<>(1, bufferSize), auditQ);
+
+        LambdaQueryWrapper<ToolApprovalEntity> approvalQ = new LambdaQueryWrapper<ToolApprovalEntity>()
+                .orderByDesc(ToolApprovalEntity::getCreatedAt);
+        IPage<ToolApprovalEntity> approvalPage = toolApprovalMapper.selectPage(new Page<>(1, bufferSize), approvalQ);
+
+        List<ActivityRow> rows = new ArrayList<>();
+        for (AuditEventEntity ev : auditPage.getRecords()) rows.add(fromAuditEvent(ev));
+        for (ToolApprovalEntity ap : approvalPage.getRecords()) rows.add(fromApproval(ap));
         rows.sort(Comparator.comparing(ActivityRow::time, Comparator.nullsLast(Comparator.reverseOrder())));
 
-        long total = rows.size();
+        long total = auditPage.getTotal() + approvalPage.getTotal();
         int from = Math.min((page - 1) * size, rows.size());
         int to = Math.min(from + size, rows.size());
         List<ActivityRow> sliced = rows.subList(from, to);
@@ -106,6 +127,38 @@ public class ActivityFeedController {
         resp.put("total", total);
         resp.put("records", sliced);
         return R.ok(resp);
+    }
+
+    /** Pure SQL pagination on the audit_event table; total + records both
+     *  come from the underlying {@link Page} object. */
+    private Map<String, Object> pageAuditOnly(Long workspaceId, int page, int size) {
+        LambdaQueryWrapper<AuditEventEntity> q = new LambdaQueryWrapper<AuditEventEntity>()
+                .orderByDesc(AuditEventEntity::getCreateTime);
+        if (workspaceId != null) q.eq(AuditEventEntity::getWorkspaceId, workspaceId);
+        IPage<AuditEventEntity> p = auditEventMapper.selectPage(new Page<>(page, size), q);
+        List<ActivityRow> records = new ArrayList<>(p.getRecords().size());
+        for (AuditEventEntity ev : p.getRecords()) records.add(fromAuditEvent(ev));
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("page", page);
+        resp.put("size", size);
+        resp.put("total", p.getTotal());
+        resp.put("records", records);
+        return resp;
+    }
+
+    /** Pure SQL pagination on the tool_approval table. */
+    private Map<String, Object> pageApprovalOnly(int page, int size) {
+        LambdaQueryWrapper<ToolApprovalEntity> q = new LambdaQueryWrapper<ToolApprovalEntity>()
+                .orderByDesc(ToolApprovalEntity::getCreatedAt);
+        IPage<ToolApprovalEntity> p = toolApprovalMapper.selectPage(new Page<>(page, size), q);
+        List<ActivityRow> records = new ArrayList<>(p.getRecords().size());
+        for (ToolApprovalEntity ap : p.getRecords()) records.add(fromApproval(ap));
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("page", page);
+        resp.put("size", size);
+        resp.put("total", p.getTotal());
+        resp.put("records", records);
+        return resp;
     }
 
     private ActivityRow fromAuditEvent(AuditEventEntity ev) {

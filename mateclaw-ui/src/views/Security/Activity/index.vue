@@ -98,11 +98,22 @@
           </template>
         </div>
 
-        <!-- Pagination -->
-        <div v-if="total > pageSize" class="pagination">
-          <button class="btn-ghost" :disabled="page <= 1" @click="page--; loadEvents()">←</button>
-          <span class="page-info">{{ page }} / {{ Math.ceil(total / pageSize) }}</span>
-          <button class="btn-ghost" :disabled="page >= Math.ceil(total / pageSize)" @click="page++; loadEvents()">→</button>
+        <!-- Element Plus pagination — supports size switcher / jumper /
+             total. When total fits the smallest page size we still render
+             so the user can adjust pageSize without it disappearing on
+             low-volume instances. -->
+        <div v-if="total > 0" class="pagination">
+          <el-pagination
+            v-model:current-page="page"
+            v-model:page-size="pageSize"
+            :total="total"
+            :page-sizes="[20, 50, 100]"
+            :hide-on-single-page="false"
+            background
+            layout="total, sizes, prev, pager, next, jumper"
+            @size-change="onPageSizeChange"
+            @current-change="loadEvents"
+          />
         </div>
       </div>
     </div>
@@ -220,7 +231,8 @@ interface ActivityEvent {
 const events = ref<ActivityEvent[]>([])
 const loading = ref(false)
 const page = ref(1)
-const pageSize = 30
+// Element Plus pagination owns this ref; @size-change writes through.
+const pageSize = ref(30)
 const total = ref(0)
 const filters = reactive({ source: '', action: '', resourceType: '' })
 const showMoreFilters = ref(false)
@@ -354,7 +366,7 @@ async function loadEvents() {
     const res: any = await activityApi.feed({
       source: filters.source || undefined,
       page: page.value,
-      size: pageSize,
+      size: pageSize.value,
     })
     events.value = res.data?.records || []
     total.value = res.data?.total || 0
@@ -363,6 +375,15 @@ async function loadEvents() {
   } finally {
     loading.value = false
   }
+}
+
+function onPageSizeChange(newSize: number) {
+  pageSize.value = newSize
+  // Switching page size resets to page 1 — Element Plus emits both
+  // size-change AND current-change, but order isn't guaranteed; we
+  // pin page=1 here so the request never fires with a stale offset.
+  page.value = 1
+  loadEvents()
 }
 
 function filterEventsLocally() { /* trigger recompute via reactive filter */ }
@@ -456,21 +477,32 @@ onMounted(() => {
 .btn-ghost:hover:not(:disabled) { background: var(--mc-bg-muted); color: var(--mc-text-primary); border-color: var(--mc-border); }
 .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Filter chips — single row, white space normalized */
+/* Filter bar — frosted glass surface */
 .filter-chips {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px solid var(--mc-border-light);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(14px) saturate(1.1);
+  -webkit-backdrop-filter: blur(14px) saturate(1.1);
+}
+:root.dark .filter-chips {
+  background: rgba(34, 26, 22, 0.55);
 }
 .filter-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 6px 12px; border: 1px solid var(--mc-border-light);
-  background: var(--mc-bg-elevated); color: var(--mc-text-secondary);
+  background: rgba(255, 255, 255, 0.7); color: var(--mc-text-secondary);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border-radius: 999px; font-size: 12px; font-weight: 500; cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
   font-family: inherit;
 }
+:root.dark .filter-chip { background: rgba(42, 32, 26, 0.6); }
 .filter-chip:hover { border-color: var(--mc-border); color: var(--mc-text-primary); }
-/* Active chip — orange brand accent, not raw text-primary which inverted
-   awkwardly in dark mode (white-on-white-ish). */
+/* Active chip — brand-coloured, glass-tinted */
 .filter-chip.active {
   background: var(--mc-primary-bg);
   color: var(--mc-primary);
@@ -531,21 +563,28 @@ onMounted(() => {
   padding: 14px 16px;
   border: 1px solid var(--mc-border-light);
   border-radius: 12px;
-  background: var(--mc-bg-elevated);
+  /* Frosted glass: semi-transparent surface + blur of whatever sits
+     behind. Cheaper than a full opaque card and visually cohesive
+     with the parent mc-page-frame which already uses backdrop-filter. */
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(12px) saturate(1.08);
+  -webkit-backdrop-filter: blur(12px) saturate(1.08);
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  transition: background 0.18s, border-color 0.18s, box-shadow 0.18s;
   margin-bottom: 8px;
   font-family: inherit;
   font-size: inherit;
   color: inherit;
 }
+:root.dark .event-row { background: rgba(42, 32, 26, 0.55); }
 .event-row:last-child { margin-bottom: 0; }
 .event-row:hover {
   border-color: var(--mc-border);
-  background: var(--mc-bg-muted);
+  background: rgba(255, 255, 255, 0.85);
   box-shadow: var(--mc-shadow-soft);
 }
+:root.dark .event-row:hover { background: rgba(56, 42, 34, 0.7); }
 /* Don't translateY on hover — the parent mc-page-frame has rounded
    corners + a glow ::before overlay; lifted cards visibly poked
    through the rounded border. */
@@ -617,9 +656,44 @@ onMounted(() => {
 
 .pagination {
   display: flex; align-items: center; justify-content: center;
-  gap: 14px; margin-top: 12px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--mc-border-light);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(14px) saturate(1.1);
+  -webkit-backdrop-filter: blur(14px) saturate(1.1);
 }
+:root.dark .pagination { background: rgba(34, 26, 22, 0.55); }
 .page-info { font-size: 12px; color: var(--mc-text-tertiary); }
+
+/* Element Plus pagination overrides — match the brand aesthetic so
+   the off-the-shelf component blends with our glass cards. */
+.pagination :deep(.el-pagination) {
+  --el-pagination-bg-color: transparent;
+  --el-pagination-button-bg-color: transparent;
+  --el-pagination-button-color: var(--mc-text-secondary);
+  --el-pagination-hover-color: var(--mc-primary);
+  font-family: inherit;
+}
+.pagination :deep(.el-pagination .btn-prev),
+.pagination :deep(.el-pagination .btn-next),
+.pagination :deep(.el-pager li) {
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 8px;
+  border: 1px solid var(--mc-border-light);
+  margin: 0 2px;
+}
+:root.dark .pagination :deep(.el-pagination .btn-prev),
+:root.dark .pagination :deep(.el-pagination .btn-next),
+:root.dark .pagination :deep(.el-pager li) {
+  background: rgba(42, 32, 26, 0.6);
+}
+.pagination :deep(.el-pager li.is-active) {
+  background: var(--mc-primary);
+  color: white;
+  border-color: var(--mc-primary);
+}
 
 /* Detail drawer — wider, no internal max-height frame */
 .detail-shell {
@@ -629,23 +703,33 @@ onMounted(() => {
 
 .detail-hero {
   /* Indented so the absolute-positioned dot sits inside, not behind
-     the drawer's left edge. The earlier `left: -16px` could clip on
-     drawers that don't have transparent borders. */
+     the drawer's left edge. */
   position: relative;
-  padding: 4px 0 18px 18px;
-  border-bottom: 1px solid var(--mc-border-light);
+  padding: 18px 18px 22px;
+  margin: -8px -8px 0;
+  border-radius: 16px;
+  border: 1px solid var(--mc-border-light);
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
 }
+:root.dark .detail-hero { background: rgba(42, 32, 26, 0.55); }
 .detail-dot {
-  position: absolute; left: 0; top: 14px;
+  position: absolute; left: 18px; top: 24px;
   width: 10px; height: 10px; border-radius: 50%;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.4);
 }
+:root.dark .detail-dot { box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.08); }
 .detail-headline {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   margin: 0 0 6px;
+  padding-left: 22px;  /* leave room for the dot at left: 18px */
   font-size: 22px; font-weight: 700; line-height: 1.3;
   color: var(--mc-text-primary);
   letter-spacing: -0.01em;
 }
+.detail-target-name { margin-left: 22px; }
+.detail-meta { padding-left: 22px; }
 .detail-actor { font-weight: 700; }
 .detail-verb {
   font-size: 16px; font-weight: 600;
