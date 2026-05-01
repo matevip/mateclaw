@@ -228,25 +228,41 @@ public class AgentBindingService {
      * {@link #getEffectiveToolNames} allowlist completely.
      */
     private static final Set<String> SYSTEM_LEVEL_TOOLS = Set.of(
-            // Memory write/read primitives — every agent needs these
-            // regardless of skill bindings, otherwise the self-evolution
-            // path collapses (§11.3 / §11.4).
+            // Structured memory primitives — used by every agent regardless
+            // of skill bindings, otherwise the self-evolution path collapses
+            // (§11.3 / §11.4).
             "record_lesson",
             "remember",
             "remember_structured",
             "recall_structured",
             "forget_structured",
-            // Workspace memory file CRUD (PROFILE.md / MEMORY.md / SOUL.md)
-            "read_workspace_file",
-            "write_workspace_file",
-            "list_workspace_files",
+            // Workspace memory file CRUD (PROFILE.md / MEMORY.md / SOUL.md /
+            // memory/YYYY-MM-DD.md). Prior versions whitelisted
+            // "read_workspace_file" / "write_workspace_file" /
+            // "list_workspace_files" — those names match no @Tool bean; the
+            // actual function names carry the "_memory" segment, so the
+            // earlier carve-out was silently dead.
+            "list_workspace_memory_files",
+            "read_workspace_memory_file",
+            "write_workspace_memory_file",
+            "edit_workspace_memory_file",
             // Skill discovery / dispatch — skills are docs, not callables;
             // these helpers let the LLM read SKILL.md / run scripts.
             "readSkillFile",
             "runSkillScript",
-            // Date/time + delegate — fundamental cross-skill utilities
-            "datetime",
-            "delegate_agent",
+            "listSkillFiles",
+            "listAvailableSkills",
+            // Date / time — prior whitelist had a fictional "datetime"; the
+            // real DateTimeTool exposes three separate methods.
+            "getCurrentDate",
+            "getCurrentDateTime",
+            "getCurrentTime",
+            // Multi-agent delegation — prior whitelist had "delegate_agent",
+            // but DelegateAgentTool's @Tool methods are delegateToAgent /
+            // delegateParallel / listAvailableAgents. Same dead-name bug.
+            "delegateToAgent",
+            "delegateParallel",
+            "listAvailableAgents",
             // Document / media generation — agent-wide capabilities, never
             // declared inside any skill manifest. Pre-Phase-2b these were
             // universally visible; the new gate silently strips them whenever
@@ -260,7 +276,26 @@ public class AgentBindingService {
             "renderDocxFromFiles",
             "image_generate",
             "music_generate",
-            "video_generate"
+            "video_generate",
+            // Universal capabilities the global system prompts (SOUL.md /
+            // AGENTS.md / "Web Search Capability" / "File Reading Guidelines")
+            // explicitly tell the LLM exist. Pre-Phase-2b they were globally
+            // available; the new gate silently hid them on any agent with
+            // skills bound, so the prompt promises a tool the registry then
+            // refuses ("Tool not found: search"). Observed 2026-05-01 on the
+            // Code Reviewer agent — the model called search → got
+            // not-found → gave up before ever reaching renderDocx.
+            "search",
+            "browser_use",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "execute_shell_command",
+            "detect_file_type",
+            "extract_document_text",
+            "extract_pdf_text",
+            "extract_docx_text",
+            "readMateClawDoc"
     );
 
     private ResolvedSkill findResolvedSkillById(Long skillId) {
