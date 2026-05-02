@@ -360,26 +360,20 @@ public class WikiRawMaterialService {
                         // Append inline-image captions for PDFs so chunk-level search
                         // hits chart/diagram contents that the text extractor missed.
                         // Failures are non-fatal: the body text is still returned.
-                        EnrichmentOutcome enrichment = appendPdfImageCaptions(entity, text);
+                        String enriched = appendPdfImageCaptions(entity, text);
 
                         if (truncated) {
-                            // 截断的结果不缓存，避免永久丢失后半内容。返回文本供分块处理使用。
+                            // Truncated results are not cached so we don't lose the tail
+                            // permanently — we still return the text for chunking use.
                             log.warn("[Wiki] Extracted text truncated at {} chars for: {} (full document may be larger)",
                                     text.length(), entity.getSourcePath());
-                        } else if (!enrichment.shouldCache()) {
-                            // Vision was unavailable but the PDF has images we'd otherwise
-                            // caption — leave extracted_text NULL so the next call retries
-                            // once the operator enables wiki.ocr.enabled.
-                            log.info("[Wiki] PDF id={} captioning deferred (vision disabled or unavailable); "
-                                    + "extracted_text not cached so next read retries", entity.getId());
                         } else {
-                            // Full extraction: cache to avoid re-extracting on subsequent calls.
-                            updateExtractedText(entity.getId(), enrichment.text());
+                            updateExtractedText(entity.getId(), enriched);
                         }
                         log.info("[Wiki] Extracted text from {}: {} chars (text) → {} chars (enriched), method={}, truncated={}, cached={}",
-                                entity.getSourcePath(), text.length(), enrichment.text().length(),
-                                json.getStr("method"), truncated, enrichment.shouldCache() && !truncated);
-                        return enrichment.text();
+                                entity.getSourcePath(), text.length(), enriched.length(),
+                                json.getStr("method"), truncated, !truncated);
+                        return enriched;
                     }
                 }
                 log.warn("[Wiki] Document extraction returned no text for: {}", entity.getSourcePath());
@@ -391,74 +385,39 @@ public class WikiRawMaterialService {
     }
 
     /**
-     * Enrichment outcome: text + a hint about whether the result is final.
-     *
-     * <p>{@code shouldCache=false} signals the caller to skip the
-     * extracted_text cache write so the next call re-runs PDF image
-     * captioning. This handles the common operator workflow of uploading
-     * a PDF before flipping {@code wiki.ocr.enabled} on — without the
-     * skip, the partial text-only result would block the eventual
-     * caption catch-up.
-     */
-    private record EnrichmentOutcome(String text, boolean shouldCache) { }
-
-    /**
      * For PDF raw materials, walks the inline images and appends a section of
      * {@code [图 P{n}#{m}]: <caption>} markers so downstream chunking and
      * search can index image contents.
      *
-     * <p>Returns an {@link EnrichmentOutcome} that distinguishes three cases:
-     * <ul>
-     *   <li>Non-PDF / no extractor / no images present → text unchanged,
-     *       {@code shouldCache=true}.</li>
-     *   <li>Vision disabled but the PDF has inline images → text unchanged,
-     *       {@code shouldCache=false} so the next read retries after the
-     *       operator flips {@code wiki.ocr.enabled} on.</li>
-     *   <li>Vision enabled and at least one image captioned → enriched text,
-     *       {@code shouldCache=true}.</li>
-     *   <li>Vision enabled but every image's caption call failed → text
-     *       unchanged, {@code shouldCache=true} (transient failures should
-     *       not block the cache; if the model is wedged, retry happens via
-     *       a manual reprocess).</li>
-     * </ul>
+     * <p>When {@link #VISION_FLAG_KEY} is off, returns the body unchanged
+     * without re-parsing the PDF — the operator's "off = ignore images"
+     * intent. Flipping the flag on later requires a manual reprocess for
+     * existing rows to pick up captions.
      */
-    private EnrichmentOutcome appendPdfImageCaptions(WikiRawMaterialEntity entity, String body) {
+    private String appendPdfImageCaptions(WikiRawMaterialEntity entity, String body) {
         if (!"pdf".equals(entity.getSourceType()) || pdfImageExtractor == null) {
-            return new EnrichmentOutcome(body, true);
+            return body;
+        }
+        if (featureFlagService == null || !featureFlagService.isEnabled(VISION_FLAG_KEY)) {
+            return body;
         }
 
         java.nio.file.Path pdfPath = java.nio.file.Paths.get(entity.getSourcePath());
-
-        // Vision-disabled path: only refuse the cache when the PDF actually has
-        // qualifying images. Image-less PDFs can still be cached as text-only.
-        boolean visionEnabled = featureFlagService != null
-                && featureFlagService.isEnabled(VISION_FLAG_KEY);
-        if (!visionEnabled) {
-            boolean hasImages = pdfImageExtractor.hasInlineImages(pdfPath);
-            if (hasImages) {
-                log.info("[Wiki] PDF id={} has inline images but {} is disabled; "
-                        + "skipping captioning and deferring extracted_text cache",
-                        entity.getId(), VISION_FLAG_KEY);
-                return new EnrichmentOutcome(body, false);
-            }
-            return new EnrichmentOutcome(body, true);
-        }
-
         try {
             List<String> snippets = pdfImageExtractor.captionInlineImages(pdfPath);
             if (snippets.isEmpty()) {
-                return new EnrichmentOutcome(body, true);
+                return body;
             }
             StringBuilder sb = new StringBuilder(body);
             sb.append("\n\n--- Inline images ---\n");
             for (String snippet : snippets) {
                 sb.append(snippet).append('\n');
             }
-            return new EnrichmentOutcome(sb.toString(), true);
+            return sb.toString();
         } catch (Exception e) {
             log.warn("[Wiki] PDF inline-image captioning failed for id={}: {}",
                     entity.getId(), e.getMessage());
-            return new EnrichmentOutcome(body, true);
+            return body;
         }
     }
 
@@ -477,6 +436,11 @@ public class WikiRawMaterialService {
     private String extractTextFromImage(WikiRawMaterialEntity entity) {
         if (entity.getSourcePath() == null || entity.getSourcePath().isBlank()) {
             log.warn("[Wiki] Image raw material missing sourcePath: id={}", entity.getId());
+            return "";
+        }
+        if (featureFlagService == null || !featureFlagService.isEnabled(VISION_FLAG_KEY)) {
+            log.info("[Wiki] Image raw id={} skipped: {} is disabled",
+                    entity.getId(), VISION_FLAG_KEY);
             return "";
         }
         byte[] imageBytes;
