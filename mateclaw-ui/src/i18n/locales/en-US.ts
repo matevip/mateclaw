@@ -330,6 +330,8 @@ export default {
       disabled: 'Disabled {key}',
       toggleFailed: 'Toggle failed, please retry',
       footer: 'New features ship disabled by default. After enabling, watch the metrics and logs for the relevant module before widening the rollout.',
+      notWired: 'Not yet wired',
+      notWiredTooltip: 'This flag is reserved but the underlying feature is not implemented yet — toggling has no effect.',
       scope: {
         kb: 'KB whitelist',
         user: 'User whitelist',

@@ -320,6 +320,8 @@ export default {
       disabled: '已关闭 {key}',
       toggleFailed: '切换失败，请稍后重试',
       footer: '默认情况下新功能以关闭状态发布。开启后请关注对应模块的指标与日志，确认无回归再扩大灰度。',
+      notWired: '未实装',
+      notWiredTooltip: '该开关已预留但功能尚未实装，开启暂不会生效',
       scope: {
         kb: '知识库白名单',
         user: '用户白名单',

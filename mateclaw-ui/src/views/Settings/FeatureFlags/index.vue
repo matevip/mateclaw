@@ -17,9 +17,19 @@
     </div>
 
     <div v-else-if="flags.length > 0" class="settings-card">
-      <div v-for="flag in flags" :key="flag.flagKey" class="setting-item">
+      <div
+        v-for="flag in flags"
+        :key="flag.flagKey"
+        class="setting-item"
+        :class="{ 'setting-item--unwired': !isWired(flag) }"
+      >
         <div class="setting-info">
-          <div class="setting-label flag-key">{{ flag.flagKey }}</div>
+          <div class="flag-header">
+            <span class="setting-label flag-key">{{ flag.flagKey }}</span>
+            <span v-if="!isWired(flag)" class="flag-badge">
+              {{ t('settings.featureFlags.notWired') }}
+            </span>
+          </div>
           <div v-if="describe(flag)" class="setting-hint">{{ describe(flag) }}</div>
           <div v-if="hasScope(flag)" class="flag-scope">
             <span v-if="flag.whitelistKbIds">
@@ -34,11 +44,14 @@
           </div>
         </div>
         <div class="setting-control">
-          <label class="toggle-switch">
+          <label
+            class="toggle-switch"
+            :title="!isWired(flag) ? t('settings.featureFlags.notWiredTooltip') : ''"
+          >
             <input
               type="checkbox"
               :checked="flag.enabled"
-              :disabled="pending[flag.flagKey] === true"
+              :disabled="pending[flag.flagKey] === true || !isWired(flag)"
               @change="onToggle(flag, ($event.target as HTMLInputElement).checked)"
             />
             <span class="toggle-slider"></span>
@@ -63,6 +76,20 @@ import { Loading, WarningFilled } from '@element-plus/icons-vue'
 import { featureFlagApi, type FeatureFlag } from '@/api/index'
 
 const { t, getLocaleMessage, locale } = useI18n()
+
+// Flag keys that have at least one featureFlagService.isEnabled(...) consumer
+// in the backend. Seeded flags without a consumer toggle to no effect, which
+// confuses operators — we grey them out + tooltip "not yet implemented".
+//
+// Update this set whenever a new flag gets wired. Verify with:
+//   grep -rn 'featureFlagService\.isEnabled' mateclaw-server/src/main/java
+const WIRED_FLAGS = new Set<string>([
+  'wiki.ocr.enabled',
+])
+
+function isWired(flag: FeatureFlag): boolean {
+  return WIRED_FLAGS.has(flag.flagKey)
+}
 
 // Walk the message tree manually — vue-i18n's t()/tm() interpret dots as a
 // nested path, and our flagKey ("wiki.ocr.enabled") contains dots that should
@@ -148,6 +175,32 @@ onMounted(load)
 .flag-key {
   font-family: var(--mc-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 13px;
+}
+
+.flag-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.flag-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--mc-bg-sunken);
+  color: var(--mc-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.setting-item--unwired .setting-label,
+.setting-item--unwired .setting-hint {
+  opacity: 0.55;
+}
+.setting-item--unwired .toggle-switch {
+  cursor: not-allowed;
 }
 
 .flag-scope {
