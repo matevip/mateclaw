@@ -46,4 +46,14 @@ public class WikiHotCacheService {
     public String getContentOrNull(Long kbId) {
         return findByKb(kbId).map(WikiHotCacheEntity::getContent).orElse(null);
     }
+
+    /**
+     * Soft-deletes the row by id. The {@code deleted} column flips via
+     * the mapper's {@code @TableLogic} annotation, so the next event-driven
+     * rebuild will create a fresh row.
+     */
+    public void softDelete(Long id) {
+        if (id == null) return;
+        mapper.deleteById(id);
+    }
 }
