@@ -82,10 +82,21 @@ public class McpServerController {
      * RFC-03 Lane A3 — list the tools surfaced by an MCP server (QwenPaw #2495).
      *
      * <p>Reads from the in-memory cache populated on connect/refresh, so the
-     * call is non-blocking and safe to poll from the admin UI. Returns an
-     * empty list when the server is configured but disconnected, in error
-     * state, or has no tools — never an error response in that case.
-     * 404 is reserved for "the server id doesn't exist".
+     * call is non-blocking and safe to poll from the admin UI.
+     *
+     * <p><b>Response contract</b> (matches project convention "HTTP 200 + biz code"):
+     * <ul>
+     *   <li>Server exists, connected with discovered tools → HTTP 200, {@code code=200},
+     *       {@code data} = list of {name, description, inputSchema}.</li>
+     *   <li>Server exists but disconnected / in error / no tools → HTTP 200,
+     *       {@code code=200}, {@code data=[]}. The UI renders "no tools yet" rather
+     *       than an error toast.</li>
+     *   <li>Server id does not exist → HTTP 200, {@code code=500},
+     *       {@code msg="MCP server 不存在: {id}"}. The not-found path goes through
+     *       {@code MateClawException("err.mcp.not_found")} which the global handler
+     *       maps to a 200/500 envelope; callers detect not-found via {@code code != 200},
+     *       not via the HTTP status (consistent with every other CRUD endpoint).</li>
+     * </ul>
      */
     @Operation(summary = "列出 MCP Server 已发现的工具")
     @GetMapping("/{id}/tools")
