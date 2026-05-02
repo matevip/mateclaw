@@ -653,3 +653,24 @@ export const featureFlagApi = {
   update: (flagKey: string, data: FeatureFlagUpdate) =>
     http.put(`/feature-flags/${flagKey}`, data),
 }
+
+export interface WikiHotCache {
+  id: number
+  kbId: number
+  content: string | null
+  contentHash: string | null
+  lastUpdated: string | null
+  updateReason: string | null
+  rebuildCount: number
+  lastRebuildStartedAt: string | null
+  lastRebuildDurationMs: number | null
+  lastRebuildError: string | null
+  createTime: string
+  updateTime: string
+}
+
+export const hotCacheApi = {
+  get: (kbId: number) => http.get<WikiHotCache | null>(`/wiki/hot-cache/${kbId}`),
+  regenerate: (kbId: number) => http.post(`/wiki/hot-cache/${kbId}/regenerate`),
+  reset: (kbId: number) => http.delete(`/wiki/hot-cache/${kbId}`),
+}
