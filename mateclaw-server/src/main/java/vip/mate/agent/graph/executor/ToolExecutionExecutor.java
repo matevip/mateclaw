@@ -23,6 +23,7 @@ import vip.mate.tool.guard.service.ToolGuardService;
 import java.util.*;
 import java.util.Collections;
 import java.util.concurrent.*;
+import java.util.regex.Pattern;
 
 /**
  * 统一工具执行器（共享于 ActionNode 和 StepExecutionNode）
@@ -114,6 +115,16 @@ public class ToolExecutionExecutor {
     }
 
     private final Map<String, ToolCallback> toolCallbackMap;
+    /**
+     * Maps a normalized tool name (lowercase snake_case, with `_tool`/`_function`
+     * suffixes stripped) to the canonical name registered in {@link #toolCallbackMap}.
+     * Lets us resolve names the LLM sometimes mangles (e.g. {@code WebSearch},
+     * {@code web_search_tool}, {@code Read_File}) back to the registered tool
+     * before guard / lookup / event reporting run, so guard rules keyed on the
+     * canonical name aren't silently bypassed.
+     */
+    private final Map<String, String> normalizedNameLookup;
+    private static final Pattern CAMEL_BOUNDARY = Pattern.compile("([a-z0-9])([A-Z])");
     private final ToolGuardService toolGuardService;
     private final ToolGuard toolGuard; // legacy fallback
     private final ApprovalWorkflowService approvalService;
@@ -165,6 +176,7 @@ public class ToolExecutionExecutor {
     public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuard toolGuard,
                                   ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker) {
         this.toolCallbackMap = toolSet.callbackByName();
+        this.normalizedNameLookup = buildNormalizedLookup(this.toolCallbackMap.keySet());
         this.toolGuardService = null;
         this.toolGuard = toolGuard;
         this.approvalService = approvalService;
@@ -181,6 +193,7 @@ public class ToolExecutionExecutor {
                                    ToolResultStorage resultStorage,
                                    vip.mate.tool.ToolConcurrencyRegistry concurrencyRegistry) {
         this.toolCallbackMap = toolSet.callbackByName();
+        this.normalizedNameLookup = buildNormalizedLookup(this.toolCallbackMap.keySet());
         this.toolGuardService = toolGuardService;
         this.toolGuard = toolGuard;
         this.approvalService = approvalService;
@@ -268,7 +281,10 @@ public class ToolExecutionExecutor {
 
         for (int i = 0; i < toolCalls.size(); i++) {
             AssistantMessage.ToolCall toolCall = toolCalls.get(i);
-            String toolName = toolCall.name();
+            // Resolve LLM-emitted name to canonical BEFORE guard / lookup so a
+            // mangled name (Read_File, web_search_tool, BrowserUseTool) can't
+            // bypass guard rules keyed on the canonical name.
+            String toolName = resolveToolName(toolCall.name());
             String arguments = toolCall.arguments();
 
             events.add(GraphEventPublisher.toolStart(toolCall.id(), toolName, arguments));
@@ -410,7 +426,7 @@ public class ToolExecutionExecutor {
             List<GraphEventPublisher.GraphEvent> events,
             String conversationId, String workspaceBasePath,
             List<DirectToolOutput> directOutputs) {
-        String toolName = toolCall.name();
+        String toolName = resolveToolName(toolCall.name());
         String callArguments = storedArguments != null ? storedArguments : toolCall.arguments();
 
         ToolCallback callback = toolCallbackMap.get(toolName);
@@ -842,6 +858,64 @@ public class ToolExecutionExecutor {
      * <p>Case-insensitive match because LLMs sometimes change the case of
      * skill names mid-conversation.
      */
+    /**
+     * Resolve the LLM-emitted tool name to a registered canonical name.
+     * Tries exact match first (the hot path); on miss, normalizes the input
+     * (camelCase→snake_case, lowercase, strip {@code _tool}/{@code _function}
+     * suffix) and looks up the canonical equivalent. Returns the original
+     * string when no match is found, so the caller's downstream "tool not
+     * found" path still fires.
+     */
+    String resolveToolName(String requested) {
+        if (requested == null || requested.isBlank()) {
+            return requested;
+        }
+        if (toolCallbackMap.containsKey(requested)) {
+            return requested;
+        }
+        String normalized = normalizeToolName(requested);
+        String canonical = normalizedNameLookup.get(normalized);
+        if (canonical != null) {
+            log.info("[ToolExecutor] Tool name normalized: '{}' -> '{}' (via '{}')",
+                    requested, canonical, normalized);
+            return canonical;
+        }
+        return requested;
+    }
+
+    static String normalizeToolName(String name) {
+        if (name == null || name.isBlank()) {
+            return "";
+        }
+        String snake = CAMEL_BOUNDARY.matcher(name).replaceAll("$1_$2");
+        String collapsed = snake.toLowerCase(Locale.ROOT)
+                .replaceAll("[\\s\\-.]+", "_")
+                .replaceAll("_+", "_");
+        if (collapsed.endsWith("_tool")) {
+            collapsed = collapsed.substring(0, collapsed.length() - 5);
+        } else if (collapsed.endsWith("_function")) {
+            collapsed = collapsed.substring(0, collapsed.length() - 9);
+        }
+        return collapsed.replaceAll("^_+|_+$", "");
+    }
+
+    private static Map<String, String> buildNormalizedLookup(Set<String> canonicalNames) {
+        Map<String, String> result = new HashMap<>(canonicalNames.size() * 2);
+        for (String name : canonicalNames) {
+            String norm = normalizeToolName(name);
+            if (norm.isEmpty()) {
+                continue;
+            }
+            String previous = result.putIfAbsent(norm, name);
+            if (previous != null && !previous.equals(name)) {
+                log.warn("[ToolExecutor] Two registered tools normalize to the same key '{}': "
+                        + "'{}' and '{}' — only '{}' will resolve from mangled LLM emissions",
+                        norm, previous, name, previous);
+            }
+        }
+        return Map.copyOf(result);
+    }
+
     private String skillAwareNotFoundMessage(String toolName) {
         if (skillRuntimeService != null && toolName != null && !toolName.isBlank()) {
             try {
