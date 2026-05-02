@@ -85,6 +85,7 @@ const { t, getLocaleMessage, locale } = useI18n()
 //   grep -rn 'featureFlagService\.isEnabled' mateclaw-server/src/main/java
 const WIRED_FLAGS = new Set<string>([
   'wiki.ocr.enabled',
+  'wiki.hot_cache.enabled',
 ])
 
 function isWired(flag: FeatureFlag): boolean {
