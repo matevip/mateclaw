@@ -626,3 +626,30 @@ export const auditApi = {
     size?: number
   }) => http.get('/audit/events', { params }),
 }
+
+// ==================== Feature Flags ====================
+export interface FeatureFlag {
+  id: number
+  flagKey: string
+  enabled: boolean
+  description?: string
+  whitelistKbIds?: string
+  whitelistUserIds?: string
+  rolloutPercent?: number
+  createTime?: string
+  updateTime?: string
+}
+
+export interface FeatureFlagUpdate {
+  enabled?: boolean
+  description?: string
+  whitelistKbIds?: string
+  whitelistUserIds?: string
+  rolloutPercent?: number
+}
+
+export const featureFlagApi = {
+  list: () => http.get<FeatureFlag[]>('/feature-flags'),
+  update: (flagKey: string, data: FeatureFlagUpdate) =>
+    http.put(`/feature-flags/${flagKey}`, data),
+}

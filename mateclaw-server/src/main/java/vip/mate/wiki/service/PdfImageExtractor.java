@@ -64,6 +64,54 @@ public class PdfImageExtractor {
     }
 
     /**
+     * Quick check: does the PDF contain at least one inline image that
+     * passes the size threshold? Stops scanning at the first qualifying
+     * image so it's cheap on large documents.
+     *
+     * <p>Used by the upload pipeline to decide whether the absence of
+     * captions is an "actually nothing to caption" outcome (safe to cache)
+     * vs a "vision was unavailable" outcome (defer caching until flag
+     * flips on so the next read retries).
+     */
+    public boolean hasInlineImages(Path pdfPath) {
+        if (pdfPath == null) {
+            return false;
+        }
+        File pdfFile = pdfPath.toFile();
+        if (!pdfFile.isFile()) {
+            return false;
+        }
+        try (PDDocument doc = Loader.loadPDF(pdfFile)) {
+            for (PDPage page : doc.getPages()) {
+                PDResources resources = page.getResources();
+                if (resources == null) continue;
+                for (COSName name : resources.getXObjectNames()) {
+                    PDXObject obj;
+                    try {
+                        obj = resources.getXObject(name);
+                    } catch (IOException ignored) {
+                        continue;
+                    }
+                    if (!(obj instanceof PDImageXObject pdImage)) continue;
+                    BufferedImage bi;
+                    try {
+                        bi = pdImage.getImage();
+                    } catch (IOException | RuntimeException ignored) {
+                        continue;
+                    }
+                    if (bi.getWidth() >= MIN_IMAGE_SIDE_PX
+                            && bi.getHeight() >= MIN_IMAGE_SIDE_PX) {
+                        return true;
+                    }
+                }
+            }
+        } catch (IOException e) {
+            log.debug("[PdfImage] hasInlineImages probe failed for {}: {}", pdfPath, e.getMessage());
+        }
+        return false;
+    }
+
+    /**
      * Walks every page of {@code pdfPath}, captions each qualifying inline
      * image, and returns the rendered marker lines in document order.
      *

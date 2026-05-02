@@ -189,6 +189,12 @@ const sections = computed(() => [
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
   },
   {
+    id: 'feature-flags',
+    path: '/settings/feature-flags',
+    label: t('settings.sections.featureFlags', 'Feature Flags'),
+    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21V4l12 4-12 4"/><path d="M4 12v9"/></svg>',
+  },
+  {
     id: 'about',
     path: '/settings/about',
     label: t('settings.sections.about'),

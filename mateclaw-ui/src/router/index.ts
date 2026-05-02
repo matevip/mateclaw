@@ -190,6 +190,12 @@ const router = createRouter({
               meta: { title: 'Settings - Token Usage' },
             },
             {
+              path: 'feature-flags',
+              name: 'SettingsFeatureFlags',
+              component: () => import('@/views/Settings/FeatureFlags/index.vue'),
+              meta: { title: 'Settings - Feature Flags' },
+            },
+            {
               path: 'about',
               name: 'SettingsAbout',
               component: () => import('@/views/Settings/About/index.vue'),
