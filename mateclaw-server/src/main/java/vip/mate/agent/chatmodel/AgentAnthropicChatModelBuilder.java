@@ -63,7 +63,7 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
 
     @Override
     public ChatModel build(ModelConfigEntity model, ModelProviderEntity provider, RetryTemplate retry) {
-        AnthropicApi api = buildAnthropicApi(provider);
+        AnthropicApi api = buildAnthropicApi(provider, model.getRequestTimeoutSeconds());
         AnthropicChatOptions options = buildAnthropicOptions(model);
         return AnthropicChatModel.builder()
                 .anthropicApi(api)
@@ -74,6 +74,14 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
     }
 
     AnthropicApi buildAnthropicApi(ModelProviderEntity provider) {
+        return buildAnthropicApi(provider, null);
+    }
+
+    /**
+     * RFC-03 Lane B1 overload — accepts a per-model read-timeout override
+     * (seconds). Null falls back to the default 180s.
+     */
+    AnthropicApi buildAnthropicApi(ModelProviderEntity provider, Integer readTimeoutOverride) {
         if (provider == null || !modelProviderService.isProviderConfigured(provider.getProviderId())) {
             throw new MateClawException("err.agent.anthropic_not_configured",
                     "Anthropic Provider 未完成配置，请在模型设置中填写有效的 API Key 和 Base URL");
@@ -85,9 +93,9 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
         }
         String baseUrl = provider.getBaseUrl();
         RestClient.Builder restClientBuilder = applyHttpTimeouts(
-                restClientBuilderProvider.getIfAvailable(RestClient::builder));
+                restClientBuilderProvider.getIfAvailable(RestClient::builder), readTimeoutOverride);
         WebClient.Builder webClientBuilder = applyHttpTimeoutsToWebClient(
-                webClientBuilderProvider.getIfAvailable(WebClient::builder));
+                webClientBuilderProvider.getIfAvailable(WebClient::builder), readTimeoutOverride);
 
         AnthropicApi.Builder builder = AnthropicApi.builder()
                 .apiKey(apiKey.trim())
@@ -194,11 +202,20 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
      * duplicating the snippet.</p>
      */
     static RestClient.Builder applyHttpTimeouts(RestClient.Builder builder) {
+        return applyHttpTimeouts(builder, null);
+    }
+
+    /**
+     * RFC-03 Lane B1 overload — accepts a per-model read-timeout override
+     * (seconds). Null / zero / negative falls back to {@link vip.mate.llm.chatmodel.HttpTimeouts#DEFAULT_READ_TIMEOUT}
+     * so unset model configs keep the historical 180s.
+     */
+    static RestClient.Builder applyHttpTimeouts(RestClient.Builder builder, Integer readTimeoutOverride) {
         HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
+                .connectTimeout(vip.mate.llm.chatmodel.HttpTimeouts.CONNECT_TIMEOUT)
                 .build();
         JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
-        rf.setReadTimeout(Duration.ofSeconds(180));
+        rf.setReadTimeout(vip.mate.llm.chatmodel.HttpTimeouts.resolveReadTimeout(readTimeoutOverride));
         return builder.requestFactory(rf);
     }
 
@@ -214,12 +231,20 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
      * doesn't pull in reactor-netty (excluded by this project's pom).
      */
     static WebClient.Builder applyHttpTimeoutsToWebClient(WebClient.Builder builder) {
+        return applyHttpTimeoutsToWebClient(builder, null);
+    }
+
+    /**
+     * RFC-03 Lane B1 overload — same per-model override semantics as
+     * {@link #applyHttpTimeouts(RestClient.Builder, Integer)}.
+     */
+    static WebClient.Builder applyHttpTimeoutsToWebClient(WebClient.Builder builder, Integer readTimeoutOverride) {
         HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
+                .connectTimeout(vip.mate.llm.chatmodel.HttpTimeouts.CONNECT_TIMEOUT)
                 .build();
         org.springframework.http.client.reactive.JdkClientHttpConnector connector =
                 new org.springframework.http.client.reactive.JdkClientHttpConnector(httpClient);
-        connector.setReadTimeout(Duration.ofSeconds(180));
+        connector.setReadTimeout(vip.mate.llm.chatmodel.HttpTimeouts.resolveReadTimeout(readTimeoutOverride));
         return builder.clientConnector(connector);
     }
 }

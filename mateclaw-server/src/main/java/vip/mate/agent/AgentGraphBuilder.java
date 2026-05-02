@@ -1095,6 +1095,16 @@ public class AgentGraphBuilder {
 
     /** Transitional public visibility for {@code chatmodel} sub-package builders; will move into the builder in PR-0b. */
     public OpenAiApi buildOpenAiApi(ModelProviderEntity provider) {
+        return buildOpenAiApi(provider, null);
+    }
+
+    /**
+     * RFC-03 Lane B1 overload — accepts a per-model read-timeout override
+     * (seconds). Threaded into both the sync RestClient and streaming
+     * WebClient so timeout behavior is consistent across blocking and
+     * streaming chat completions. Null falls back to the default 180s.
+     */
+    public OpenAiApi buildOpenAiApi(ModelProviderEntity provider, Integer readTimeoutOverride) {
         if (provider == null || !modelProviderService.isProviderConfigured(provider.getProviderId())) {
             throw new MateClawException("err.agent.provider_not_configured", "Provider 未完成配置，请在模型设置中填写有效的 API Key 和 Base URL");
         }
@@ -1116,9 +1126,9 @@ public class AgentGraphBuilder {
         MultiValueMap<String, String> headers = buildOpenAiHeaders(kwargs);
         String completionsPath = resolveOpenAiCompletionsPath(baseUrl, kwargs);
         RestClient.Builder restClientBuilder = applyHttpTimeouts(
-                restClientBuilderProvider.getIfAvailable(RestClient::builder));
+                restClientBuilderProvider.getIfAvailable(RestClient::builder), readTimeoutOverride);
         WebClient.Builder webClientBuilder = applyHttpTimeoutsToWebClient(
-                webClientBuilderProvider.getIfAvailable(WebClient::builder));
+                webClientBuilderProvider.getIfAvailable(WebClient::builder), readTimeoutOverride);
 
         // Spring AI OpenAiApi 构造函数会先 set User-Agent 为 "spring-ai"，再 addAll 我们的 headers，
         // 导致自定义 User-Agent 被追加而非覆盖。因此对需要伪装客户端身份的 provider（如 kimi-code），
@@ -1475,11 +1485,19 @@ public class AgentGraphBuilder {
      * readTimeout=180s（覆盖 nginx 60s 网关超时 + 留足真实长响应余量；超时后由上层 retry 接管）。
      */
     private RestClient.Builder applyHttpTimeouts(RestClient.Builder builder) {
+        return applyHttpTimeouts(builder, null);
+    }
+
+    /**
+     * RFC-03 Lane B1 overload — accepts a per-model read-timeout override
+     * (seconds). Null falls back to the default 180s.
+     */
+    private RestClient.Builder applyHttpTimeouts(RestClient.Builder builder, Integer readTimeoutOverride) {
         HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
+                .connectTimeout(vip.mate.llm.chatmodel.HttpTimeouts.CONNECT_TIMEOUT)
                 .build();
         JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
-        rf.setReadTimeout(Duration.ofSeconds(180));
+        rf.setReadTimeout(vip.mate.llm.chatmodel.HttpTimeouts.resolveReadTimeout(readTimeoutOverride));
         return builder.requestFactory(rf);
     }
 
@@ -1499,12 +1517,20 @@ public class AgentGraphBuilder {
      * starter is excluded by design).
      */
     private WebClient.Builder applyHttpTimeoutsToWebClient(WebClient.Builder builder) {
+        return applyHttpTimeoutsToWebClient(builder, null);
+    }
+
+    /**
+     * RFC-03 Lane B1 overload — same per-model override semantics as
+     * {@link #applyHttpTimeouts(RestClient.Builder, Integer)}.
+     */
+    private WebClient.Builder applyHttpTimeoutsToWebClient(WebClient.Builder builder, Integer readTimeoutOverride) {
         HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
+                .connectTimeout(vip.mate.llm.chatmodel.HttpTimeouts.CONNECT_TIMEOUT)
                 .build();
         org.springframework.http.client.reactive.JdkClientHttpConnector connector =
                 new org.springframework.http.client.reactive.JdkClientHttpConnector(httpClient);
-        connector.setReadTimeout(Duration.ofSeconds(180));
+        connector.setReadTimeout(vip.mate.llm.chatmodel.HttpTimeouts.resolveReadTimeout(readTimeoutOverride));
         return builder.clientConnector(connector);
     }
 

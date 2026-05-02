@@ -35,6 +35,21 @@ public class ModelConfigEntity {
     /** 模型最大输入 token 数（上下文窗口），0 或 null 表示使用全局默认 */
     private Integer maxInputTokens;
 
+    /**
+     * RFC-03 Lane B1 — per-model HTTP read timeout (seconds).
+     *
+     * <p>Null / zero / negative → fall back to the global default of 180s
+     * (existing behavior, see {@code AgentAnthropicChatModelBuilder.applyHttpTimeouts}
+     * and the corresponding helper in {@code AgentGraphBuilder}). A positive
+     * value overrides for this specific model.
+     *
+     * <p>Use cases: {@code o1-pro} / Claude thinking-mode / large-prompt
+     * generation calls that legitimately exceed 3 min, where the default
+     * raises false-positive timeouts; conversely {@code haiku}-class models
+     * that p99 well under 30s, where a tighter timeout fails fast.
+     */
+    private Integer requestTimeoutSeconds;
+
     private Double topP;
 
     private Boolean enableSearch;
