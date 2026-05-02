@@ -39,13 +39,18 @@ public class HookActionFactory {
             case BUILTIN -> new BuiltinAction(
                     text(cfg, "op", "log.info"),
                     text(cfg, "arg", ""));
+            // RFC-03 Lane H1 — hmacSecret + signatureHeader are optional; null /
+            // blank disables signing (legacy behavior). Receivers that need
+            // origin-verification re-compute SHA-256 HMAC on the raw body.
             case HTTP -> new HttpAction(
                     sharedRestClient(),
                     text(cfg, "method", "POST"),
                     URI.create(required(cfg, "url")),
                     text(cfg, "body", null),
                     props.getTrustedDomains(),
-                    timeoutMs);
+                    timeoutMs,
+                    text(cfg, "hmacSecret", null),
+                    text(cfg, "signatureHeader", null));
             case SHELL -> new ShellAction(required(cfg, "command"));
             case CHANNEL_MESSAGE -> new ChannelMessageAction(
                     required(cfg, "channelType"),
