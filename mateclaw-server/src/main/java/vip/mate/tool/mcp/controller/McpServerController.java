@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
 import vip.mate.tool.mcp.model.McpServerEntity;
+import vip.mate.tool.mcp.model.McpToolDescriptor;
 import vip.mate.tool.mcp.runtime.McpClientManager.ConnectionResult;
 import vip.mate.tool.mcp.service.McpServerService;
 
@@ -75,6 +76,21 @@ public class McpServerController {
     public R<ConnectionResult> test(@PathVariable Long id) {
         ConnectionResult result = mcpServerService.testConnectionById(id);
         return R.ok(result);
+    }
+
+    /**
+     * RFC-03 Lane A3 — list the tools surfaced by an MCP server (QwenPaw #2495).
+     *
+     * <p>Reads from the in-memory cache populated on connect/refresh, so the
+     * call is non-blocking and safe to poll from the admin UI. Returns an
+     * empty list when the server is configured but disconnected, in error
+     * state, or has no tools — never an error response in that case.
+     * 404 is reserved for "the server id doesn't exist".
+     */
+    @Operation(summary = "列出 MCP Server 已发现的工具")
+    @GetMapping("/{id}/tools")
+    public R<List<McpToolDescriptor>> listTools(@PathVariable Long id) {
+        return R.ok(mcpServerService.listToolsByServer(id));
     }
 
     @Operation(summary = "刷新所有 MCP Server 连接")

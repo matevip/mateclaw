@@ -162,6 +162,31 @@ public class McpServerService {
     }
 
     /**
+     * RFC-03 Lane A3 — list the tools the given MCP server has surfaced
+     * to the runtime (fixes QwenPaw #2495).
+     *
+     * <p>Reads from {@link McpClientManager#getServerTools(Long)} which
+     * already caches the {@code listTools()} response on connect/refresh,
+     * so this is a constant-time lookup with no network roundtrip. The
+     * returned list is empty when the server is disconnected, in error
+     * state, or simply has no tools — never throws on those paths so the
+     * UI can render "no tools yet" rather than an error.
+     *
+     * <p>{@link #getById} is invoked first so a stale id (deleted server)
+     * still returns a 404 from the controller layer rather than silently
+     * "no tools".
+     */
+    public List<vip.mate.tool.mcp.model.McpToolDescriptor> listToolsByServer(Long id) {
+        getById(id); // throws if the server is gone — preserves 404 semantics
+        return mcpClientManager.getServerTools(id).stream()
+                .map(t -> new vip.mate.tool.mcp.model.McpToolDescriptor(
+                        t.name(),
+                        t.description(),
+                        t.inputSchema()))
+                .toList();
+    }
+
+    /**
      * 刷新所有启用的 MCP server
      */
     public void refreshAll() {
