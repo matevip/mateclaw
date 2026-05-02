@@ -154,7 +154,7 @@ public class WikiRawMaterialService {
         entity.setKbId(kbId);
         entity.setTitle(title);
         entity.setSourceType(sourceType);
-        entity.setMimeType(mimeType);
+        entity.setMimeType(capMimeType(mimeType));
         entity.setSourcePath(sourcePath);
         entity.setFileSize(fileSize);
         entity.setProcessingStatus("pending");
@@ -193,6 +193,23 @@ public class WikiRawMaterialService {
 
         log.info("[Wiki] Raw file added: id={}, kbId={}, type={}", entity.getId(), kbId, sourceType);
         return entity;
+    }
+
+    /**
+     * Defensive cap on the persisted Content-Type so a long upload header
+     * never blocks the insert. The column itself is wide (V84 → VARCHAR(255))
+     * but capping at the service layer keeps the schema and the writer in
+     * lockstep — we'd rather drop the rare overlong header (chrome-derived
+     * Content-Type with charset / boundary parameters) than fail the upload.
+     */
+    private static final int MIME_TYPE_MAX_CHARS = 255;
+
+    private static String capMimeType(String mimeType) {
+        if (mimeType == null) return null;
+        if (mimeType.length() <= MIME_TYPE_MAX_CHARS) return mimeType;
+        log.warn("[Wiki] Truncating Content-Type ({} chars) to fit storage column: {}",
+                mimeType.length(), mimeType.substring(0, 60) + "…");
+        return mimeType.substring(0, MIME_TYPE_MAX_CHARS);
     }
 
     /**
