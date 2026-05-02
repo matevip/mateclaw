@@ -56,6 +56,23 @@ public class ToolExecutionExecutor {
      * method with {@link vip.mate.tool.ConcurrencyUnsafe} instead of editing
      * this list.
      */
+    /**
+     * RFC-03 Lane A2 — defense against runaway single-response tool floods.
+     *
+     * <p>Some models (StreamLake's kat-coder-pro-v1 has been observed
+     * emitting 50+ in one shot, see QwenPaw #2055) return huge {@code tool_calls}
+     * batches in a single response. Without a cap, every call executes, which
+     * can saturate downstream provider QPS, multiply approval rows, and burn
+     * tokens. The cap is independent of {@code MAX_ITERATIONS} (which limits
+     * the loop count, not the per-response batch).
+     *
+     * <p>16 covers virtually every legitimate parallel-search / batch-edit
+     * scenario; truncated calls receive a synthetic {@link ToolResponseMessage}
+     * in the same turn so the LLM can re-issue the most-important ones in
+     * its next response rather than hanging on missing tool replies.
+     */
+    static final int MAX_TOOL_CALLS_PER_RESPONSE = 16;
+
     private static final Set<String> DEFAULT_UNSAFE_TOOLS = Set.of(
             "browser_use", "BrowserUseTool", "write_file", "edit_file"
     );
@@ -273,14 +290,31 @@ public class ToolExecutionExecutor {
         // graph can route to FinalAnswerNode without re-entering the LLM.
         List<DirectToolOutput> directOutputs = Collections.synchronizedList(new ArrayList<>());
 
-        events.add(GraphEventPublisher.phase("action", Map.of("toolCount", toolCalls.size())));
+        // RFC-03 Lane A2 — cap per-response tool_calls before doing any other
+        // work. Truncated calls get synthetic responses appended right away so
+        // the LLM sees the cap on its next turn instead of hanging on missing
+        // ToolResponseMessages. See MAX_TOOL_CALLS_PER_RESPONSE javadoc.
+        CappedToolCalls capped = capToolCalls(toolCalls, MAX_TOOL_CALLS_PER_RESPONSE);
+        if (capped.wasTruncated) {
+            int requested = toolCalls.size();
+            log.warn("[ToolExecutor] Model returned {} tool_calls in one response; truncating to {} — see RFC-03 A2",
+                    requested, MAX_TOOL_CALLS_PER_RESPONSE);
+            events.add(GraphEventPublisher.phase("toolflood", Map.of(
+                    "requested", requested,
+                    "executed", MAX_TOOL_CALLS_PER_RESPONSE,
+                    "dropped", requested - MAX_TOOL_CALLS_PER_RESPONSE)));
+            allResponses.addAll(capped.truncatedResponses);
+        }
+        List<AssistantMessage.ToolCall> effectiveCalls = capped.effective;
+
+        events.add(GraphEventPublisher.phase("action", Map.of("toolCount", effectiveCalls.size())));
 
         // ═══ Phase 1: 顺序 Guard + 分段 ═══
         List<PreparedToolCall> preparedCalls = new ArrayList<>();
         ApprovalBarrier barrier = null;
 
-        for (int i = 0; i < toolCalls.size(); i++) {
-            AssistantMessage.ToolCall toolCall = toolCalls.get(i);
+        for (int i = 0; i < effectiveCalls.size(); i++) {
+            AssistantMessage.ToolCall toolCall = effectiveCalls.get(i);
             // Resolve LLM-emitted name to canonical BEFORE guard / lookup so a
             // mangled name (Read_File, web_search_tool, BrowserUseTool) can't
             // bypass guard rules keyed on the canonical name.
@@ -332,8 +366,8 @@ public class ToolExecutionExecutor {
                     allResponses.add(new ToolResponseMessage.ToolResponse(
                             toolCall.id(), toolName, decision.response));
                     // 标记后续工具为等待审批
-                    for (int j = i + 1; j < toolCalls.size(); j++) {
-                        AssistantMessage.ToolCall remaining = toolCalls.get(j);
+                    for (int j = i + 1; j < effectiveCalls.size(); j++) {
+                        AssistantMessage.ToolCall remaining = effectiveCalls.get(j);
                         allResponses.add(new ToolResponseMessage.ToolResponse(
                                 remaining.id(), remaining.name(),
                                 "[⏳ 等待审批] 前序工具等待审批中，本工具暂缓执行。"));
@@ -1006,5 +1040,58 @@ public class ToolExecutionExecutor {
         public boolean hasDirectOutputs() {
             return directOutputs != null && !directOutputs.isEmpty();
         }
+    }
+
+    /**
+     * RFC-03 Lane A2 — outcome of {@link #capToolCalls(List, int)}. Holds the
+     * (possibly trimmed) effective list, any synthesized truncation responses
+     * that should be appended verbatim to the result, and a boolean flag so
+     * the caller can decide whether to emit an audit event.
+     */
+    record CappedToolCalls(
+            List<AssistantMessage.ToolCall> effective,
+            List<ToolResponseMessage.ToolResponse> truncatedResponses,
+            boolean wasTruncated
+    ) {}
+
+    /**
+     * RFC-03 Lane A2 — pure helper used at the top of {@link #execute}.
+     *
+     * <p>Returns the input untouched when {@code calls.size() <= maxPerResponse}.
+     * Otherwise:
+     * <ul>
+     *   <li>{@link CappedToolCalls#effective} = first {@code maxPerResponse} calls.</li>
+     *   <li>{@link CappedToolCalls#truncatedResponses} = one synthetic
+     *       {@link ToolResponseMessage.ToolResponse} per dropped call,
+     *       so the LLM gets a paired tool response on its next turn instead
+     *       of hanging on missing replies (some providers reject the request
+     *       entirely if any tool_call lacks a response).</li>
+     *   <li>{@link CappedToolCalls#wasTruncated} = true.</li>
+     * </ul>
+     *
+     * <p>Package-private so {@code ToolExecutionExecutorCapToolCallsTest}
+     * can drive every branch without booting a Spring context.
+     */
+    static CappedToolCalls capToolCalls(List<AssistantMessage.ToolCall> calls, int maxPerResponse) {
+        if (calls == null || calls.size() <= maxPerResponse) {
+            return new CappedToolCalls(
+                    calls == null ? List.of() : calls,
+                    List.of(),
+                    false);
+        }
+        List<ToolResponseMessage.ToolResponse> truncated = new ArrayList<>(calls.size() - maxPerResponse);
+        for (int i = maxPerResponse; i < calls.size(); i++) {
+            AssistantMessage.ToolCall dropped = calls.get(i);
+            truncated.add(new ToolResponseMessage.ToolResponse(
+                    dropped.id(),
+                    dropped.name(),
+                    "[truncated] tool_call dropped: model returned " + calls.size()
+                            + " calls in one response but executor cap is " + maxPerResponse
+                            + "; please reissue the most-important calls first"));
+        }
+        return new CappedToolCalls(
+                calls.subList(0, maxPerResponse),
+                truncated,
+                true);
     }
 }
