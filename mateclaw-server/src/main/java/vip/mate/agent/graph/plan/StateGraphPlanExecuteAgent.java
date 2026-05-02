@@ -45,16 +45,28 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
     private final PlanningService planningService;
     private final org.springframework.ai.chat.model.ChatModel chatModel;
     private final ConversationWindowManager conversationWindowManager;
+    /** Held only so context-window budget includes the tools schema. Nullable for legacy constructor. */
+    private final vip.mate.agent.AgentToolSet toolSet;
 
     public StateGraphPlanExecuteAgent(ChatClient chatClient, ConversationService conversationService,
                                       CompiledGraph compiledGraph, PlanningService planningService,
                                       org.springframework.ai.chat.model.ChatModel chatModel,
                                       ConversationWindowManager conversationWindowManager) {
+        this(chatClient, conversationService, compiledGraph, planningService,
+                chatModel, conversationWindowManager, null);
+    }
+
+    public StateGraphPlanExecuteAgent(ChatClient chatClient, ConversationService conversationService,
+                                      CompiledGraph compiledGraph, PlanningService planningService,
+                                      org.springframework.ai.chat.model.ChatModel chatModel,
+                                      ConversationWindowManager conversationWindowManager,
+                                      vip.mate.agent.AgentToolSet toolSet) {
         super(chatClient, conversationService);
         this.compiledGraph = compiledGraph;
         this.planningService = planningService;
         this.chatModel = chatModel;
         this.conversationWindowManager = conversationWindowManager;
+        this.toolSet = toolSet;
     }
 
     @Override
@@ -254,7 +266,8 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
                     maxInputTokens,
                     chatModel,
                     conversationId,
-                    parsedAgentId);
+                    parsedAgentId,
+                    toolSet != null ? toolSet.callbacks() : null);
         }
 
         List<Message> messages = new ArrayList<>(historyMessages);

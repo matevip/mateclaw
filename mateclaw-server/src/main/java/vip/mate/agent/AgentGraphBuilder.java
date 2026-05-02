@@ -303,7 +303,7 @@ public class AgentGraphBuilder {
         String reasoningEffort = resolveReasoningEffortForModel(runtimeModel);
         CompiledGraph compiledGraph = buildReActGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel, agentId);
         return new StateGraphReActAgent(chatClient, conversationService, compiledGraph,
-                chatModel, conversationWindowManager);
+                chatModel, conversationWindowManager, toolSet);
     }
 
     StateGraphPlanExecuteAgent buildPlanExecuteAgent(AgentToolSet toolSet, ModelConfigEntity runtimeModel, int maxIter) {
@@ -317,7 +317,7 @@ public class AgentGraphBuilder {
         String reasoningEffort = resolveReasoningEffortForModel(runtimeModel);
         CompiledGraph graph = buildPlanExecuteGraph(toolSet, chatModel, maxIter, reasoningEffort, runtimeModel, agentId);
         return new StateGraphPlanExecuteAgent(chatClient, conversationService, graph, planningService,
-                chatModel, conversationWindowManager);
+                chatModel, conversationWindowManager, toolSet);
     }
 
     CompiledGraph buildPlanExecuteGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations, String reasoningEffort) {

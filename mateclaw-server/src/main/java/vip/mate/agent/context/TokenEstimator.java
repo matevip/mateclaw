@@ -1,7 +1,10 @@
 package vip.mate.agent.context;
 
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -20,6 +23,13 @@ public final class TokenEstimator {
 
     /** 每条消息的固定开销 token（role 标记、分隔符等） */
     static final int PER_MESSAGE_OVERHEAD = 4;
+
+    /**
+     * Per-tool wrapper overhead: function/type:object boilerplate, name and
+     * description framing, parameters key, and JSON braces around the schema.
+     * Conservative — slightly overestimates so budget guards don't underrun.
+     */
+    static final int PER_TOOL_OVERHEAD = 12;
 
     private TokenEstimator() {
     }
@@ -69,6 +79,38 @@ public final class TokenEstimator {
         return messages.stream()
                 .mapToInt(TokenEstimator::estimateTokens)
                 .sum();
+    }
+
+    /**
+     * Estimate the token cost of the tool definitions sent on every LLM call
+     * (name + description + JSON inputSchema, plus per-tool wrapper overhead).
+     * <p>
+     * A heavily-bound agent (multiple MCP servers, many built-ins) can carry
+     * several thousand tokens of tool schema on every request — leaving them
+     * out of the context-window budget makes compression decisions fire too
+     * late and on small models triggers HTTP 400 once the request actually
+     * goes out.
+     */
+    public static int estimateToolsTokens(Collection<ToolCallback> callbacks) {
+        if (callbacks == null || callbacks.isEmpty()) {
+            return 0;
+        }
+        int total = 0;
+        for (ToolCallback cb : callbacks) {
+            if (cb == null) continue;
+            ToolDefinition def;
+            try {
+                def = cb.getToolDefinition();
+            } catch (Exception e) {
+                continue;
+            }
+            if (def == null) continue;
+            total += estimateTokens(def.name())
+                    + estimateTokens(def.description())
+                    + estimateTokens(def.inputSchema())
+                    + PER_TOOL_OVERHEAD;
+        }
+        return total;
     }
 
     /**
