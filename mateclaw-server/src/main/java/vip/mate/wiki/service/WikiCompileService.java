@@ -14,10 +14,12 @@ import org.springframework.stereotype.Service;
 import vip.mate.agent.prompt.PromptLoader;
 import vip.mate.wiki.job.WikiJobStep;
 import vip.mate.wiki.job.WikiModelRoutingService;
+import vip.mate.wiki.metrics.WikiMetrics;
 import vip.mate.wiki.model.WikiChunkEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.repository.WikiChunkMapper;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -43,6 +45,7 @@ public class WikiCompileService {
     private final WikiPageService pageService;
     private final WikiCitationService citationService;
     private final ObjectMapper objectMapper;
+    private final WikiMetrics metrics;
 
     /**
      * Optional. When wired we use the routing chain (stepModels[CREATE_PAGE]
@@ -91,12 +94,16 @@ public class WikiCompileService {
         int cap = (maxEvidenceChunks == null || maxEvidenceChunks <= 0)
                 ? 8 : Math.min(20, maxEvidenceChunks);
 
+        long startNanos = System.nanoTime();
+
         // 1. Retrieve evidence chunks via semantic search (hybrid retriever).
         List<HybridRetriever.ChunkHit> hits = hybridRetriever.searchChunks(kbId, topic, cap);
         if (hits.isEmpty()) {
             // Structured "nothing matched" result rather than throw — lets the
             // tool surface respond with a clean message instead of a stack trace.
             log.info("[WikiCompile] No evidence chunks for topic='{}' kbId={}", topic, kbId);
+            metrics.recordCompileStage("no_evidence", kbId,
+                    Duration.ofNanos(System.nanoTime() - startNanos));
             return CompileResult.noEvidence();
         }
 
@@ -186,6 +193,8 @@ public class WikiCompileService {
         }
         if (overviewService != null) overviewService.rebuild(kbId);
 
+        metrics.recordCompileStage("compile_page", kbId,
+                Duration.ofNanos(System.nanoTime() - startNanos));
         return new CompileResult(persisted.getId(), resolvedSlug, title, evidenceChunkIds.size(), created);
     }
 

@@ -8,11 +8,13 @@ import vip.mate.wiki.WikiProperties;
 import vip.mate.wiki.dto.PageSearchResult;
 import vip.mate.wiki.dto.RelatedPageResult;
 import vip.mate.wiki.dto.WikiPageLite;
+import vip.mate.wiki.metrics.WikiMetrics;
 import vip.mate.wiki.model.WikiChunkEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.repository.WikiPageMapper;
 import vip.mate.wiki.retrieval.SnippetExtractor;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -32,6 +34,7 @@ public class HybridRetriever {
     private final WikiEmbeddingService embeddingService;
     private final WikiProperties properties;
     private final WikiPageMapper pageMapper;
+    private final WikiMetrics metrics;
 
     @Autowired(required = false)
     private WikiRelationService relationService;
@@ -42,12 +45,14 @@ public class HybridRetriever {
                             WikiChunkService chunkService,
                             WikiEmbeddingService embeddingService,
                             WikiProperties properties,
-                            WikiPageMapper pageMapper) {
+                            WikiPageMapper pageMapper,
+                            WikiMetrics metrics) {
         this.pageService = pageService;
         this.chunkService = chunkService;
         this.embeddingService = embeddingService;
         this.properties = properties;
         this.pageMapper = pageMapper;
+        this.metrics = metrics;
     }
 
     public enum Mode { KEYWORD, SEMANTIC, HYBRID }
@@ -79,6 +84,8 @@ public class HybridRetriever {
     public List<PageSearchResult> search(Long kbId, String query, String modeStr, int topK) {
         Mode mode = parseMode(modeStr);
 
+        long startNanos = System.nanoTime();
+
         List<RankedItem> semantic = List.of();
         List<RankedItem> keyword = List.of();
 
@@ -107,7 +114,11 @@ public class HybridRetriever {
 
         // Batch-fetch page info (N+1 fix)
         List<Long> topIds = fused.stream().limit(topK).map(ri -> ri.pageId).toList();
-        if (topIds.isEmpty()) return List.of();
+        if (topIds.isEmpty()) {
+            metrics.recordRetrieval(mode.name().toLowerCase(),
+                    Duration.ofNanos(System.nanoTime() - startNanos), 0);
+            return List.of();
+        }
 
         Map<Long, WikiPageLite> liteMap = pageMapper.selectBatchLite(topIds)
             .stream().collect(Collectors.toMap(WikiPageLite::id, p -> p));
@@ -142,6 +153,8 @@ public class HybridRetriever {
                 snippet != null ? snippet : lite.summary(),
                 ri.matchedBy, reason, ri.score));
         }
+        metrics.recordRetrieval(mode.name().toLowerCase(),
+                Duration.ofNanos(System.nanoTime() - startNanos), results.size());
         return results;
     }
 
