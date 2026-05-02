@@ -162,8 +162,7 @@ public class McpServerService {
     }
 
     /**
-     * RFC-03 Lane A3 — list the tools the given MCP server has surfaced
-     * to the runtime (fixes QwenPaw #2495).
+     * List the tools the given MCP server has surfaced to the runtime.
      *
      * <p>Reads from {@link McpClientManager#getServerTools(Long)} which
      * already caches the {@code listTools()} response on connect/refresh,

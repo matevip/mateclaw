@@ -132,7 +132,7 @@ public class ShellExecuteTool {
      * Windows: cmd.exe /D /S /C "command"
      *   /D 禁用 AutoRun 注册表项，避免副作用
      *   /S 保留引号原样传递给命令
-     * Unix: $SHELL -c command (RFC-03 Lane A1, fixes QwenPaw #3767)
+     * Unix: $SHELL -c command (honors the user's interactive shell)
      *   honors the user's interactive shell so alias resolution / PATH
      *   from the calling environment still apply; falls back to /bin/sh
      *   when $SHELL is unset or points at a non-executable path.
@@ -188,8 +188,7 @@ public class ShellExecuteTool {
     }
 
     /**
-     * RFC-03 Lane A1 — pick the POSIX shell binary to invoke for a non-Windows
-     * tool call (fixes QwenPaw #3767).
+     * Pick the POSIX shell binary to invoke for a non-Windows tool call.
      *
      * <p>Returns {@code userShellEnv} verbatim when:
      * <ul>

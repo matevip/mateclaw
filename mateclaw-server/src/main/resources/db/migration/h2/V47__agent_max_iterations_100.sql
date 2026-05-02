@@ -1,8 +1,8 @@
--- V47: Bump default agents' max_iterations to 100 (QwenPaw-style hard ceiling).
+-- V47: Bump default agents' max_iterations to 100 (hard ceiling).
 --
 -- The previous defaults (25 for ReAct, 20 for plan-execute) ran the LimitExceededNode
 -- too eagerly on substantive multi-tool tasks (e.g. document generation with image
--- conversion). New default is 100, matching QwenPaw's _MAX_MAX_ITERATIONS upper bound.
+-- conversion). New default is 100, the hard upper bound enforced at runtime.
 -- AgentGraphBuilder still clamps any per-agent override to MAX_ITERATIONS_HARD_CEILING
 -- at runtime, so a user-configured 200 will be silently capped to 100.
 --

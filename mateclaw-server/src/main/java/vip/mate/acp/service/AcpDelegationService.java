@@ -203,7 +203,7 @@ public class AcpDelegationService {
      * Extract plain text from an ACP {@code content} field. The shape
      * varies between agents — Zed uses {@code [{type:"text",text:"..."}]},
      * some emit a single object, others nest in {@code resource.text}.
-     * Mirror QwenPaw's tolerant extractor.
+     * Tolerant extractor that handles all known shapes.
      */
     private String extractText(JsonNode content) {
         if (content == null || content.isNull()) return "";

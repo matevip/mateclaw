@@ -42,12 +42,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * without manual binding.
  *
  * <p>This solves the "ACP configured as skill cannot be called"
- * usability bug (matches the inspiration from QwenPaw's
- * {@code delegate_external_agent} pattern, but keeps MateClaw's
- * skill-card affordance for endpoint discovery): the user manages
- * endpoints in Settings ▸ ACP Endpoints, and a card automatically
- * appears on the Skills page — no per-endpoint SKILL.md authoring
- * required.
+ * usability bug while keeping MateClaw's skill-card affordance for
+ * endpoint discovery: the user manages endpoints in Settings ▸ ACP
+ * Endpoints, and a card automatically appears on the Skills page —
+ * no per-endpoint SKILL.md authoring required.
  *
  * <p>Lifecycle:
  * <ul>

@@ -79,7 +79,7 @@ public class McpServerController {
     }
 
     /**
-     * RFC-03 Lane A3 — list the tools surfaced by an MCP server (QwenPaw #2495).
+     * List the tools surfaced by an MCP server.
      *
      * <p>Reads from the in-memory cache populated on connect/refresh, so the
      * call is non-blocking and safe to poll from the admin UI.

@@ -49,7 +49,7 @@ public abstract class BaseAgent {
     /**
      * Max ReAct iterations (one reasoning + action + observation step counts as one).
      * Default 100, hard ceiling 100 (enforced in AgentGraphBuilder so per-agent DB
-     * overrides cannot exceed it). Aligned with QwenPaw's _MAX_MAX_ITERATIONS.
+     * overrides cannot exceed it).
      */
     public static final int MAX_ITERATIONS_HARD_CEILING = 100;
     protected int maxIterations = 100;

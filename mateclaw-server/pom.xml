@@ -382,7 +382,7 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- RFC-03 Lane G2: distributed lock for the cron scheduler so a
+        <!-- ShedLock: distributed lock for the cron scheduler so a
              multi-instance deployment doesn't fire the same job N times.
              JDBC mode reuses the existing DataSource — no Redis dependency
              on the desktop / single-node footprint. -->

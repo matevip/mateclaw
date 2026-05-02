@@ -41,7 +41,7 @@ public record DeliveryConfig(
          * is still persisted, audit + token-usage all work — only the
          * agent's narrative reply is suppressed from the channel.
          *
-         * <p>Use cases (QwenPaw #2452): noon health-check cron that just
+         * <p>Use cases: noon health-check cron that just
          * pokes a database and writes structured output, project-weekly
          * report jobs that drop a file into a knowledge base, internal
          * pipelines that don't need an IM-visible "I did the thing"

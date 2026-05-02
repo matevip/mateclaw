@@ -155,7 +155,7 @@ public class AgentGraphBuilder {
         // the agent's bound-skill requires-model. Falls back to the
         // global default when no preferred provider satisfies, so the
         // existing "no default model" error path stays intact.
-        // RFC-03 Lane G1 — honor per-Agent model override when set.
+        // Honor per-Agent model override when set.
         // resolveModel() looks up entity.modelName in enabled-only models;
         // null / blank / unmatched silently fall back to getDefaultModel(),
         // preserving the legacy behavior for Agents without an override.
@@ -229,7 +229,7 @@ public class AgentGraphBuilder {
         }
         // Default 100 if DB row leaves max_iterations null; clamp per-agent overrides
         // to the hard ceiling (BaseAgent.MAX_ITERATIONS_HARD_CEILING) so a misconfigured
-        // row can never push an unbounded loop. Aligned with QwenPaw's 1..100 range.
+        // row can never push an unbounded loop. Effective range: 1..100.
         int rawMaxIter = entity.getMaxIterations() != null ? entity.getMaxIterations() : 100;
         int maxIter = Math.max(1, Math.min(rawMaxIter, BaseAgent.MAX_ITERATIONS_HARD_CEILING));
         if (maxIter != rawMaxIter) {
@@ -1099,10 +1099,10 @@ public class AgentGraphBuilder {
     }
 
     /**
-     * RFC-03 Lane B1 overload — accepts a per-model read-timeout override
-     * (seconds). Threaded into both the sync RestClient and streaming
-     * WebClient so timeout behavior is consistent across blocking and
-     * streaming chat completions. Null falls back to the default 180s.
+     * Overload that accepts a per-model read-timeout override (seconds).
+     * Threaded into both the sync RestClient and streaming WebClient so
+     * timeout behavior is consistent across blocking and streaming chat
+     * completions. Null falls back to the default 180s.
      */
     public OpenAiApi buildOpenAiApi(ModelProviderEntity provider, Integer readTimeoutOverride) {
         if (provider == null || !modelProviderService.isProviderConfigured(provider.getProviderId())) {
@@ -1489,8 +1489,8 @@ public class AgentGraphBuilder {
     }
 
     /**
-     * RFC-03 Lane B1 overload — accepts a per-model read-timeout override
-     * (seconds). Null falls back to the default 180s.
+     * Overload that accepts a per-model read-timeout override (seconds).
+     * Null falls back to the default 180s.
      */
     private RestClient.Builder applyHttpTimeouts(RestClient.Builder builder, Integer readTimeoutOverride) {
         HttpClient httpClient = HttpClient.newBuilder()
@@ -1521,7 +1521,7 @@ public class AgentGraphBuilder {
     }
 
     /**
-     * RFC-03 Lane B1 overload — same per-model override semantics as
+     * Overload with the same per-model override semantics as
      * {@link #applyHttpTimeouts(RestClient.Builder, Integer)}.
      */
     private WebClient.Builder applyHttpTimeoutsToWebClient(WebClient.Builder builder, Integer readTimeoutOverride) {

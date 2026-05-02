@@ -99,5 +99,5 @@ CLAUDE.md
 # Codex CLI local artifacts
 .codex/
 
-# QwenPaw sync state (generated each run; report is intentionally tracked)
-scripts/.qwenpaw-sync-state.json
+# Sync tooling local state (generated each run; report is intentionally tracked)
+scripts/.*-sync-state.json

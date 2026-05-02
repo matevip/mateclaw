@@ -46,9 +46,9 @@ public class AcpEndpointEntity {
     private String envJson;
 
     /**
-     * call_title | call_detail | update_detail (mirrors QwenPaw
-     * {@code tool_parse_mode}). Drives how the wrapper renders ACP
-     * tool-call events into MateClaw's stream protocol.
+     * call_title | call_detail | update_detail (mirrors the ACP
+     * {@code tool_parse_mode} convention). Drives how the wrapper
+     * renders ACP tool-call events into MateClaw's stream protocol.
      */
     private String toolParseMode;
 

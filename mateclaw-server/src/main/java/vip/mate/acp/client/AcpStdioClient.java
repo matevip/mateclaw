@@ -41,9 +41,9 @@ import java.util.function.Function;
  * agent graph layer.
  *
  * <p>Why not the official {@code acp} Python SDK: MateClaw runs on the
- * JVM. The protocol is JSON-RPC 2.0 line-delimited over stdio (per the
- * QwenPaw reference at {@code C:/codes/QwenPaw}); the surface we need
- * for "test connection" is small enough to implement directly.
+ * JVM. The protocol is JSON-RPC 2.0 line-delimited over stdio; the
+ * surface we need for "test connection" is small enough to implement
+ * directly.
  *
  * <p>Each {@link AcpStdioClient} instance owns one Process. Use
  * try-with-resources or call {@link #close()} explicitly.
@@ -51,7 +51,7 @@ import java.util.function.Function;
 @Slf4j
 public class AcpStdioClient implements AutoCloseable {
 
-    /** ACP protocol version we advertise (matches QwenPaw v1 + Zed agents). */
+    /** ACP protocol version we advertise (matches v1 ACP-compatible agents). */
     public static final int PROTOCOL_VERSION = 1;
 
     private final ObjectMapper mapper;

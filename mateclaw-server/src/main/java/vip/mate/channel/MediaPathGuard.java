@@ -16,7 +16,6 @@ import java.util.Set;
  * checks — extension allowlist here, size cap there, no path-traversal
  * guard at all. The result is 8 places to keep in sync when a new file
  * type is supported (or when a new exploit needs a defensive patch).
- * Same gap as QwenPaw #1220.
  *
  * <p>This guard centralizes four checks that every adapter needs:
  * <ol>

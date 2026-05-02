@@ -57,10 +57,10 @@ public class ToolExecutionExecutor {
      * this list.
      */
     /**
-     * RFC-03 Lane A2 — defense against runaway single-response tool floods.
+     * Defense against runaway single-response tool floods.
      *
      * <p>Some models (StreamLake's kat-coder-pro-v1 has been observed
-     * emitting 50+ in one shot, see QwenPaw #2055) return huge {@code tool_calls}
+     * emitting 50+ in one shot) return huge {@code tool_calls}
      * batches in a single response. Without a cap, every call executes, which
      * can saturate downstream provider QPS, multiply approval rows, and burn
      * tokens. The cap is independent of {@code MAX_ITERATIONS} (which limits

@@ -1,6 +1,6 @@
 -- V68: ACP (Agent Communication Protocol) endpoint registry (RFC-090 Phase 7)
 -- One row per external coding agent the user can delegate to over stdio.
--- The 4 default rows mirror QwenPaw's bundled set (codex / claude-code / opencode / qwen-code).
+-- The 4 default rows cover the common stdio agents (codex / claude-code / opencode / qwen-code).
 CREATE TABLE IF NOT EXISTS mate_acp_endpoint (
     id              BIGINT       NOT NULL PRIMARY KEY,
     name            VARCHAR(64)  NOT NULL,
@@ -11,12 +11,12 @@ CREATE TABLE IF NOT EXISTS mate_acp_endpoint (
     args_json       TEXT,
     env_json        TEXT,
     -- Bookkeeping for the per-call parser.
-    -- One of call_title | call_detail | update_detail (matches QwenPaw tool_parse_mode).
+    -- One of call_title | call_detail | update_detail (matches the ACP tool_parse_mode convention).
     tool_parse_mode VARCHAR(32)  NOT NULL DEFAULT 'call_title',
     builtin         BOOLEAN      NOT NULL DEFAULT FALSE,
     trusted         BOOLEAN      NOT NULL DEFAULT TRUE,
     enabled         BOOLEAN      NOT NULL DEFAULT FALSE,
-    -- Stdio buffer ceiling, default 50 MiB (mirrors QwenPaw default).
+    -- Stdio buffer ceiling, default 50 MiB.
     stdio_buffer_limit_bytes BIGINT NOT NULL DEFAULT 52428800,
     last_status     VARCHAR(32),
     last_tested_at  DATETIME,
