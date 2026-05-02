@@ -204,6 +204,18 @@
               <label class="form-label">{{ t('agents.fields.maxIterations') }}</label>
               <input v-model.number="form.maxIterations" type="number" min="1" max="50" class="form-input" />
             </div>
+            <!-- RFC-03 Lane G1: per-Agent model override. Empty value falls
+                 back to the global default in ModelConfigService.resolveModel. -->
+            <div class="form-group">
+              <label class="form-label">{{ t('agents.fields.modelName') }}</label>
+              <select v-model="form.modelName" class="form-input">
+                <option value="">{{ t('agents.fields.modelGlobalDefault') }}</option>
+                <option v-for="m in availableModels" :key="m.id" :value="m.modelName">
+                  {{ m.name }} ({{ m.provider }}/{{ m.modelName }})
+                </option>
+              </select>
+              <p class="form-hint">{{ t('agents.fields.modelHint') }}</p>
+            </div>
             <div class="form-group">
               <label class="form-label">{{ t('agents.fields.defaultThinkingLevel') }}</label>
               <select v-model="form.defaultThinkingLevel" class="form-input">
@@ -368,6 +380,9 @@ const selectedToolNames = ref<string[]>([])
 // RFC-009 PR-3: per-agent provider preference order
 const availableProviders = ref<{ id: string; name: string }[]>([])
 const selectedProviderIds = ref<string[]>([])
+// RFC-03 Lane G1: per-Agent model override picker — populated from the
+// global enabled-models list, blank value means "fall back to default".
+const availableModels = ref<Array<{ id: number; name: string; provider: string; modelName: string }>>([])
 
 // Template selector state
 const showTemplateSelector = ref(false)
@@ -387,6 +402,7 @@ const defaultForm = (): Partial<Agent> & { name: string; defaultThinkingLevel: s
   description: '',
   agentType: 'react',
   systemPrompt: '',
+  modelName: '', // RFC-03 G1 — empty means "use global default"
   maxIterations: 10,
   // Empty so SkillIcon's fallback (🤖) shows instead of pinning a literal
   // emoji into form.icon — otherwise the picker thinks the user picked
@@ -419,6 +435,9 @@ const filteredAgents = computed(() => {
 
 onMounted(() => {
   loadAgents()
+  // RFC-03 G1: load models once for the per-Agent override dropdown.
+  // Failure is non-fatal — the dropdown just shows only "global default".
+  loadAvailableModels()
 })
 
 async function loadAgents() {
@@ -427,6 +446,20 @@ async function loadAgents() {
     agents.value = res.data || []
   } catch {
     ElMessage.error(t('agents.messages.loadFailed'))
+  }
+}
+
+async function loadAvailableModels() {
+  try {
+    const res: any = await modelApi.listEnabled()
+    availableModels.value = (res.data || []).map((m: any) => ({
+      id: m.id,
+      name: m.name,
+      provider: m.provider,
+      modelName: m.modelName,
+    }))
+  } catch {
+    // Silent — the picker still works (empty list = only "default" option).
   }
 }
 
@@ -515,6 +548,7 @@ async function openEditModal(agent: Agent) {
     description: agent.description || '',
     agentType: agent.agentType,
     systemPrompt: agent.systemPrompt || '',
+    modelName: agent.modelName || '',
     maxIterations: agent.maxIterations,
     icon: agent.icon || '',
     tags: agent.tags || '',

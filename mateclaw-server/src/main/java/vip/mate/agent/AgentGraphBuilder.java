@@ -155,9 +155,13 @@ public class AgentGraphBuilder {
         // the agent's bound-skill requires-model. Falls back to the
         // global default when no preferred provider satisfies, so the
         // existing "no default model" error path stays intact.
+        // RFC-03 Lane G1 — honor per-Agent model override when set.
+        // resolveModel() looks up entity.modelName in enabled-only models;
+        // null / blank / unmatched silently fall back to getDefaultModel(),
+        // preserving the legacy behavior for Agents without an override.
         ModelConfigEntity globalDefault;
         try {
-            globalDefault = modelConfigService.getDefaultModel();
+            globalDefault = modelConfigService.resolveModel(entity.getModelName());
         } catch (Exception e) {
             throw new MateClawException("err.agent.no_default_model", "无法构建 Agent：请先在「设置 → 模型」中配置并启用默认模型");
         }

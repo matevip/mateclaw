@@ -31,10 +31,22 @@ public class AgentEntity {
     private String systemPrompt;
 
     /**
-     * 保留但不再生效：运行时统一使用全局默认模型（ModelConfigService.getDefaultModel()）。
-     * 该字段为历史残留，仅保留以避免数据库迁移。
+     * Per-Agent model override.
+     *
+     * <p>When non-blank, the runtime resolves this value via
+     * {@code ModelConfigService.resolveModel(...)} — a case-sensitive,
+     * enabled-only lookup against {@code mate_model_config.model_name}.
+     * On match, the resolved entity is used as the primary model in
+     * place of {@code getDefaultModel()}.
+     *
+     * <p>Null / blank → fall back to the global default (preserves the
+     * original behavior). Stale rows whose named model has been removed
+     * or disabled also fall back, since {@code resolveModel} returns the
+     * default when no enabled match is found.
+     *
+     * <p>RFC-03 Lane G1 — re-enables this field after it was silently
+     * deprecated in earlier work; the database column is unchanged.
      */
-    @Deprecated
     private String modelName;
 
     /** 最大迭代次数 */
