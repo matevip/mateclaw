@@ -44,6 +44,20 @@ public class DelegateAgentTool {
     private static final int MAX_DELEGATION_DEPTH = 3;
     private static final int MAX_RESULT_LENGTH = 4000;
     private static final int MAX_PARALLEL_CHILDREN = 3;
+
+    /**
+     * RFC-03 Lane C2 — caps for the parent-context prefix when
+     * {@code inheritParentContext=true} is set on {@link #delegateToAgent}.
+     *
+     * <p>{@link #INHERITED_CONTEXT_MAX_MESSAGES} bounds the prefix length so a
+     * 1000-turn parent doesn't dump 1000 turns into the child prompt; 10 is
+     * empirically enough for "what were we just talking about" without
+     * blowing past typical 8k system-prompt budgets. {@link #INHERITED_CONTEXT_PER_MESSAGE_CHARS}
+     * truncates each individual message — useful when the parent has a
+     * long tool result or pasted document.
+     */
+    static final int INHERITED_CONTEXT_MAX_MESSAGES = 10;
+    static final int INHERITED_CONTEXT_PER_MESSAGE_CHARS = 1000;
     /**
      * Per-child timeout — raised from 60 s to 120 s so that slow LLM models
      * (kimi-code observed p99 ≈ 91 s) can complete before the parent gives up.
@@ -80,6 +94,14 @@ public class DelegateAgentTool {
     public String delegateToAgent(
             @ToolParam(description = "Target Agent name (exact match)") String agentName,
             @ToolParam(description = "Task description with complete context information") String task,
+            // RFC-03 Lane C2 — when true, the child agent receives the recent
+            // N messages from the parent conversation as a context prefix.
+            // Default false (the original isolated-child behavior). Set true
+            // only when the task genuinely depends on parent's recent
+            // exchanges; otherwise the cleaner isolated execution is faster
+            // and avoids prompt bloat.
+            @ToolParam(description = "Whether the child should see recent parent conversation messages as background context. Default false. Set true ONLY when the task requires conversational continuity (e.g. 'follow up on what we just discussed').", required = false)
+            Boolean inheritParentContext,
             // RFC-063r §2.5 改动点 5: parent ChatOrigin (channel binding /
             // workspace) propagates into the delegated child so a sub-agent
             // creating a cron job still binds back to the originating channel.
@@ -106,6 +128,19 @@ public class DelegateAgentTool {
         String parentConversationId = resolveParentConversationId();
         String childConversationId = createChildConv(target, parentConversationId);
 
+        // RFC-03 Lane C2: optionally prepend a parent-context prefix to the task.
+        // Bounded at INHERITED_CONTEXT_MAX_MESSAGES messages * INHERITED_CONTEXT_PER_MESSAGE_CHARS
+        // chars so a chatty parent doesn't blow past the child's context window.
+        String taskWithContext = task;
+        if (Boolean.TRUE.equals(inheritParentContext) && parentConversationId != null) {
+            String prefix = buildInheritedContextPrefix(parentConversationId);
+            if (!prefix.isEmpty()) {
+                taskWithContext = prefix + "\n\n---\n\nYour task:\n" + task;
+                log.info("Inheriting parent context: parentConv={}, prefixChars={}",
+                        parentConversationId, prefix.length());
+            }
+        }
+
         log.info("Agent delegation: depth={}, target={}({}), childConv={}, parentConv={}",
                 depth + 1, target.getName(), target.getId(), childConversationId, parentConversationId);
 
@@ -123,7 +158,7 @@ public class DelegateAgentTool {
         // ChatOrigin and only swap the agentId, so channel binding /
         // workspace / requester all flow into the child.
         ChatOrigin parentOrigin = ChatOrigin.from(ctx);
-        ChildResult result = runSingleChild(0, target, task, parentConversationId, childConversationId, parentOrigin);
+        ChildResult result = runSingleChild(0, target, taskWithContext, parentConversationId, childConversationId, parentOrigin);
 
         // Cleanup relay, then broadcast final result
         if (stopRelay != null) stopRelay.run();
@@ -536,6 +571,81 @@ public class DelegateAgentTool {
         return agentMapper.selectOne(new LambdaQueryWrapper<AgentEntity>()
                 .eq(AgentEntity::getName, name.trim())
                 .eq(AgentEntity::getEnabled, true));
+    }
+
+    /**
+     * RFC-03 Lane C2 — build the parent-context prefix injected into the
+     * child's task when {@code inheritParentContext=true}.
+     *
+     * <p>Reads the latest {@link #INHERITED_CONTEXT_MAX_MESSAGES} messages
+     * from the parent conversation, formats them as a labeled block, and
+     * returns an empty string when no usable history exists. Errors are
+     * swallowed (logged warn) — context inheritance is best-effort, not a
+     * correctness gate; a missing prefix degrades to "child runs without
+     * extra context", which is the original behavior.
+     */
+    private String buildInheritedContextPrefix(String parentConversationId) {
+        try {
+            List<vip.mate.workspace.conversation.model.MessageEntity> messages =
+                    conversationService.listRecentMessages(
+                            parentConversationId, INHERITED_CONTEXT_MAX_MESSAGES);
+            return formatInheritedContext(messages, INHERITED_CONTEXT_PER_MESSAGE_CHARS);
+        } catch (Exception e) {
+            log.warn("Failed to build parent context prefix for child agent: parentConv={}, err={}",
+                    parentConversationId, e.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * RFC-03 Lane C2 — format a list of parent {@link vip.mate.workspace.conversation.model.MessageEntity}
+     * as a labeled, role-tagged context block for injection into the child's
+     * task prompt. Package-private + static so it can be unit-tested without
+     * touching ConversationService or any mocks.
+     *
+     * <p>Output shape:
+     * <pre>
+     * --- Parent conversation recent context (N messages) ---
+     * USER: ...
+     * ASSISTANT: ...
+     * ...
+     * --- End of context ---
+     * </pre>
+     *
+     * <p>Per-message content is truncated to {@code maxPerMessageChars} so a
+     * single huge tool result in the parent doesn't blow up the child's
+     * context window. Empty / null inputs return an empty string so the
+     * caller can skip prefix injection cleanly.
+     */
+    static String formatInheritedContext(
+            List<vip.mate.workspace.conversation.model.MessageEntity> messages,
+            int maxPerMessageChars) {
+        if (messages == null || messages.isEmpty()) return "";
+        // Filter out system messages — those carry agent identity, not user dialogue,
+        // and the child has its own system prompt.
+        List<vip.mate.workspace.conversation.model.MessageEntity> dialogue = messages.stream()
+                .filter(m -> m != null && m.getRole() != null
+                        && !"system".equalsIgnoreCase(m.getRole()))
+                .filter(m -> m.getContent() != null && !m.getContent().isBlank())
+                .toList();
+        if (dialogue.isEmpty()) return "";
+
+        StringBuilder sb = new StringBuilder(dialogue.size() * 200);
+        sb.append("--- Parent conversation recent context (")
+          .append(dialogue.size())
+          .append(" message").append(dialogue.size() == 1 ? "" : "s")
+          .append(") ---\n");
+        for (vip.mate.workspace.conversation.model.MessageEntity m : dialogue) {
+            String role = m.getRole().toUpperCase();
+            String content = m.getContent();
+            if (content.length() > maxPerMessageChars) {
+                content = content.substring(0, maxPerMessageChars)
+                        + "... [truncated, " + (content.length() - maxPerMessageChars) + " chars omitted]";
+            }
+            sb.append(role).append(": ").append(content).append("\n");
+        }
+        sb.append("--- End of context ---");
+        return sb.toString();
     }
 
     private String createChildConv(AgentEntity target, String parentConversationId) {
