@@ -396,6 +396,14 @@
             <artifactId>shedlock-provider-jdbc-template</artifactId>
             <version>5.16.0</version>
         </dependency>
+
+        <!-- Graph algorithms (community detection, shortest path, centrality)
+             used by the wiki page-to-page relevance and insights features. -->
+        <dependency>
+            <groupId>org.jgrapht</groupId>
+            <artifactId>jgrapht-core</artifactId>
+            <version>1.5.2</version>
+        </dependency>
     </dependencies>
 
     <build>
