@@ -1,6 +1,7 @@
 package vip.mate.auth.pat;
 
 import com.baomidou.mybatisplus.annotation.*;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -26,7 +27,18 @@ public class PersonalAccessTokenEntity {
     /** Human-readable label so the owner can tell tokens apart in the UI. */
     private String name;
 
-    /** SHA-256 hex of the plaintext, lowercase. UNIQUE indexed for O(1) auth lookups. */
+    /**
+     * SHA-256 hex of the plaintext, lowercase. UNIQUE indexed for O(1) auth lookups.
+     *
+     * <p>{@link JsonIgnore} keeps the hash out of every JSON response —
+     * SHA-256 is not directly reversible, but exposing the digest is poor
+     * hygiene (lets an attacker who already has a candidate plaintext
+     * verify a match without trying to authenticate, leaks per-user token
+     * counts to anyone who can read the list endpoint, and would feed
+     * future rainbow-table attacks if we ever weakened the algorithm).
+     * Internally readable / writable by the service + mapper as usual.
+     */
+    @JsonIgnore
     private String tokenHash;
 
     /**
