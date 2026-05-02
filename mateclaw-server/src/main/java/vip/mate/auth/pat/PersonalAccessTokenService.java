@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import vip.mate.auth.pat.repository.PersonalAccessTokenMapper;
 import vip.mate.exception.MateClawException;
 
 import java.nio.charset.StandardCharsets;
