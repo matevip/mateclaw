@@ -59,6 +59,7 @@ public class StepExecutionNode implements NodeAction {
     private final ConversationWindowManager conversationWindowManager;
     private final String reasoningEffort;
     private final NodeStreamingChatHelper streamingHelper;
+    private final long stepWallClockTimeoutMs;
 
     /**
      * Per-step tool-call ceiling, aligned with {@code BaseAgent.MAX_ITERATIONS_HARD_CEILING}.
@@ -69,6 +70,18 @@ public class StepExecutionNode implements NodeAction {
      * cut short by an arbitrary 5-call ceiling.
      */
     private static final int MAX_TOOL_CALLS_PER_STEP = 100;
+
+    /**
+     * Wall-clock budget per step, complementing {@link #MAX_TOOL_CALLS_PER_STEP}.
+     * The call-count cap doesn't help when a single LLM stream stalls or a
+     * concurrency-unsafe tool runs synchronously without a per-tool deadline
+     * (the parallel batch path enforces {@code ToolTimeoutProperties}, but the
+     * single-unsafe path in {@code ToolExecutionExecutor#executeSingleTool}
+     * currently does not). 10 minutes is generous for legitimate long steps
+     * (large file edits, multi-page browser flows) while still cutting off the
+     * pathological cases where the agent appears frozen to the user.
+     */
+    private static final long STEP_WALL_CLOCK_TIMEOUT_MS = 10 * 60 * 1000L;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public StepExecutionNode(ChatModel chatModel, AgentToolSet toolSet,
@@ -77,6 +90,19 @@ public class StepExecutionNode implements NodeAction {
                              ChatStreamTracker streamTracker,
                              String reasoningEffort, NodeStreamingChatHelper streamingHelper,
                              ConversationWindowManager conversationWindowManager) {
+        this(chatModel, toolSet, executor, planningService, streamTracker,
+                reasoningEffort, streamingHelper, conversationWindowManager,
+                STEP_WALL_CLOCK_TIMEOUT_MS);
+    }
+
+    /** Test-friendly overload — production callers use the default timeout. */
+    StepExecutionNode(ChatModel chatModel, AgentToolSet toolSet,
+                      ToolExecutionExecutor executor,
+                      PlanningService planningService,
+                      ChatStreamTracker streamTracker,
+                      String reasoningEffort, NodeStreamingChatHelper streamingHelper,
+                      ConversationWindowManager conversationWindowManager,
+                      long stepWallClockTimeoutMs) {
         this.chatModel = chatModel;
         this.toolSet = toolSet;
         this.executor = executor;
@@ -85,6 +111,7 @@ public class StepExecutionNode implements NodeAction {
         this.conversationWindowManager = conversationWindowManager;
         this.reasoningEffort = reasoningEffort;
         this.streamingHelper = streamingHelper;
+        this.stepWallClockTimeoutMs = stepWallClockTimeoutMs;
     }
 
     @Override
@@ -141,8 +168,24 @@ public class StepExecutionNode implements NodeAction {
         // outputs across the inner loop and break out as soon as one appears.
         List<DirectToolOutput> stepDirectOutputs = new ArrayList<>();
 
+        // Wall-clock budget guards against a single hung LLM stream or
+        // synchronous unsafe-tool call (the per-tool timeout is enforced only
+        // in the parallel batch path of ToolExecutionExecutor). Checked at the
+        // top of each iteration so we never issue another LLM call after the
+        // budget is gone.
+        long stepStartedAtMs = System.currentTimeMillis();
+        boolean wallClockExceeded = false;
+
         try {
             while (toolCallCount < MAX_TOOL_CALLS_PER_STEP) {
+                long elapsedMs = System.currentTimeMillis() - stepStartedAtMs;
+                if (elapsedMs > stepWallClockTimeoutMs) {
+                    log.warn("[StepExecution] Step {} exceeded wall-clock budget " +
+                            "({} ms > {} ms) after {} tool round(s); aborting step",
+                            stepIndex, elapsedMs, stepWallClockTimeoutMs, toolCallCount);
+                    wallClockExceeded = true;
+                    break;
+                }
                 // PR-2 (RFC-049 §2.3.4): always use OpenAiChatOptions so the relay
                 // producer in NodeStreamingChatHelper.doStreamCall can attach the
                 // user-token. Using ToolCallingChatOptions when reasoningEffort is
@@ -318,8 +361,13 @@ public class StepExecutionNode implements NodeAction {
             }
 
             if (finalResult == null) {
-                finalResult = "步骤执行超过最大工具调用次数限制（" + MAX_TOOL_CALLS_PER_STEP + "次）";
-                log.warn("[StepExecution] Step {} exceeded max tool call limit", stepIndex);
+                if (wallClockExceeded) {
+                    finalResult = "步骤执行超过最大耗时限制（"
+                            + (stepWallClockTimeoutMs / 1000) + "秒），已中止本步骤";
+                } else {
+                    finalResult = "步骤执行超过最大工具调用次数限制（" + MAX_TOOL_CALLS_PER_STEP + "次）";
+                    log.warn("[StepExecution] Step {} exceeded max tool call limit", stepIndex);
+                }
             }
 
         } catch (Exception e) {
