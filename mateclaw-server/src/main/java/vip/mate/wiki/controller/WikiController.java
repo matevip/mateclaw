@@ -239,11 +239,14 @@ public class WikiController {
                 ? originalName.substring(originalName.lastIndexOf(".") + 1).toLowerCase()
                 : "txt";
 
-        // 确定 sourceType
+        // Resolve source type from extension. Image extensions route to the
+        // vision-in pipeline at extraction time; everything else falls through
+        // to the existing text / pdf / docx handling.
         String sourceType = switch (extension) {
             case "pdf" -> "pdf";
             case "docx", "doc" -> "docx";
             case "txt", "md" -> "text";
+            case "png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "tif" -> "image";
             default -> "text";
         };
 
@@ -258,6 +261,7 @@ public class WikiController {
             Path targetPath = uploadDir.resolve(System.currentTimeMillis() + "_" + originalName);
             file.transferTo(targetPath);
             return R.ok(rawService.addFile(kbId, originalName, sourceType,
+                    file.getContentType(),
                     targetPath.toString(), file.getSize()));
         }
     }

@@ -9,6 +9,9 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vip.mate.tool.builtin.DocumentExtractTool;
+import vip.mate.tool.image.vision.ImageVisionService;
+import vip.mate.tool.image.vision.VisionRequest;
+import vip.mate.tool.image.vision.VisionResult;
 import vip.mate.wiki.WikiProperties;
 import vip.mate.wiki.event.WikiProcessingEvent;
 import vip.mate.wiki.model.WikiRawMaterialEntity;
@@ -38,6 +41,7 @@ public class WikiRawMaterialService {
     private final DocumentExtractTool documentExtractTool;
     /** RFC-013：删除时级联清理 chunk */
     private final WikiChunkService chunkService;
+    private final ImageVisionService imageVisionService;
 
     /**
      * RFC-012 follow-up #3：从 partial 状态触发的 reprocess 会在此 set 中打标，
@@ -119,15 +123,33 @@ public class WikiRawMaterialService {
     }
 
     /**
-     * 添加文件类型的原始材料（PDF/DOCX 等）
+     * Adds a file-type raw material (PDF / DOCX / image / ...).
+     *
+     * <p>Backwards-compatible overload that omits the MIME type. Callers
+     * with the upload Content-Type in hand should prefer the four-argument
+     * variant — image-routing in particular needs an authoritative MIME so
+     * downstream vision providers know what they are decoding.
      */
     @Transactional
     public WikiRawMaterialEntity addFile(Long kbId, String title, String sourceType,
                                           String sourcePath, long fileSize) {
+        return addFile(kbId, title, sourceType, null, sourcePath, fileSize);
+    }
+
+    /**
+     * Adds a file-type raw material with explicit MIME type.
+     *
+     * @param mimeType Content-Type string from the upload (e.g. {@code image/png});
+     *                 may be null if unknown
+     */
+    @Transactional
+    public WikiRawMaterialEntity addFile(Long kbId, String title, String sourceType,
+                                          String mimeType, String sourcePath, long fileSize) {
         WikiRawMaterialEntity entity = new WikiRawMaterialEntity();
         entity.setKbId(kbId);
         entity.setTitle(title);
         entity.setSourceType(sourceType);
+        entity.setMimeType(mimeType);
         entity.setSourcePath(sourcePath);
         entity.setFileSize(fileSize);
         entity.setProcessingStatus("pending");
@@ -314,6 +336,13 @@ public class WikiRawMaterialService {
         if ("text".equals(entity.getSourceType())) {
             return entity.getOriginalContent();
         }
+        // Image source: route through the vision-in pipeline. Failures (feature
+        // flag off, no provider configured, all providers failed) degrade to an
+        // empty caption rather than blocking the upload — the user keeps the
+        // raw row and can retry once vision is configured.
+        if ("image".equals(entity.getSourceType())) {
+            return extractTextFromImage(entity);
+        }
         // 二进制文件：调用 DocumentExtractTool 提取
         if (entity.getSourcePath() != null && !entity.getSourcePath().isBlank()) {
             try {
@@ -342,6 +371,74 @@ public class WikiRawMaterialService {
             }
         }
         return entity.getOriginalContent();
+    }
+
+    /**
+     * Routes an image-typed raw material through the vision-in pipeline,
+     * caches the resulting caption into {@code extracted_text} so the next
+     * call short-circuits, and degrades gracefully on failure.
+     *
+     * <p>Failure modes (feature flag off, no provider, all providers failed,
+     * IO errors reading the image bytes) are intentionally swallowed and
+     * surfaced as the empty string. The upload still succeeded; the raw
+     * row remains and downstream code is expected to tolerate "no
+     * extracted text yet" — calling this method again later (e.g. after
+     * an operator enables the feature flag) re-runs the pipeline.
+     */
+    private String extractTextFromImage(WikiRawMaterialEntity entity) {
+        if (entity.getSourcePath() == null || entity.getSourcePath().isBlank()) {
+            log.warn("[Wiki] Image raw material missing sourcePath: id={}", entity.getId());
+            return "";
+        }
+        byte[] imageBytes;
+        try {
+            imageBytes = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(entity.getSourcePath()));
+        } catch (Exception e) {
+            log.error("[Wiki] Failed to read image bytes for id={}: {}", entity.getId(), e.getMessage());
+            return "";
+        }
+
+        VisionRequest request = VisionRequest.builder()
+                .imageBytes(imageBytes)
+                .mimeType(resolveMimeType(entity))
+                .build();
+        VisionResult result;
+        try {
+            result = imageVisionService.caption(request);
+        } catch (Exception e) {
+            log.warn("[Wiki] Vision pipeline failed for raw id={}: {}", entity.getId(), e.getMessage());
+            return "";
+        }
+
+        StringBuilder text = new StringBuilder(result.getCaption() == null ? "" : result.getCaption());
+        if (result.getVisibleText() != null && !result.getVisibleText().isBlank()) {
+            text.append("\n\n--- Visible text ---\n").append(result.getVisibleText());
+        }
+        String combined = text.toString();
+        updateExtractedText(entity.getId(), combined);
+        log.info("[Wiki] Image vision captioned raw id={} provider={} model={} chars={}",
+                entity.getId(), result.getProviderId(), result.getModel(), combined.length());
+        return combined;
+    }
+
+    /** Best-effort MIME resolution: prefer the persisted column, fall back to file extension. */
+    private static String resolveMimeType(WikiRawMaterialEntity entity) {
+        if (entity.getMimeType() != null && !entity.getMimeType().isBlank()) {
+            return entity.getMimeType();
+        }
+        String path = entity.getSourcePath() == null ? "" : entity.getSourcePath().toLowerCase();
+        int dot = path.lastIndexOf('.');
+        if (dot < 0) return "application/octet-stream";
+        String ext = path.substring(dot + 1);
+        return switch (ext) {
+            case "png" -> "image/png";
+            case "jpg", "jpeg" -> "image/jpeg";
+            case "webp" -> "image/webp";
+            case "gif" -> "image/gif";
+            case "bmp" -> "image/bmp";
+            case "tiff", "tif" -> "image/tiff";
+            default -> "application/octet-stream";
+        };
     }
 
     /**
