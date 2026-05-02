@@ -1,27 +1,26 @@
 <template>
-  <div class="feature-flags-page">
-    <header class="page-header">
-      <div class="mc-page-kicker">{{ t('settings.kicker') }}</div>
-      <h2 class="page-title">{{ t('settings.featureFlags.title') }}</h2>
-      <p class="page-desc">{{ t('settings.featureFlags.description') }}</p>
-    </header>
+  <div class="settings-section feature-flags-section">
+    <div class="section-header">
+      <h2 class="section-title">{{ t('settings.featureFlags.title') }}</h2>
+      <p class="section-desc">{{ t('settings.featureFlags.description') }}</p>
+    </div>
 
-    <div v-if="loading" class="state-row">
+    <div v-if="loading" class="settings-card state-card">
       <el-icon class="is-loading"><Loading /></el-icon>
       <span>{{ t('common.loading') }}</span>
     </div>
 
-    <div v-else-if="error" class="state-row state-row--error">
+    <div v-else-if="error" class="settings-card state-card state-card--error">
       <el-icon><WarningFilled /></el-icon>
       <span>{{ error }}</span>
-      <el-button size="small" @click="load">{{ t('common.retry', 'Retry') }}</el-button>
+      <button class="btn-secondary" @click="load">{{ t('common.retry', 'Retry') }}</button>
     </div>
 
-    <ul v-else-if="flags.length > 0" class="flag-list">
-      <li v-for="flag in flags" :key="flag.flagKey" class="flag-row">
-        <div class="flag-text">
-          <div class="flag-key">{{ flag.flagKey }}</div>
-          <div v-if="describe(flag)" class="flag-desc">{{ describe(flag) }}</div>
+    <div v-else-if="flags.length > 0" class="settings-card">
+      <div v-for="flag in flags" :key="flag.flagKey" class="setting-item">
+        <div class="setting-info">
+          <div class="setting-label flag-key">{{ flag.flagKey }}</div>
+          <div v-if="describe(flag)" class="setting-hint">{{ describe(flag) }}</div>
           <div v-if="hasScope(flag)" class="flag-scope">
             <span v-if="flag.whitelistKbIds">
               {{ t('settings.featureFlags.scope.kb') }}: {{ flag.whitelistKbIds }}
@@ -34,46 +33,46 @@
             </span>
           </div>
         </div>
-        <div class="flag-actions">
-          <el-switch
-            :model-value="flag.enabled"
-            :loading="pending[flag.flagKey] === true"
-            :disabled="pending[flag.flagKey] === true"
-            @change="(value: any) => onToggle(flag, !!value)"
-          />
+        <div class="setting-control">
+          <label class="toggle-switch">
+            <input
+              type="checkbox"
+              :checked="flag.enabled"
+              :disabled="pending[flag.flagKey] === true"
+              @change="onToggle(flag, ($event.target as HTMLInputElement).checked)"
+            />
+            <span class="toggle-slider"></span>
+          </label>
         </div>
-      </li>
-    </ul>
+      </div>
+    </div>
 
-    <div v-else class="state-row">
+    <div v-else class="settings-card state-card">
       <span>{{ t('settings.featureFlags.empty') }}</span>
     </div>
 
-    <footer class="page-footer">
-      <p>{{ t('settings.featureFlags.footer') }}</p>
-    </footer>
+    <p class="section-footer-note">{{ t('settings.featureFlags.footer') }}</p>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElButton, ElIcon, ElMessage, ElSwitch } from 'element-plus'
+import { ElIcon, ElMessage } from 'element-plus'
 import { Loading, WarningFilled } from '@element-plus/icons-vue'
 import { featureFlagApi, type FeatureFlag } from '@/api/index'
 
-const { t, te } = useI18n()
+const { t, getLocaleMessage, locale } = useI18n()
 
-/**
- * Resolves a flag's description from i18n first, falling back to the backend
- * column when no translation key is registered. The backend value is English-
- * only by design (it's a stable reference identifier in the DB seed); UI
- * copy lives next to other strings in the locale files.
- */
+// Walk the message tree manually — vue-i18n's t()/tm() interpret dots as a
+// nested path, and our flagKey ("wiki.ocr.enabled") contains dots that should
+// be treated as part of a single property name. Backend description is the
+// fallback when a flag has no localized copy.
 function describe(flag: FeatureFlag): string {
-  const i18nKey = `settings.featureFlags.descriptions.${flag.flagKey}`
-  if (te(i18nKey)) {
-    return t(i18nKey)
+  const messages = getLocaleMessage(locale.value) as any
+  const localized = messages?.settings?.featureFlags?.descriptions?.[flag.flagKey]
+  if (typeof localized === 'string' && localized.length > 0) {
+    return localized
   }
   return flag.description ?? ''
 }
@@ -107,12 +106,11 @@ async function onToggle(flag: FeatureFlag, next: boolean) {
   pending[flag.flagKey] = true
   try {
     await featureFlagApi.update(flag.flagKey, { enabled: next })
-    flag.enabled = next  // optimistic local update
+    flag.enabled = next
     ElMessage.success(t(next ? 'settings.featureFlags.enabled' : 'settings.featureFlags.disabled',
         { key: flag.flagKey }))
   } catch (e: any) {
     ElMessage.error(e?.message ?? t('settings.featureFlags.toggleFailed'))
-    // Revert by refreshing list to true server state.
     await load()
   } finally {
     pending[flag.flagKey] = false
@@ -123,99 +121,65 @@ onMounted(load)
 </script>
 
 <style scoped>
-.feature-flags-page {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  max-width: 880px;
-}
+.settings-section { width: 100%; }
+.section-header { display: flex; flex-direction: column; gap: 6px; margin-bottom: 20px; }
+.section-title { margin: 0; font-size: 22px; font-weight: 700; color: var(--mc-text-primary); }
+.section-desc { margin: 0; font-size: 14px; color: var(--mc-text-secondary); }
 
-.page-header {
-  border-bottom: 1px solid var(--mc-border-light);
-  padding-bottom: 16px;
-}
-.page-title {
-  font-size: 22px;
-  font-weight: 700;
-  margin: 4px 0 8px;
-  color: var(--mc-text-primary);
-}
-.page-desc {
-  color: var(--mc-text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-  margin: 0;
-}
+.settings-card { background: var(--mc-bg-elevated); border: 1px solid var(--mc-border); border-radius: 16px; padding: 18px; box-shadow: 0 8px 24px rgba(124, 63, 30, 0.04); width: 100%; }
+.setting-item { display: flex; justify-content: space-between; gap: 20px; padding: 16px 0; border-bottom: 1px solid var(--mc-border-light); }
+.setting-item:last-child { border-bottom: none; }
+.setting-info { flex: 1; min-width: 0; }
+.setting-label { font-size: 15px; font-weight: 600; color: var(--mc-text-primary); margin-bottom: 4px; }
+.setting-hint { font-size: 13px; color: var(--mc-text-secondary); line-height: 1.5; }
+.setting-control { width: 80px; display: flex; align-items: center; justify-content: flex-end; }
 
-.flag-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  background: var(--mc-border-light);
-  border-radius: 10px;
-  overflow: hidden;
-}
+.toggle-switch { position: relative; display: inline-flex; width: 44px; height: 24px; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; inset: 0; cursor: pointer; background: var(--mc-border); border-radius: 999px; transition: 0.2s; }
+.toggle-slider::before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: var(--mc-bg-elevated); border-radius: 50%; transition: 0.2s; }
+.toggle-switch input:checked + .toggle-slider { background: var(--mc-primary); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(20px); }
+.toggle-switch input:disabled + .toggle-slider { opacity: 0.5; cursor: not-allowed; }
 
-.flag-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 18px;
-  background: var(--mc-bg-base);
-}
-
-.flag-text {
-  flex: 1;
-  min-width: 0;
-}
+.btn-secondary { border: 1px solid var(--mc-border); border-radius: 10px; padding: 6px 12px; font-size: 13px; cursor: pointer; background: var(--mc-bg-elevated); color: var(--mc-text-primary); transition: all 0.15s; }
+.btn-secondary:hover { background: var(--mc-bg-sunken); }
 
 .flag-key {
   font-family: var(--mc-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 13px;
-  font-weight: 600;
-  color: var(--mc-text-primary);
-}
-
-.flag-desc {
-  font-size: 12px;
-  color: var(--mc-text-secondary);
-  margin-top: 4px;
-  line-height: 1.5;
 }
 
 .flag-scope {
   font-size: 11px;
   color: var(--mc-text-tertiary);
-  margin-top: 4px;
+  margin-top: 6px;
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
 }
 
-.state-row {
+.state-card {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 18px;
   color: var(--mc-text-secondary);
-  background: var(--mc-bg-muted);
-  border-radius: 10px;
 }
 
-.state-row--error {
+.state-card--error {
   color: var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
 }
 
-.page-footer {
+.section-footer-note {
   font-size: 12px;
   color: var(--mc-text-tertiary);
   line-height: 1.5;
-  padding-top: 12px;
-  border-top: 1px solid var(--mc-border-light);
+  margin-top: 16px;
+}
+
+@media (max-width: 900px) {
+  .setting-item { flex-direction: column; }
+  .setting-control { width: 100%; justify-content: flex-start; }
 }
 </style>
