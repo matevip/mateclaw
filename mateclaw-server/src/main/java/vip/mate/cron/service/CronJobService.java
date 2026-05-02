@@ -5,6 +5,9 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.core.LockConfiguration;
+import net.javacrumbs.shedlock.core.LockProvider;
+import net.javacrumbs.shedlock.core.SimpleLock;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
@@ -22,12 +25,15 @@ import vip.mate.cron.model.CronJobEntity;
 import vip.mate.cron.repository.CronJobMapper;
 import vip.mate.exception.MateClawException;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -50,6 +56,13 @@ public class CronJobService implements ApplicationRunner {
     private final CronJobMapper cronJobMapper;
     private final AgentMapper agentMapper;
     private final ChannelMapper channelMapper;
+    /**
+     * RFC-03 Lane G2: distributed lock for fire-time execution. ShedLock's
+     * JDBC provider is configured in {@link vip.mate.cron.config.ShedLockConfig}
+     * — see also {@link #LOCK_AT_MOST_FOR} / {@link #LOCK_AT_LEAST_FOR}
+     * tuning notes on {@link #register}.
+     */
+    private final LockProvider lockProvider;
     /**
      * RFC-063r §2.7.1: cron-tick execution moved to {@link CronJobRunner}
      * (separate bean) so the three-segment transactional model in
@@ -93,6 +106,23 @@ public class CronJobService implements ApplicationRunner {
      */
     private static final int MAX_CONCURRENT_CRON_RUNS = 8;
     private final Semaphore cronConcurrencyLimiter = new Semaphore(MAX_CONCURRENT_CRON_RUNS);
+
+    /**
+     * RFC-03 Lane G2: ShedLock duration tuning.
+     *
+     * <p>{@code lockAtMostFor} is the safety net for a node that crashes
+     * mid-execution — after this window, any other node may take over the
+     * job's next tick. 30 minutes covers all observed cron run times
+     * (longest LLM-driven jobs in production sit around p99 ≈ 8 min).
+     *
+     * <p>{@code lockAtLeastFor} prevents thundering-herd when a fast job
+     * (e.g. trivial SQL query that completes in <1s) finishes before its
+     * own next tick — without it, the same node could fire twice per tick
+     * if its clock is slightly ahead. 30s gives every other node a chance
+     * to see the lock as held even for instant-finishing jobs.
+     */
+    private static final Duration LOCK_AT_MOST_FOR = Duration.ofMinutes(30);
+    private static final Duration LOCK_AT_LEAST_FOR = Duration.ofSeconds(30);
 
     // ==================== 初始化与销毁 ====================
 
@@ -403,8 +433,12 @@ public class CronJobService implements ApplicationRunner {
             // cronExecutor — the LLM call must NOT run on a scheduler
             // worker (4 concurrent long crons would otherwise saturate the
             // pool and the 5th would miss its tick).
-            ScheduledFuture<?> future = scheduler.schedule(() ->
-                    cronExecutor.submit(() -> runWithBackpressure(job, "scheduled")), trigger);
+            //
+            // RFC-03 Lane G2: tickWithDistributedLock wraps the offload in
+            // a ShedLock acquire/release so a multi-instance deployment
+            // fires each tick exactly once. See javadoc on that method.
+            ScheduledFuture<?> future = scheduler.schedule(
+                    () -> tickWithDistributedLock(job), trigger);
             scheduledTasks.put(job.getId(), future);
             log.info("[CronJob] Registered job {} ({}) ws={}, cron={}, tz={}",
                     job.getId(), job.getName(), job.getWorkspaceId(),
@@ -419,6 +453,48 @@ public class CronJobService implements ApplicationRunner {
         if (f != null) {
             f.cancel(false);
         }
+    }
+
+    /**
+     * RFC-03 Lane G2 — distributed-lock-guarded tick fire.
+     *
+     * <p>Called on the scheduler thread when {@link CronTrigger} fires.
+     * Tries to acquire a ShedLock entry keyed by {@code "cron-job-{jobId}"};
+     * if another node holds it, returns immediately (silent skip — siblings
+     * always see this for every tick, which is by design). On success,
+     * passes lock ownership into the virtual-thread executor so the work
+     * proceeds on {@link #cronExecutor} and the lock releases only after
+     * {@code runWithBackpressure} completes. {@link #LOCK_AT_MOST_FOR} is
+     * the safety net for a node that crashes mid-execution.
+     *
+     * <p>Package-private so unit tests can drive lock-acquisition outcomes
+     * without booting the full Spring context.
+     */
+    void tickWithDistributedLock(CronJobEntity job) {
+        Long jobId = job.getId();
+        Optional<SimpleLock> maybeLock = lockProvider.lock(new LockConfiguration(
+                Instant.now(),
+                "cron-job-" + jobId,
+                LOCK_AT_MOST_FOR,
+                LOCK_AT_LEAST_FOR));
+        if (maybeLock.isEmpty()) {
+            log.debug("[CronJob] {} skipped — another node holds the tick lock", jobId);
+            return;
+        }
+        SimpleLock lock = maybeLock.get();
+        cronExecutor.submit(() -> {
+            try {
+                runWithBackpressure(job, "scheduled");
+            } finally {
+                try {
+                    lock.unlock();
+                } catch (Exception unlockEx) {
+                    // Lock will expire after LOCK_AT_MOST_FOR anyway; log + continue
+                    // so a transient unlock failure doesn't taint the cron worker.
+                    log.warn("[CronJob] {} lock release failed: {}", jobId, unlockEx.getMessage());
+                }
+            }
+        });
     }
 
     // ==================== 任务执行 ====================
