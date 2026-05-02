@@ -916,9 +916,17 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
                 case "image" -> {
                     String imageKey = (String) contentObj.get("image_key");
                     if (imageKey != null) {
-                        String localPath = maybeDownloadResource(messageId, imageKey, "image", null);
+                        // Images need bytes for vision: the Feishu CDN URL
+                        // requires tenant_access_token, so a downstream vision
+                        // tool that only sees image_key cannot fetch the
+                        // image. Default-on for images (separate from the
+                        // file/audio/video gate) so vision works out of the
+                        // box; admins can opt out with feishu_image_download_enabled=false.
+                        String localPath = maybeDownloadImage(messageId, imageKey);
                         MessageContentPart part = MessageContentPart.image(imageKey, null);
-                        if (localPath != null) part.setPath(localPath);
+                        if (localPath != null) {
+                            part.setPath(localPath);
+                        }
                         parts.add(part);
                     }
                     yield "[图片]";
@@ -1068,7 +1076,9 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
                     case "img" -> {
                         String imageKey = (String) element.get("image_key");
                         if (imageKey != null) {
-                            String localPath = mediaDownload ? maybeDownloadResource(messageId, imageKey, "image", null) : null;
+                            // Same reasoning as the standalone image case: vision
+                            // pipelines need bytes; image_key alone is opaque.
+                            String localPath = maybeDownloadImage(messageId, imageKey);
                             MessageContentPart imgPart = MessageContentPart.image(imageKey, null);
                             if (localPath != null) imgPart.setPath(localPath);
                             parts.add(imgPart);
@@ -1115,6 +1125,22 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
             return null;
         }
         return downloadResource(messageId, fileKey, type, fileNameHint);
+    }
+
+    /**
+     * Image-specific download: default ON so the vision/STT pipeline
+     * downstream actually has bytes to analyze. Without the local file,
+     * vision providers see only an opaque {@code image_key} and the
+     * Feishu CDN URL needs tenant_access_token to fetch — neither of
+     * which the model can resolve. Admins who want to suppress image
+     * downloads (e.g. tighter privacy, no disk usage) can set
+     * {@code feishu_image_download_enabled=false} on the channel config.
+     */
+    private String maybeDownloadImage(String messageId, String imageKey) {
+        if (!getConfigBoolean("feishu_image_download_enabled", true)) {
+            return null;
+        }
+        return downloadResource(messageId, imageKey, "image", null);
     }
 
     /**
