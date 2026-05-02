@@ -1557,7 +1557,12 @@ public class WikiProcessingService {
         final int maxAttempts = Math.max(1, properties.getLlmMaxAttempts());
         final long maxTotalDurationMs = Math.max(1_000L, properties.getLlmMaxTotalDurationMs());
         final long startNanos = System.nanoTime();
-        final ChatModel chatModel = buildChatModelFor(kbId, step);
+
+        ResolvedChatModel resolved = resolveChatModel(kbId, step);
+        ChatModel chatModel = resolved.chatModel;
+        Long currentModelId = resolved.modelId;
+        boolean alreadyFellBack = false;
+
         int attempt = 0;
         while (true) {
             attempt++;
@@ -1588,8 +1593,29 @@ public class WikiProcessingService {
                 }
                 String rootInfo = summarizeRoot(t);
                 if (isFatalModelError(t)) {
-                    log.error("[Wiki] LLM unavailable (fatal) for {} after {} attempts (rootCause={}): {}",
-                            ctx, attempt, rootInfo, t.getMessage());
+                    // One-hop fallback: when the primary provider is wedged
+                    // (auth / quota / 余额不足 / model-not-found), try the next
+                    // configured chat model with a different provider before
+                    // giving up. The hop is one-shot — if the fallback also
+                    // fatals, we surface the error rather than walking the
+                    // whole chain to avoid pathological loops.
+                    if (!alreadyFellBack) {
+                        ResolvedChatModel next = pickFallbackChatModel(currentModelId);
+                        if (next != null) {
+                            log.warn("[Wiki] LLM fatal on primary model={} for {}; failing over to model={} (rootCause={}): {}",
+                                    currentModelId, ctx, next.modelId, rootInfo, t.getMessage());
+                            chatModel = next.chatModel;
+                            currentModelId = next.modelId;
+                            alreadyFellBack = true;
+                            // Reset attempt counter so the fallback gets a fresh budget; total time
+                            // budget continues to count down.
+                            attempt = 0;
+                            backoffMs = 1000;
+                            continue;
+                        }
+                    }
+                    log.error("[Wiki] LLM unavailable (fatal) for {} after {} attempts on model={} (rootCause={}): {}",
+                            ctx, attempt, currentModelId, rootInfo, t.getMessage());
                     throw new RuntimeException("LLM unavailable (rootCause=" + rootInfo + "): " + t.getMessage(), t);
                 }
                 long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000L;
@@ -1611,6 +1637,60 @@ public class WikiProcessingService {
                 backoffMs = Math.min(maxBackoffMs, backoffMs * 2);
             }
         }
+    }
+
+    /** Pair of modelId + built ChatModel — null modelId means we used the system default. */
+    private record ResolvedChatModel(Long modelId, ChatModel chatModel) {}
+
+    private ResolvedChatModel resolveChatModel(Long kbId, vip.mate.wiki.job.WikiJobStep step) {
+        if (modelRoutingService != null && kbId != null && step != null) {
+            try {
+                Long modelId = modelRoutingService.selectModelId(kbId, "heavy_ingest", step);
+                ModelConfigEntity model = modelConfigService.getModel(modelId);
+                if (model != null) {
+                    return new ResolvedChatModel(modelId,
+                            agentGraphBuilder.buildRuntimeChatModel(model, WIKI_NO_RETRY));
+                }
+            } catch (Exception e) {
+                log.warn("[Wiki] Model routing failed for kbId={} step={}, falling back to default: {}",
+                        kbId, step, e.getMessage());
+            }
+        }
+        ModelConfigEntity defaultModel = modelConfigService.getDefaultModel();
+        Long id = defaultModel == null ? null : defaultModel.getId();
+        return new ResolvedChatModel(id, buildChatModel());
+    }
+
+    /**
+     * Pick the next enabled chat model whose provider differs from the failed
+     * model's provider, so we cycle to a fresh credential / billing account
+     * rather than retrying a wedged one. Returns null when no alternative
+     * exists — caller surfaces the original failure.
+     */
+    private ResolvedChatModel pickFallbackChatModel(Long failedModelId) {
+        try {
+            String failedProviderId = null;
+            if (failedModelId != null) {
+                ModelConfigEntity failed = modelConfigService.getModel(failedModelId);
+                if (failed != null) failedProviderId = failed.getProvider();
+            }
+            for (ModelConfigEntity candidate : modelConfigService.listEnabledModels()) {
+                if (candidate.getId() == null) continue;
+                if (candidate.getId().equals(failedModelId)) continue;
+                String mt = candidate.getModelType();
+                if (mt != null && !mt.isBlank() && !"chat".equalsIgnoreCase(mt)) continue;
+                if (failedProviderId != null && failedProviderId.equals(candidate.getProvider())) continue;
+                try {
+                    ChatModel built = agentGraphBuilder.buildRuntimeChatModel(candidate, WIKI_NO_RETRY);
+                    return new ResolvedChatModel(candidate.getId(), built);
+                } catch (Exception e) {
+                    log.debug("[Wiki] fallback candidate model={} unbuildable: {}", candidate.getId(), e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[Wiki] fallback lookup failed: {}", e.getMessage());
+        }
+        return null;
     }
 
     /**
@@ -1656,6 +1736,16 @@ public class WikiProcessingService {
                         || m.contains("invalidapikey") || m.contains("invalid_request_error")
                         || m.contains("quota") || m.contains("insufficient_quota")
                         || m.contains("no default model") || m.contains("model configuration")) {
+                    return true;
+                }
+                // 中文 provider 余额耗尽：Zhipu 1113 / DashScope "Throttling" 中文返回 / 通用 "余额不足"。
+                // 原本走 "transient retry" 5 次 × 1s 退避，3 分钟才放弃；归类为 fatal 后立即触发 fallback hop。
+                // Chinese patterns checked against original msg (case-insensitive in Chinese is moot);
+                // codes / English snippets against the already-lowercased m.
+                if (msg.contains("余额不足") || msg.contains("请充值")
+                        || m.contains("\"code\":\"1113\"") || m.contains("\"code\":1113")
+                        || m.contains("accountbalancenotenough")
+                        || m.contains("balance not enough")) {
                     return true;
                 }
                 // 【Review Bug 3】prompt 结构性错误：重试也得同样结果，立即终止
