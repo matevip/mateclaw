@@ -44,9 +44,17 @@ public class AgentEntity {
      * or disabled also fall back, since {@code resolveModel} returns the
      * default when no enabled match is found.
      *
+     * <p>{@link FieldStrategy#ALWAYS} so a {@code PUT} with explicit null
+     * actually clears the column — the MyBatis-Plus default {@code NOT_NULL}
+     * strategy silently drops null fields from UPDATE, which means a user
+     * who once picked a model could never revert back to "use global default"
+     * via the UI (only by directly editing the DB). Smoke test on 2026-05-02
+     * caught it.
+     *
      * <p>RFC-03 Lane G1 — re-enables this field after it was silently
      * deprecated in earlier work; the database column is unchanged.
      */
+    @TableField(value = "model_name", updateStrategy = FieldStrategy.ALWAYS)
     private String modelName;
 
     /** 最大迭代次数 */
