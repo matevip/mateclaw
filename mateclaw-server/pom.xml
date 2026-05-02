@@ -404,6 +404,15 @@
             <artifactId>jgrapht-core</artifactId>
             <version>1.5.2</version>
         </dependency>
+
+        <!-- PDF parsing for inline image extraction (wiki vision-in pipeline).
+             Used to walk PDPage resources and pull out PDImageXObject instances
+             for downstream captioning. -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.3</version>
+        </dependency>
     </dependencies>
 
     <build>

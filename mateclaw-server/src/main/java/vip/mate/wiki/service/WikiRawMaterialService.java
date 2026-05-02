@@ -42,6 +42,7 @@ public class WikiRawMaterialService {
     /** RFC-013：删除时级联清理 chunk */
     private final WikiChunkService chunkService;
     private final ImageVisionService imageVisionService;
+    private final PdfImageExtractor pdfImageExtractor;
 
     /**
      * RFC-012 follow-up #3：从 partial 状态触发的 reprocess 会在此 set 中打标，
@@ -352,17 +353,22 @@ public class WikiRawMaterialService {
                     String text = json.getStr("text");
                     if (text != null && !text.isBlank()) {
                         boolean truncated = json.getBool("truncated", false);
+                        // Append inline-image captions for PDFs so chunk-level search
+                        // hits chart/diagram contents that the text extractor missed.
+                        // Failures are non-fatal: the body text is still returned.
+                        String enriched = appendPdfImageCaptions(entity, text);
+
                         if (truncated) {
                             // 截断的结果不缓存，避免永久丢失后半内容。返回文本供分块处理使用。
                             log.warn("[Wiki] Extracted text truncated at {} chars for: {} (full document may be larger)",
                                     text.length(), entity.getSourcePath());
                         } else {
                             // Full extraction: cache to avoid re-extracting on subsequent calls.
-                            updateExtractedText(entity.getId(), text);
+                            updateExtractedText(entity.getId(), enriched);
                         }
-                        log.info("[Wiki] Extracted text from {}: {} chars, method={}, truncated={}",
-                                entity.getSourcePath(), text.length(), json.getStr("method"), truncated);
-                        return text;
+                        log.info("[Wiki] Extracted text from {}: {} chars (text) → {} chars (enriched), method={}, truncated={}",
+                                entity.getSourcePath(), text.length(), enriched.length(), json.getStr("method"), truncated);
+                        return enriched;
                     }
                 }
                 log.warn("[Wiki] Document extraction returned no text for: {}", entity.getSourcePath());
@@ -371,6 +377,38 @@ public class WikiRawMaterialService {
             }
         }
         return entity.getOriginalContent();
+    }
+
+    /**
+     * For PDF raw materials, walks the inline images and appends a section of
+     * {@code [图 P{n}#{m}]: <caption>} markers so downstream chunking and
+     * search can index image contents. No-op for non-PDF source types and
+     * when the vision pipeline is unavailable.
+     */
+    private String appendPdfImageCaptions(WikiRawMaterialEntity entity, String body) {
+        if (!"pdf".equals(entity.getSourceType())) {
+            return body;
+        }
+        if (pdfImageExtractor == null) {
+            return body;
+        }
+        try {
+            List<String> snippets = pdfImageExtractor.captionInlineImages(
+                    java.nio.file.Paths.get(entity.getSourcePath()));
+            if (snippets.isEmpty()) {
+                return body;
+            }
+            StringBuilder sb = new StringBuilder(body);
+            sb.append("\n\n--- Inline images ---\n");
+            for (String snippet : snippets) {
+                sb.append(snippet).append('\n');
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("[Wiki] PDF inline-image captioning failed for id={}: {}",
+                    entity.getId(), e.getMessage());
+            return body;
+        }
     }
 
     /**
