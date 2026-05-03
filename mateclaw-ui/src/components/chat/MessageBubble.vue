@@ -713,7 +713,13 @@ const segments = computed<MessageSegment[]>(() => {
     if (!hasThinking) {
       const thinkingPart = props.message.contentParts?.find(p => p.type === 'thinking')
       if (thinkingPart?.text) {
-        segs.unshift({ id: 'th-fb', type: 'thinking', status: 'completed', thinkingText: thinkingPart.text })
+        // Tag with iterationIndex=0 so groupedIterations puts it in the FIRST
+        // iteration's thinking bucket instead of the default-zero bucket
+        // colliding with later iteration content. Without this, the fallback
+        // thinking renders below the answer for any conversation that has
+        // multi-iteration RFC-22 segments tagged elsewhere.
+        const firstIter = segs.find(s => typeof s.iterationIndex === 'number')?.iterationIndex ?? 0
+        segs.unshift({ id: 'th-fb', type: 'thinking', status: 'completed', thinkingText: thinkingPart.text, iterationIndex: firstIter })
       }
     }
 

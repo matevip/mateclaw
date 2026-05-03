@@ -540,8 +540,14 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       reconnectingForAsyncTasks = true
       // Defer one tick so the current 'done' handler chain finishes before
       // disconnect() fires inside connect().
+      // lastEventId is NOT passed here — connect() owns the per-conversation
+      // dedup state and injects its own lastEventId only when the target
+      // conversation matches what the dedup state was tracking.
       setTimeout(() => {
-        stream.connect({ conversationId: targetConv, reconnect: true })
+        stream.connect({
+          conversationId: targetConv,
+          reconnect: true,
+        })
           .catch(() => { /* swallow — handled by stream.error event */ })
           .finally(() => { reconnectingForAsyncTasks = false })
       }, 50)
@@ -1444,7 +1450,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     const isApprovalCommand = /^\/(approve|deny)$/i.test(content.trim())
 
     // ===== Sending while generating: route to interrupt / queue path =====
-    if (isGenerating.value && !isApprovalCommand) {
+    // _skipQueueRoute is set by the stale-state recovery path (when /interrupt
+    // returned queued=false because the backend stream is gone). It forces a
+    // single direct fresh-send attempt regardless of isGenerating, with a hard
+    // cap on recursive entries to prevent infinite loops if something is
+    // genuinely stuck.
+    const skipQueueRoute = (options as any)._skipQueueRoute === true
+    if (isGenerating.value && !isApprovalCommand && !skipQueueRoute) {
       return await handleInterruptOrQueue(content, options)
     }
 
@@ -1525,24 +1537,42 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         streamPhase.value = 'interrupting'
         messageQueue.markSending()
       } else if (result.data?.queued) {
-        // Non-interruptible but queued: will auto-resume when the current step ends
+        // Non-interruptible but queued: will auto-resume when the current step ends.
+        // (Backend now also returns queued=true while state.done is still within
+        // its retention window — see ChatStreamTracker.enqueueMessage. This
+        // closes the race that previously caused the new submit to bypass the
+        // queue, race the previous turn's `done` handler, and merge into the
+        // previous user message bubble.)
         streamPhase.value = 'queued'
       } else {
-        // No active stream — send directly
-        messageQueue.clear()
-        createUserMessage(content, options.contentParts, conversationId)
-        resetCurrentTurnState()
-        const assistantMessage = createAssistantMessage('', conversationId)
-        ;(assistantMessage as any)._turnId = activeTurnId
-        currentAssistantId.value = assistantMessage.id as string
-        streamPhase.value = thinkingLevelRef?.value === 'off' ? 'streaming' : 'thinking'
-        phaseInfo.value = null
-        await stream.connect({
-          agentId,
-          message: content,
-          conversationId,
-          contentParts: options.contentParts || [],
-        })
+        // queued=false now means there's no producer to drain into:
+        //   - state == null   → conversation cleaned up post-retention
+        //   - state.done       → stream's doOnComplete already fired and
+        //                         no consumer remains to call startQueuedMessage
+        // Either way, accepting another queue entry would silently park
+        // the message in memory until cleanup; instead, drop the local
+        // queue entry and restart as a fresh send. Pass _skipQueueRoute
+        // so the recursive sendMessage takes the normal path even if the
+        // frontend's isGenerating still reads true (e.g. the previous
+        // turn's `done` event hasn't landed yet) — without this flag the
+        // recursion loops back into handleInterruptOrQueue and gets the
+        // same queued=false response.
+        console.warn('[useChat] interrupt returned queued=false (RunState gone or done); restarting as fresh send')
+        const stale = messageQueue.dequeue()
+        const restartParts = stale?.contentParts ?? options.contentParts
+        // setTimeout(0) yields to any in-flight `done` handler that's
+        // about to flip isGenerating itself; the _skipQueueRoute is the
+        // belt-and-braces guard for the case where it never lands.
+        setTimeout(() => {
+          sendMessage(content, {
+            ...options,
+            contentParts: restartParts,
+            _skipQueueRoute: true,
+          } as SendMessageOptions & { _skipQueueRoute: boolean }).catch(err => {
+            console.error('[useChat] restart-after-stale-interrupt failed:', err)
+            error.value = err instanceof Error ? err : new Error(String(err))
+          })
+        }, 0)
       }
     } catch (e) {
       console.error('[useChat] Interrupt request failed:', e)
@@ -1673,6 +1703,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     currentAssistantId.value = assistantMessage.id as string
 
     try {
+      // connect() owns lastEventId injection — it knows whether the dedup
+      // state still applies to this conversation. Passing it from out here
+      // would race the per-conv reset that connect does and could leak a
+      // different conv's id into this reconnect.
       await stream.connect({
         conversationId,
         reconnect: true,

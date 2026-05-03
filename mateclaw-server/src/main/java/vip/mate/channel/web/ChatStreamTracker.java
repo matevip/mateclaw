@@ -124,7 +124,13 @@ public class ChatStreamTracker {
         return iterationEventsEnabled;
     }
 
-    record SseEvent(String name, String json) {}
+    /**
+     * One buffered SSE event. The {@code id} is a per-conversation monotonic
+     * sequence — the SSE protocol's standard {@code id:} line carries this
+     * value so the client can echo it back via {@code lastEventId} when
+     * reconnecting, allowing us to skip already-delivered events on replay.
+     */
+    record SseEvent(long id, String name, String json) {}
 
     /**
      * 中断类型：区分用户主动停止和用户在运行中追加新消息
@@ -142,6 +148,15 @@ public class ChatStreamTracker {
         final List<SseEvent> buffer = new ArrayList<>();
         final Object lock = new Object();
         volatile boolean done;
+        /**
+         * Monotonic sequence used as the SSE protocol {@code id:} field.
+         * Incremented inside {@code state.lock} as each event is buffered,
+         * so the buffer is always in (id-asc) order. On reconnect, the
+         * client echoes its last-seen id back via {@code lastEventId} and
+         * we skip events whose id is &le; that value during replay —
+         * eliminating the duplicate-delivery class of bugs.
+         */
+        long nextEventId = 0L;
         /** Flux 订阅的 Disposable，用于取消 LLM 流 */
         volatile Disposable disposable;
         /** 停止标志：requestStop() 设为 true，各图节点和 LLM 调用检查此标志以提前退出 */
@@ -535,8 +550,9 @@ public class ChatStreamTracker {
 
         if (isDone || isAsyncTask) {
             if (state == null) return;
-            SseEvent ev = new SseEvent(eventName, jsonData);
             synchronized (state.lock) {
+                long id = ++state.nextEventId;
+                SseEvent ev = new SseEvent(id, eventName, jsonData);
                 state.buffer.add(ev);
                 if (state.buffer.size() > MAX_BUFFER_SIZE) {
                     trimBuffer(state.buffer);
@@ -545,7 +561,7 @@ public class ChatStreamTracker {
                 while (it.hasNext()) {
                     SseEmitter emitter = it.next();
                     try {
-                        emitter.send(SseEmitter.event().name(eventName).data(jsonData));
+                        emitter.send(SseEmitter.event().id(String.valueOf(id)).name(eventName).data(jsonData));
                         if (isDone) {
                             log.debug("Sent final 'done' event to subscriber for {}", conversationId);
                         }
@@ -588,8 +604,9 @@ public class ChatStreamTracker {
             return;
         }
 
-        SseEvent event = new SseEvent(eventName, jsonData);
         synchronized (state.lock) {
+            long id = ++state.nextEventId;
+            SseEvent event = new SseEvent(id, eventName, jsonData);
             state.buffer.add(event);
             // buffer 容量保护：超出上限时优先丢弃 thinking_delta（占比最大且非关键）
             if (state.buffer.size() > MAX_BUFFER_SIZE) {
@@ -599,7 +616,7 @@ public class ChatStreamTracker {
             while (it.hasNext()) {
                 SseEmitter emitter = it.next();
                 try {
-                    emitter.send(SseEmitter.event().name(eventName).data(jsonData));
+                    emitter.send(SseEmitter.event().id(String.valueOf(id)).name(eventName).data(jsonData));
                 } catch (IOException | IllegalStateException e) {
                     log.debug("Removing dead subscriber for {}: {}", conversationId, e.getMessage());
                     it.remove();
@@ -821,20 +838,52 @@ public class ChatStreamTracker {
      * @return true 如果成功附着或重放（订阅者已加入或事件已重放完毕），false 如果没有任何状态可恢复
      */
     public boolean attach(String conversationId, SseEmitter emitter) {
+        return attach(conversationId, emitter, 0L);
+    }
+
+    /**
+     * Reconnect-aware attach: replays only events whose id &gt;
+     * {@code lastEventId}. Pass 0 to replay everything (fresh attach
+     * behavior — same as the no-arg overload).
+     *
+     * <p>The id is the per-conversation monotonic sequence stamped on
+     * each {@link SseEvent} when it was first emitted. Frontend tracks
+     * the last id it processed and echoes it back via the request
+     * body's {@code lastEventId} field, eliminating the duplicate-
+     * delivery class of bugs (the symptom: thinking segments rendered
+     * with the wrong iterationIndex because frontend processed the
+     * same {@code iteration_start} twice).
+     */
+    public boolean attach(String conversationId, SseEmitter emitter, long lastEventId) {
         RunState state = runs.get(conversationId);
         if (state == null) {
             return false;
         }
         synchronized (state.lock) {
-            // 回放全部缓冲事件（包含 done 事件本身——见 broadcast 的 done 分支）
+            // Replay buffer with id-based dedup. Each buffered event keeps its
+            // original (1:1) id, so the skip condition is the simple
+            // `id <= lastEventId`. trimBuffer no longer merges delta events,
+            // so a single id always corresponds to a single contiguous run of
+            // text — there's no straddling-range edge case.
+            int replayed = 0;
+            int skipped = 0;
             for (SseEvent event : state.buffer) {
+                if (event.id() <= lastEventId) {
+                    skipped++;
+                    continue;
+                }
                 try {
-                    emitter.send(SseEmitter.event().name(event.name()).data(event.json()));
+                    emitter.send(SseEmitter.event().id(String.valueOf(event.id())).name(event.name()).data(event.json()));
+                    replayed++;
                 } catch (IOException | IllegalStateException e) {
                     log.warn("Failed to replay buffer to reconnecting client for {}: {}",
                             conversationId, e.getMessage());
                     return false;
                 }
+            }
+            if (lastEventId > 0 && skipped > 0) {
+                log.info("[SSE] Reconnect dedup for {}: skipped {} already-seen events, replayed {} new",
+                        conversationId, skipped, replayed);
             }
             // Stream complete: buffer replayed (including the `done` event itself).
             // We DO NOT auto-complete the emitter here — keep it subscribed so any
@@ -1215,6 +1264,17 @@ public class ChatStreamTracker {
     public boolean enqueueMessage(String conversationId, String message, Long agentId, boolean persisted,
                                   List<MessageContentPart> contentParts) {
         RunState state = runs.get(conversationId);
+        // Reject when there's no live producer to drain the queue:
+        //   - state == null:  conversation truly gone (cleanup completed)
+        //   - state.done:     stream's doOnComplete has already fired and
+        //                     called completeAndConsumeIfLast — no later
+        //                     consumer is guaranteed to invoke
+        //                     startQueuedMessage. Accepting an enqueue here
+        //                     would silently park the message in memory
+        //                     until the 5-minute retention sweep deletes it.
+        // Frontend treats `queued: false` as the cue to fall back to a fresh
+        // send (after the stale isGenerating settles), eliminating the
+        // race that previously merged messages into the prior turn.
         if (state == null || state.done) {
             return false;
         }
@@ -1323,116 +1383,56 @@ public class ChatStreamTracker {
     }
 
     /**
-     * 将 buffer 裁剪到 MAX_BUFFER_SIZE 以内。
-     * 策略：将连续的同类型 delta 事件合并为一条（拼接 delta 文本，保留完整内容但减少条目数）。
-     * 如果合并后仍超限，丢弃最早的 thinking_delta（thinking 对重连恢复不是关键内容）。
-     * 必须在 state.lock 内调用。
+     * Trim the replay buffer to {@link #MAX_BUFFER_SIZE} entries while
+     * preserving SSE-id semantics required by reconnect dedup.
+     *
+     * <p>We deliberately do NOT merge delta events even though it would
+     * reduce entry count more aggressively. Merging concatenates a range
+     * of original event ids into a single record; on reconnect a client
+     * whose {@code lastEventId} falls inside the merged range would
+     * either re-receive the head text (replay = duplicate) or lose the
+     * tail text (skip = data loss). Both are correctness bugs, and the
+     * dropping strategy below avoids them entirely — events kept in the
+     * buffer always correspond 1:1 to the ids the client originally saw.
+     *
+     * <p>Strategy (must be called under {@code state.lock}):
+     * <ol>
+     *   <li>Drop earliest {@code thinking_delta} entries — thinking text
+     *       is not part of the canonical answer; losing the head of a
+     *       very long reasoning trace on reconnect is acceptable.</li>
+     *   <li>If still over the cap, drop earliest {@code content_delta}
+     *       entries. This loses visible answer text, but only after we've
+     *       buffered &gt; {@link #MAX_BUFFER_SIZE} events — &gt;1 MB of
+     *       output. Rare enough that we accept the trade-off rather
+     *       than mangle reconnect semantics.</li>
+     * </ol>
      */
     private static void trimBuffer(List<SseEvent> buffer) {
         if (buffer.size() <= MAX_BUFFER_SIZE) return;
+        int target = buffer.size() - MAX_BUFFER_SIZE;
 
-        // 第一步：合并连续的同类型 delta 事件，拼接 delta 文本而非丢弃
-        List<SseEvent> compacted = new ArrayList<>(buffer.size());
-        int i = 0;
-        while (i < buffer.size()) {
-            SseEvent current = buffer.get(i);
-            if ("thinking_delta".equals(current.name()) || "content_delta".equals(current.name())) {
-                // 收集连续同类型 delta 的文本
-                StringBuilder merged = new StringBuilder();
-                merged.append(extractDelta(current.json()));
-                int j = i + 1;
-                while (j < buffer.size() && current.name().equals(buffer.get(j).name())) {
-                    merged.append(extractDelta(buffer.get(j).json()));
-                    j++;
-                }
-                // 合并为一条事件
-                compacted.add(new SseEvent(current.name(), buildDeltaJson(merged.toString())));
-                i = j;
-            } else {
-                compacted.add(current);
-                i++;
+        // Pass 1: drop earliest thinking_delta entries.
+        Iterator<SseEvent> it = buffer.iterator();
+        while (it.hasNext() && target > 0) {
+            SseEvent e = it.next();
+            if ("thinking_delta".equals(e.name())) {
+                it.remove();
+                target--;
             }
         }
 
-        // 第二步：如果仍超限，丢弃最早的 thinking_delta（对重连恢复不是关键）
-        if (compacted.size() > MAX_BUFFER_SIZE) {
-            Iterator<SseEvent> it = compacted.iterator();
-            int removed = 0;
-            int target = compacted.size() - MAX_BUFFER_SIZE;
-            while (it.hasNext() && removed < target) {
+        // Pass 2: if still over the cap, drop earliest content_delta entries.
+        if (target > 0) {
+            it = buffer.iterator();
+            while (it.hasNext() && target > 0) {
                 SseEvent e = it.next();
-                if ("thinking_delta".equals(e.name())) {
+                if ("content_delta".equals(e.name())) {
                     it.remove();
-                    removed++;
+                    target--;
                 }
             }
         }
-
-        buffer.clear();
-        buffer.addAll(compacted);
-        log.debug("Buffer trimmed: {} events", buffer.size());
-    }
-
-    /**
-     * 从 delta JSON（如 {"delta":"text"}）中提取 delta 值
-     */
-    private static String extractDelta(String json) {
-        // 快速解析 {"delta":"..."} — 避免引入完整 JSON 解析器依赖
-        int idx = json.indexOf("\"delta\"");
-        if (idx < 0) return "";
-        int colonIdx = json.indexOf(':', idx);
-        if (colonIdx < 0) return "";
-        int startQuote = json.indexOf('"', colonIdx + 1);
-        if (startQuote < 0) return "";
-        StringBuilder sb = new StringBuilder();
-        for (int k = startQuote + 1; k < json.length(); k++) {
-            char c = json.charAt(k);
-            if (c == '\\' && k + 1 < json.length()) {
-                char next = json.charAt(k + 1);
-                if (next == '"') { sb.append('"'); k++; }
-                else if (next == '\\') { sb.append('\\'); k++; }
-                else if (next == 'n') { sb.append('\n'); k++; }
-                else if (next == 't') { sb.append('\t'); k++; }
-                else if (next == 'r') { sb.append('\r'); k++; }
-                else if (next == '/') { sb.append('/'); k++; }
-                else if (next == 'b') { sb.append('\b'); k++; }
-                else if (next == 'f') { sb.append('\f'); k++; }
-                else if (next == 'u' && k + 5 < json.length()) {
-                    // Unicode escape: backslash-u followed by 4 hex digits
-                    String hex = json.substring(k + 2, k + 6);
-                    try {
-                        sb.append((char) Integer.parseInt(hex, 16));
-                        k += 5;
-                    } catch (NumberFormatException e) {
-                        sb.append(c); // 无法解析，保留原样
-                    }
-                }
-                else { sb.append(c); }
-            } else if (c == '"') {
-                break;
-            } else {
-                sb.append(c);
-            }
-        }
-        return sb.toString();
-    }
-
-    /**
-     * 构建 delta JSON 字符串
-     */
-    private static String buildDeltaJson(String delta) {
-        StringBuilder sb = new StringBuilder("{\"delta\":\"");
-        for (int k = 0; k < delta.length(); k++) {
-            char c = delta.charAt(k);
-            if (c == '"') sb.append("\\\"");
-            else if (c == '\\') sb.append("\\\\");
-            else if (c == '\n') sb.append("\\n");
-            else if (c == '\t') sb.append("\\t");
-            else if (c == '\r') sb.append("\\r");
-            else sb.append(c);
-        }
-        sb.append("\"}");
-        return sb.toString();
+        log.debug("Buffer trimmed: {} events remain", buffer.size());
     }
 
     // ==================== Stale RunState 清理 ====================

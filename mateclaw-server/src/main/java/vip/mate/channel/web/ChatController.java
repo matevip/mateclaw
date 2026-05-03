@@ -107,7 +107,8 @@ public class ChatController {
             // without sticky session)". They look identical from attach()'s
             // boolean return, but the user-facing remediation is different.
             boolean existsLocally = streamTracker.streamExistsOnThisNode(conversationId);
-            boolean attached = streamTracker.attach(conversationId, emitter);
+            long lastEventId = request.getLastEventId() == null ? 0L : request.getLastEventId();
+            boolean attached = streamTracker.attach(conversationId, emitter, lastEventId);
             if (!attached) {
                 try {
                     if (existsLocally) {
@@ -1024,6 +1025,14 @@ public class ChatController {
         private List<MessageContentPart> contentParts;
         /** true 表示断线重连，不发送新消息，只附着到已有的流 */
         private Boolean reconnect;
+        /**
+         * Last SSE event id the client has already processed. Only meaningful
+         * when {@link #reconnect} is true — the server skips events with
+         * id &le; this value during buffer replay so the client doesn't
+         * see them twice. 0 (or null) means "replay everything", matching
+         * the legacy attach behavior for backwards compatibility.
+         */
+        private Long lastEventId;
         /** 思考深度：off / low / medium / high / max，null 表示跟随 Agent 默认 */
         private String thinkingLevel;
     }
