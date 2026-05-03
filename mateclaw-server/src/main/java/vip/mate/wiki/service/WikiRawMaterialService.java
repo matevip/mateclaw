@@ -367,6 +367,15 @@ public class WikiRawMaterialService {
         } catch (Exception e) {
             log.warn("[Wiki] Failed to cascade-delete chunks for raw={}: {}", id, e.getMessage());
         }
+
+        // Source file last — DB pointer is gone, no other row references this
+        // path (each upload gets a timestamp-prefixed unique name), so
+        // leaving it on disk would just accumulate as the upload tree grows.
+        // Failure here is soft-logged and non-blocking — operator can run a
+        // sweep later if disk usage matters more than the delete RTT.
+        if (entity != null) {
+            cleanupFile(entity.getSourcePath());
+        }
     }
 
     /**
@@ -584,14 +593,18 @@ public class WikiRawMaterialService {
     }
 
     /**
-     * Delete a file from disk if it exists (cleanup for dedup-discarded uploads).
+     * Best-effort delete of an upload-tree file. Used both when a fresh
+     * upload turns out to be a duplicate (the new file is redundant) and
+     * when a raw material row is deleted (its source file becomes a
+     * disk orphan with no DB pointer to it). Idempotent — silently
+     * succeeds when the path is null or the file is already gone.
      */
     private void cleanupFile(String path) {
-        if (path == null) return;
+        if (path == null || path.isBlank()) return;
         try {
             java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(path));
         } catch (Exception e) {
-            log.warn("[Wiki] Failed to clean up duplicate upload file {}: {}", path, e.getMessage());
+            log.warn("[Wiki] Failed to clean up upload file {}: {}", path, e.getMessage());
         }
     }
 
