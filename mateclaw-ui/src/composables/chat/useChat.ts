@@ -62,6 +62,16 @@ export interface UseChatReturn {
   queueSize: import('vue').ComputedRef<number>
   /** Latest heartbeat data */
   heartbeat: import('vue').Ref<HeartbeatData | null>
+  /**
+   * Fine-grained pre-token lifecycle stage. Drives the loading bar copy in the
+   * window between "send pressed" and "first delta arrived". `null` once a
+   * delta is observed (StreamLoadingBar then falls back to `phase`-derived text).
+   */
+  lifecycleStage: import('vue').Ref<{
+    stage: 'connecting' | 'started' | 'context_prepared' | 'llm_request_sent' | 'streaming'
+    detail?: any
+    since: number
+  } | null>
   /** Send a message (can be called while generating — automatically routes to interrupt/queue) */
   sendMessage: (content: string, options: SendMessageOptions) => Promise<void>
   /** Stop generation (user-initiated stop; does not auto-resume queued messages) */
@@ -122,6 +132,27 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const currentSegments = ref<MessageSegment[]>([])
   const segIdCounter = { value: 0 }
   const genSegId = () => `seg-${Date.now()}-${segIdCounter.value++}`
+
+  /**
+   * Fine-grained lifecycle stage exposed to the UI for the "connecting → started
+   * → context_prepared → llm_request_sent → streaming" loading bar. Reset on
+   * every new turn; transitions to `streaming` implicitly when the first
+   * thinking/content delta lands.
+   */
+  const lifecycleStage = ref<{
+    stage: 'connecting' | 'started' | 'context_prepared' | 'llm_request_sent' | 'streaming'
+    detail?: any
+    since: number
+  } | null>(null)
+
+  /** Helper: tag a freshly-created segment with the active iteration / scope. */
+  function applyIterationTags(seg: MessageSegment) {
+    const stash = currentSegments.value as any
+    const idx = stash._currentIteration
+    if (typeof idx === 'number') seg.iterationIndex = idx
+    const subId = stash._currentSubagentId
+    if (subId) seg.subagentId = subId
+  }
 
   /** Unique ID for the current turn — prevents flushSegmentsToMessage from writing stale segments to a new message */
   let activeTurnId = ''
@@ -296,6 +327,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       if (['thinking', 'reasoning', 'drafting_answer', 'preparing_context'].includes(streamPhase.value)) {
         streamPhase.value = 'streaming'
       }
+      // First visible delta — flip lifecycleStage so the loading bar drops the
+      // pre-stream messaging and yields to the per-phase status text.
+      if (lifecycleStage.value && lifecycleStage.value.stage !== 'streaming') {
+        lifecycleStage.value = { stage: 'streaming', since: Date.now() }
+      }
       // Segments: append to the current running content segment, or create a new one
       const segs = currentSegments.value
       let contentSeg = segs.findLast((s: MessageSegment) => s.type === 'content' && s.status === 'running')
@@ -304,6 +340,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         const thinkingSeg = segs.findLast((s: MessageSegment) => s.type === 'thinking' && s.status === 'running')
         if (thinkingSeg) thinkingSeg.status = 'completed'
         contentSeg = { id: genSegId(), type: 'content', status: 'running', text: '', timestamp: Date.now() }
+        applyIterationTags(contentSeg)
         segs.push(contentSeg)
         flushSegmentsToMessage() // sync once when a new content segment is created
       }
@@ -330,12 +367,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       )
       if (!thinkSeg) {
         thinkSeg = { id: genSegId(), type: 'thinking', status: 'running', thinkingText: '', timestamp: Date.now() }
+        applyIterationTags(thinkSeg)
         // Append in timeline order (interleaved with tool_calls) — old behavior unshift'd to top,
         // but with per-round splitting that misorders rounds 2+ relative to their tool calls.
         segs.push(thinkSeg)
         flushSegmentsToMessage()
       }
       thinkSeg.thinkingText = (thinkSeg.thinkingText || '') + (data.delta || '')
+      // First thinking delta — same lifecycle flip as content_delta.
+      if (lifecycleStage.value && lifecycleStage.value.stage !== 'streaming') {
+        lifecycleStage.value = { stage: 'streaming', since: Date.now() }
+      }
     }
   })
 
@@ -458,6 +500,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       : data.status === 'stopped' ? 'stopped' : 'completed'
     if (data.status !== 'awaiting_approval') {
       phaseInfo.value = null
+      lifecycleStage.value = null
       expirePendingApprovals(data.status === 'stopped' ? 'stopped' : 'completed')
     }
 
@@ -533,6 +576,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     error.value = new Error(errorMessage)
     streamPhase.value = 'idle'
     phaseInfo.value = null
+    lifecycleStage.value = null
     // Clear queue on error to avoid stale state
     messageQueue.clear()
     expirePendingApprovals('failed')
@@ -550,7 +594,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   // ===== Agent event handlers =====
 
-  stream.on('tool_call_started', (data) => {
+  // Body of tool_call_started — extracted so delegation_batch can replay the
+  // same behavior for buffered child events without duplicating logic.
+  function handleToolCallStarted(data: any) {
     if (isStaleEvent(data)) return
     streamPhase.value = 'executing_tool'
     if (currentAssistantId.value) {
@@ -577,17 +623,20 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       const segs = currentSegments.value
       const runningSeg = segs.findLast((s: MessageSegment) => s.status === 'running' && (s.type === 'thinking' || s.type === 'content'))
       if (runningSeg) runningSeg.status = 'completed'
-      segs.push({
+      const toolSeg: MessageSegment = {
         id: genSegId(), type: 'tool_call', status: 'running',
         toolCallId: data.toolCallId || '',
         toolName: data.toolName, toolArgs: data.arguments,
         timestamp: data.timestamp || Date.now(),
-      })
+      }
+      applyIterationTags(toolSeg)
+      segs.push(toolSeg)
       flushSegmentsToMessage()
     }
-  })
+  }
 
-  stream.on('tool_call_completed', (data) => {
+  // Body of tool_call_completed — see handleToolCallStarted.
+  function handleToolCallCompleted(data: any) {
     if (isStaleEvent(data)) return
     if (currentAssistantId.value) {
       const msg = getMessage(currentAssistantId.value)
@@ -641,7 +690,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         pendingAsyncTaskIds.add(taskId)
       }
     }
-  })
+  }
+
+  stream.on('tool_call_started', handleToolCallStarted)
+  stream.on('tool_call_completed', handleToolCallCompleted)
 
   // ===== Browser action events =====
 
@@ -872,6 +924,123 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         }
       }
       flushSegmentsToMessage()
+    }
+  })
+
+  // ===== Stream lifecycle (pre-token) events =====
+  // These give the loading bar substantive status text in the gap between
+  // "user pressed send" and "first token arrived" — eliminating the dead air
+  // where the user only saw a spinner with no progress signal.
+  stream.on('stream_started', (data) => {
+    if (isStaleEvent(data)) return
+    lifecycleStage.value = { stage: 'started', since: Date.now() }
+  })
+
+  stream.on('context_prepared', (data) => {
+    if (isStaleEvent(data)) return
+    lifecycleStage.value = { stage: 'context_prepared', detail: data, since: Date.now() }
+  })
+
+  stream.on('llm_request_sent', (data) => {
+    if (isStaleEvent(data)) return
+    lifecycleStage.value = { stage: 'llm_request_sent', detail: data, since: Date.now() }
+  })
+
+  // ===== Per-iteration boundaries (single-turn UX overhaul) =====
+  stream.on('iteration_start', (data) => {
+    if (isStaleEvent(data)) return
+    // Force-close any running thinking/content segments — guarantees no segment
+    // belonging to the next iteration is appended onto the previous one's tail.
+    const segs = currentSegments.value
+    for (const seg of segs) {
+      if (seg.status === 'running' && (seg.type === 'thinking' || seg.type === 'content')) {
+        seg.status = 'completed'
+      }
+    }
+    // Stash iteration / scope on the array so segment factories pick them up.
+    ;(currentSegments.value as any)._currentIteration = data.index ?? 0
+    ;(currentSegments.value as any)._currentScope = data.scope ?? 'parent'
+    ;(currentSegments.value as any)._currentSubagentId = data.subagentId
+    flushSegmentsToMessage()
+  })
+
+  stream.on('iteration_end', (data) => {
+    if (isStaleEvent(data)) return
+    // Sentence-level repetition warning runs on the backend (content_truncated
+    // event); we don't recompute it here. Just close any still-running
+    // thinking/content segments belonging to the iteration that's wrapping up.
+    const segs = currentSegments.value
+    for (const seg of segs) {
+      if (seg.status === 'running' && (seg.type === 'thinking' || seg.type === 'content')) {
+        seg.status = 'completed'
+      }
+    }
+    flushSegmentsToMessage()
+  })
+
+  stream.on('thinking_start', (data) => {
+    if (isStaleEvent(data)) return
+    // Pure analytics signal — thinking_delta will create the segment as needed.
+    if (currentAssistantId.value) streamPhase.value = 'thinking'
+  })
+
+  stream.on('thinking_end', (data) => {
+    if (isStaleEvent(data)) return
+    // Auto-collapse decisions belong to ThinkingSegment.vue. We deliberately
+    // do not flip status here — thinking_delta after thinking_end is rare but
+    // valid (e.g. a late provider chunk), and we want it to extend the same
+    // segment rather than open a new one.
+  })
+
+  stream.on('content_truncated', (data) => {
+    if (isStaleEvent(data)) return
+    // Mark the running content segment with a repetition warning so the UI
+    // can render an inline informational banner.
+    const segs = currentSegments.value
+    const contentSeg = segs.findLast((s: MessageSegment) => s.type === 'content' && s.status === 'running')
+    if (contentSeg) {
+      contentSeg.repetitionWarning = data.reason
+      contentSeg.truncatedChars = data.truncatedChars
+    }
+    flushSegmentsToMessage()
+  })
+
+  stream.on('tool_result_chunk', (data) => {
+    if (isStaleEvent(data)) return
+    // Streamed tool result delta — append to the matching tool_call segment.
+    // tool_call_completed still fires separately and carries the canonical
+    // success/result fields; this just lets large results stream in instead
+    // of arriving as one giant blob.
+    const segs = currentSegments.value
+    const toolSeg = segs.find((s: MessageSegment) =>
+      s.type === 'tool_call' && s.toolCallId === data.ref)
+    if (toolSeg) {
+      toolSeg.toolResult = (toolSeg.toolResult || '') + (data.delta || '')
+      // Note: data.final = true just means the buffer for this tool's result
+      // is exhausted. Final success/error state still arrives via
+      // tool_call_completed, so we don't terminate the segment here.
+    }
+    flushSegmentsToMessage()
+  })
+
+  stream.on('delegation_batch', (data) => {
+    if (isStaleEvent(data)) return
+    // Buffered child events from a delegated subagent. Replay them in order
+    // through the same handlers as live events so segment state stays
+    // consistent with the rest of the timeline.
+    const events = Array.isArray(data?.events) ? data.events : []
+    for (const ev of events) {
+      const evData = ev?.data ?? {}
+      switch (ev?.event) {
+        case 'tool_call_started':
+          handleToolCallStarted(evData)
+          break
+        case 'tool_call_completed':
+          handleToolCallCompleted(evData)
+          break
+        // Other event kinds (phase / thinking_delta / content_delta / etc.)
+        // are not currently produced inside batches; extend here when added.
+      }
     }
   })
 
@@ -1140,6 +1309,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     currentAssistantId.value = assistantMessage.id as string
     streamPhase.value = options.thinkingLevel?.value === 'off' ? 'streaming' : 'thinking'
     phaseInfo.value = null
+    // New turn — reset lifecycle so the loading bar shows pre-token progress.
+    lifecycleStage.value = { stage: 'connecting', since: Date.now() }
   })
 
   // ===== Async task completion events (video / image / music generation) =====
@@ -1293,6 +1464,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     streamConversationId = conversationId
     streamPhase.value = thinkingLevelRef?.value === 'off' ? 'streaming' : 'thinking'
     phaseInfo.value = null
+    // Begin pre-token lifecycle. Subsequent stream_started / context_prepared /
+    // llm_request_sent events override this; first delta clears it.
+    lifecycleStage.value = { stage: 'connecting', since: Date.now() }
 
     try {
       if (!isApprovalCommand) {
@@ -1555,6 +1729,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     segIdCounter.value = 0
     streamPhase.value = 'idle'
     phaseInfo.value = null
+    lifecycleStage.value = null
     error.value = null
     messageQueue.clear()
     if (stopFallbackTimer) {
@@ -1573,6 +1748,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     hasQueued: messageQueue.hasQueued,
     queueSize: messageQueue.queueSize,
     heartbeat,
+    lifecycleStage,
     sendMessage,
     stopGeneration,
     cancelQueued,

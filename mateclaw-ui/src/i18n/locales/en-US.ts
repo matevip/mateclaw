@@ -248,6 +248,15 @@ export default {
     streamSlowSummarizing: 'Organizing a larger tool result. This step often takes longer.',
     streamSlowReasoning: 'The model is doing heavier analysis here. This is not a frozen connection.',
     streamSlowGeneral: 'Processing is still ongoing. The time is currently being spent in internal analysis.',
+    // Pre-token lifecycle stages
+    streamConnecting: 'Connecting to server...',
+    streamStarted: 'Connection established, preparing context...',
+    streamContextPrepared: 'Context ready, calling LLM...',
+    streamLlmRequestSent: 'Waiting for first token...',
+    streamElapsedSuffix: ' ({sec}s elapsed)',
+    // Per-iteration grouping
+    iterationEmpty: 'Iteration {index} interrupted (no output)',
+    contentRepetitionWarning: 'Repetitive content detected near the end (model artifact)',
     // Approval bar
     approvalAllow: 'Allow',
     approvalExecute: 'to execute?',

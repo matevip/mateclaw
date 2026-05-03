@@ -251,6 +251,7 @@
         :phase-info="phaseInfo"
         :running-tool-name="currentRunningToolName"
         :has-queued="hasQueued"
+        :lifecycle-stage="lifecycleStage"
       />
 
       <!-- 使用组件化的 ChatInput -->
@@ -608,6 +609,7 @@ const {
   hasQueued,
   queueSize,
   heartbeat,
+  lifecycleStage,
   sendMessage: sendChatMessage,
   stopGeneration: stopChatGeneration,
   cancelQueued,

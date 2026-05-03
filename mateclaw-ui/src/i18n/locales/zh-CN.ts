@@ -248,6 +248,15 @@ export default {
     streamSlowSummarizing: '正在整理较长的工具结果。因为信息较多，这一步可能需要更久。',
     streamSlowReasoning: '正在做较复杂的分析和取舍，不是卡住。',
     streamSlowGeneral: '处理还在继续，当前主要耗时在内部分析，不代表连接中断。',
+    // 首 token 前的生命周期阶段
+    streamConnecting: '正在连接服务器...',
+    streamStarted: '连接已建立，正在准备上下文...',
+    streamContextPrepared: '上下文已就绪，正在调用 LLM...',
+    streamLlmRequestSent: '等待模型首个响应...',
+    streamElapsedSuffix: '（已等 {sec} 秒）',
+    // 按轮次分组渲染
+    iterationEmpty: '第 {index} 轮被中断（无输出）',
+    contentRepetitionWarning: '检测到内容尾部重复（疑似模型输出 artifact）',
     // 审批栏
     approvalAllow: '允许',
     approvalExecute: '执行？',

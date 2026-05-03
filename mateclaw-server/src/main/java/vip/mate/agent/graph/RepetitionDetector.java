@@ -2,14 +2,28 @@ package vip.mate.agent.graph;
 
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
+
 /**
  * 流式输出重复检测器
  * <p>
  * 检测 LLM 流式输出中的退化重复模式（degenerate repetition），
  * 当检测到内容在滑动窗口内高度重复时返回 true，调用方应截断 LLM 流。
  * <p>
- * 算法：维护一个滑动窗口缓冲区，每次追加新 delta 后，
- * 检查窗口尾部是否存在连续重复的 n-gram 模式。
+ * Two complementary detection paths run on every {@link #appendAndCheck}:
+ * <ol>
+ *   <li>Character-level n-gram repetition (continuous "X X X X" loops),
+ *       which catches the classic degenerate-output failure within a single
+ *       LLM stream.</li>
+ *   <li>Sentence-level Jaccard similarity over the trailing N sentences,
+ *       which catches "two near-identical sentences ~5 sentences apart" —
+ *       a softer failure that the character path misses because the loop is
+ *       not adjacent.</li>
+ * </ol>
  *
  * @author MateClaw Team
  */
@@ -31,8 +45,42 @@ public class RepetitionDetector {
     /** 已累积内容的最小长度才开始检测（避免误判短内容） */
     private static final int MIN_CONTENT_LEN = 200;
 
+    // ===== Sentence-level detection =====
+
+    /**
+     * Number of trailing sentences to compare against the prior window. 3
+     * tail sentences plus a 10-sentence lookback is enough to catch "ABC
+     * (other) ABC (other)" duplication while keeping the cost bounded.
+     */
+    private static final int SENTENCE_TAIL_COUNT = 3;
+    private static final int SENTENCE_LOOKBACK = 10;
+    private static final double JACCARD_THRESHOLD = 0.85;
+    /**
+     * Lower bound on the per-sentence token count. Below this both the
+     * tail and the historical sentence are too short to make Jaccard
+     * meaningful (single phrases like "好的。" would otherwise false-positive).
+     */
+    private static final int SENTENCE_MIN_TOKENS = 6;
+    /**
+     * Buffer must hold at least this many characters before sentence-level
+     * detection runs — keeps the cost off the early hot path.
+     */
+    private static final int SENTENCE_MIN_BUFFER = 1500;
+    /**
+     * Sentence delimiters: full-width Chinese punctuation plus ASCII end-of
+     * -sentence punctuation and newline. Splitting greedily on any of these
+     * is good enough for Jaccard's set-of-tokens semantics.
+     */
+    private static final Pattern SENTENCE_SPLIT =
+            Pattern.compile("[\\u3002\\uff01\\uff1f.!?\\n]+");
+
     private final StringBuilder buffer = new StringBuilder();
     private boolean repetitionDetected = false;
+    /**
+     * Marks repetition detected via the sentence path so callers can tell
+     * "char_pattern" from "sentence_repetition" in their warning broadcasts.
+     */
+    private boolean lastTriggerWasSentence = false;
 
     /**
      * 追加新的 delta 并检测是否存在重复
@@ -52,9 +100,13 @@ public class RepetitionDetector {
             return false;
         }
 
-        // 保持窗口大小
-        if (buffer.length() > WINDOW_SIZE * 2) {
-            buffer.delete(0, buffer.length() - WINDOW_SIZE);
+        // Window trim policy: the char-level path only needs the last ~1024
+        // chars, but the sentence path benefits from a larger horizon so it
+        // can compare against the full 10-sentence lookback. Keep up to
+        // SENTENCE_MIN_BUFFER * 2 so the sentence detector has room.
+        int retainCap = Math.max(WINDOW_SIZE, SENTENCE_MIN_BUFFER * 2);
+        if (buffer.length() > retainCap * 2) {
+            buffer.delete(0, buffer.length() - retainCap);
         }
 
         // 在窗口尾部检测重复模式
@@ -89,6 +141,7 @@ public class RepetitionDetector {
                 }
 
                 repetitionDetected = true;
+                lastTriggerWasSentence = false;
                 log.warn("[RepetitionDetector] Detected degenerate repetition: " +
                                 "pattern length={}, repeats={}, pattern preview=\"{}\"",
                         patternLen, count,
@@ -97,7 +150,137 @@ public class RepetitionDetector {
             }
         }
 
+        // Sentence-level path: cheap to skip until the buffer is long enough
+        // to actually contain multiple sentences worth comparing.
+        if (buffer.length() >= SENTENCE_MIN_BUFFER && checkSentenceRepetition(window)) {
+            repetitionDetected = true;
+            lastTriggerWasSentence = true;
+            return true;
+        }
+
         return false;
+    }
+
+    /**
+     * Return true when one of the trailing {@link #SENTENCE_TAIL_COUNT}
+     * sentences is near-duplicate to one of the previous {@link #SENTENCE_LOOKBACK}
+     * sentences (Jaccard over token unigram sets). Both candidates must clear
+     * {@link #SENTENCE_MIN_TOKENS} so we don't false-positive on common short
+     * acknowledgements.
+     */
+    private boolean checkSentenceRepetition(String window) {
+        String[] split = SENTENCE_SPLIT.split(window);
+        // Drop trailing whitespace-only segments produced by the splitter.
+        List<String> sentences = new ArrayList<>(split.length);
+        for (String s : split) {
+            String trimmed = s.trim();
+            if (!trimmed.isEmpty()) {
+                sentences.add(trimmed);
+            }
+        }
+        if (sentences.size() < 2) {
+            return false;
+        }
+
+        int total = sentences.size();
+        int tailStart = Math.max(0, total - SENTENCE_TAIL_COUNT);
+        int lookbackStart = Math.max(0, tailStart - SENTENCE_LOOKBACK);
+
+        for (int i = tailStart; i < total; i++) {
+            Set<String> tailTokens = tokenize(sentences.get(i));
+            if (tailTokens.size() < SENTENCE_MIN_TOKENS) continue;
+
+            for (int j = lookbackStart; j < tailStart; j++) {
+                Set<String> earlierTokens = tokenize(sentences.get(j));
+                if (earlierTokens.size() < SENTENCE_MIN_TOKENS) continue;
+
+                double jaccard = jaccard(tailTokens, earlierTokens);
+                if (jaccard >= JACCARD_THRESHOLD) {
+                    String preview = sentences.get(i);
+                    log.warn("[RepetitionDetector] Sentence-level repetition: " +
+                                    "tailIdx={}, earlierIdx={}, jaccard={}, preview=\"{}\"",
+                            i, j, String.format("%.2f", jaccard),
+                            preview.length() > 60 ? preview.substring(0, 60) + "..." : preview);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Cheap tokenizer that treats each Chinese char as its own token and
+     * splits ASCII / European text on whitespace. Producing token sets keeps
+     * Jaccard symmetric on lengths, which is the property we rely on.
+     */
+    private static Set<String> tokenize(String sentence) {
+        Set<String> tokens = new HashSet<>();
+        StringBuilder asciiWord = new StringBuilder();
+        for (int i = 0; i < sentence.length(); i++) {
+            char c = sentence.charAt(i);
+            if (isCjk(c)) {
+                if (asciiWord.length() > 0) {
+                    tokens.add(asciiWord.toString().toLowerCase());
+                    asciiWord.setLength(0);
+                }
+                tokens.add(String.valueOf(c));
+            } else if (Character.isLetterOrDigit(c)) {
+                asciiWord.append(c);
+            } else {
+                if (asciiWord.length() > 0) {
+                    tokens.add(asciiWord.toString().toLowerCase());
+                    asciiWord.setLength(0);
+                }
+            }
+        }
+        if (asciiWord.length() > 0) {
+            tokens.add(asciiWord.toString().toLowerCase());
+        }
+        return tokens;
+    }
+
+    private static boolean isCjk(char c) {
+        return (c >= 0x4E00 && c <= 0x9FFF)
+                || (c >= 0x3400 && c <= 0x4DBF)
+                || (c >= 0xF900 && c <= 0xFAFF);
+    }
+
+    private static double jaccard(Set<String> a, Set<String> b) {
+        if (a.isEmpty() && b.isEmpty()) return 1.0;
+        int intersect = 0;
+        Set<String> smaller = a.size() <= b.size() ? a : b;
+        Set<String> larger = smaller == a ? b : a;
+        for (String t : smaller) {
+            if (larger.contains(t)) intersect++;
+        }
+        int union = a.size() + b.size() - intersect;
+        return union == 0 ? 0.0 : (double) intersect / union;
+    }
+
+    /**
+     * Mark a logical iteration boundary. Buffer is intentionally NOT cleared
+     * — sentence-level detection across LLM call boundaries is the whole
+     * reason this detector lives on the conversation, not on a single call.
+     * The debug log lets fixtures observe that the boundary signal arrived.
+     */
+    public void markIterationBoundary() {
+        log.debug("[RepetitionDetector] iteration boundary marked (buffer chars={})",
+                buffer.length());
+    }
+
+    /**
+     * Returns "sentence_repetition" when the most recent trigger was the
+     * Jaccard path; otherwise "char_pattern". Useful for warning broadcasts
+     * that need to differentiate the two failure modes.
+     */
+    public String lastTriggerReason() {
+        if (!repetitionDetected) return null;
+        return lastTriggerWasSentence ? "sentence_repetition" : "char_pattern";
+    }
+
+    /** Number of characters currently held in the detector's buffer. */
+    public int bufferLength() {
+        return buffer.length();
     }
 
     /**
@@ -146,6 +329,7 @@ public class RepetitionDetector {
     public void reset() {
         buffer.setLength(0);
         repetitionDetected = false;
+        lastTriggerWasSentence = false;
     }
 
     /**

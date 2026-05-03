@@ -10,10 +10,13 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Value;
 import vip.mate.agent.AgentService;
 import vip.mate.agent.context.ChatOrigin;
+import vip.mate.agent.delegation.SubagentRegistry;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
+import vip.mate.audit.service.AuditEventService;
 import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.workspace.conversation.ConversationService;
 
@@ -66,11 +69,35 @@ public class DelegateAgentTool {
      */
     private static final int PARALLEL_TIMEOUT_SECONDS = 120;
 
-    /** Tools blocked for child agents — prevents recursion and side effects. */
-    private static final Set<String> CHILD_DENIED_TOOLS = Set.of(
-            "delegateToAgent",      // no recursive serial delegation
-            "delegateParallel",     // no recursive parallel delegation
-            "listAvailableAgents"   // child agents do not need to discover other agents
+    /**
+     * Default deny list for child agents. Names are matched against the
+     * canonical tool names exposed by the runtime, so they MUST mirror the
+     * actual {@code @Tool}-annotated method names.
+     *
+     * <p>Categories:
+     * <ul>
+     *   <li>Recursion guards (delegate*, listAvailableAgents) — prevent a
+     *       child from spawning another child or enumerating sibling agents.</li>
+     *   <li>Memory writers (remember, *_structured) — children must not
+     *       persist into the parent's shared MEMORY.md / SOUL.md surface;
+     *       the parent owns long-term memory.</li>
+     * </ul>
+     *
+     * <p>{@code execute_shell_command} is intentionally NOT in the default
+     * deny list because legitimate dev-tooling agents rely on shell access.
+     * Operators that need a stricter posture can append it via
+     * {@code mateclaw.delegation.child-denied-tools}.
+     */
+    static final Set<String> DEFAULT_CHILD_DENIED_TOOLS = Set.of(
+            // Recursion guards.
+            "delegateToAgent",
+            "delegateParallel",
+            "listAvailableAgents",
+            // Memory writes from children would pollute the parent's shared
+            // long-term memory surface.
+            "remember",
+            "remember_structured",
+            "forget_structured"
     );
 
     /** Executor for parallel delegation — one JDK 21 virtual thread per child agent. */
@@ -82,6 +109,36 @@ public class DelegateAgentTool {
     private final ChatStreamTracker streamTracker;
     private final ConversationService conversationService;
     private final ObjectMapper objectMapper;
+    private final SubagentRegistry subagentRegistry;
+    private final AuditEventService auditEventService;
+
+    /**
+     * Operator-supplied deny-list extension. Configured via
+     * {@code mateclaw.delegation.child-denied-tools} as a comma-separated
+     * list. Empty by default — the {@link #DEFAULT_CHILD_DENIED_TOOLS} set
+     * already covers the recursion + memory cases that matter for safety.
+     */
+    @Value("${mateclaw.delegation.child-denied-tools:}")
+    private List<String> additionalDeniedTools;
+
+    /**
+     * Effective deny list = defaults ∪ operator additions. Computed on each
+     * delegation entry rather than cached because Spring applies
+     * {@code @Value} after construction and we want operator overrides to
+     * take effect on the next delegation, not on the next restart.
+     */
+    Set<String> deniedToolsForChild() {
+        if (additionalDeniedTools == null || additionalDeniedTools.isEmpty()) {
+            return DEFAULT_CHILD_DENIED_TOOLS;
+        }
+        Set<String> merged = new HashSet<>(DEFAULT_CHILD_DENIED_TOOLS);
+        for (String name : additionalDeniedTools) {
+            if (name != null && !name.isBlank()) {
+                merged.add(name.trim());
+            }
+        }
+        return Set.copyOf(merged);
+    }
 
     // ==================== Single-task delegation ====================
 
@@ -126,6 +183,14 @@ public class DelegateAgentTool {
         }
 
         String parentConversationId = resolveParentConversationId();
+
+        // Spawn-pause: when the operator paused this conversation's tree
+        // (via /api/v1/subagents/spawn-pause), short-circuit before creating
+        // child state so no conversation rows / relays / registry entries leak.
+        if (parentConversationId != null && subagentRegistry.isSpawnPaused(parentConversationId)) {
+            return "[错误] Spawning paused for this conversation; resume via /api/v1/subagents/spawn-pause";
+        }
+
         String childConversationId = createChildConv(target, parentConversationId);
 
         // RFC-03 Lane C2: optionally prepend a parent-context prefix to the task.
@@ -152,16 +217,38 @@ public class DelegateAgentTool {
                     "childAgentName", target.getName(),
                     "task", truncate(task, 200)));
         }
-        Runnable stopRelay = hasParent ? registerRelay(childConversationId, parentConversationId, target.getName()) : null;
+        Runnable stopRelay = hasParent ? registerBatchedRelay(childConversationId, parentConversationId, target.getName()) : null;
+
+        // Register the live sub-agent so the operator UI / heartbeat watchdog
+        // can observe it. Disposable is null in the synchronous single-task
+        // path because the executor blocks on AgentService#chat directly —
+        // there is no Flux subscription to dispose. Interrupts in this path
+        // are best-effort (status flip; no underlying cancel).
+        String subagentId = parentConversationId != null
+                ? subagentRegistry.register(parentConversationId, childConversationId,
+                        target.getId(), task, null)
+                : null;
 
         // Execute child agent — RFC-063r §2.5 改动点 5: inherit the parent
         // ChatOrigin and only swap the agentId, so channel binding /
         // workspace / requester all flow into the child.
         ChatOrigin parentOrigin = ChatOrigin.from(ctx);
-        ChildResult result = runSingleChild(0, target, taskWithContext, parentConversationId, childConversationId, parentOrigin);
-
-        // Cleanup relay, then broadcast final result
-        if (stopRelay != null) stopRelay.run();
+        ChildResult result;
+        try {
+            result = runSingleChild(0, target, taskWithContext, parentConversationId, childConversationId, parentOrigin);
+        } finally {
+            // Cleanup relay + registry regardless of how the child returned
+            // (success / exception / interruption) so we never leak entries.
+            if (stopRelay != null) stopRelay.run();
+            if (subagentId != null) {
+                subagentRegistry.get(subagentId).ifPresent(rec -> {
+                    if ("running".equals(rec.status().get())) {
+                        rec.status().set("completed");
+                    }
+                });
+                subagentRegistry.unregister(subagentId);
+            }
+        }
         if (hasParent) {
             broadcastEnd(parentConversationId, childConversationId, target.getName(), result);
         }
@@ -204,10 +291,19 @@ public class DelegateAgentTool {
         }
 
         String parentConversationId = resolveParentConversationId();
+
+        // Spawn-pause: short-circuit before allocating any per-child state so
+        // we don't leak conversation rows / relays / registry entries when an
+        // operator paused this conversation's tree.
+        if (parentConversationId != null && subagentRegistry.isSpawnPaused(parentConversationId)) {
+            return "[错误] Spawning paused for this conversation; resume via /api/v1/subagents/spawn-pause";
+        }
+
         boolean hasParent = parentConversationId != null && streamTracker.isRunning(parentConversationId);
 
         // 2. Main thread: validate agents, create child conversations, register relays
-        record PreparedChild(int index, AgentEntity agent, String task, String childConvId, Runnable stopRelay) {}
+        record PreparedChild(int index, AgentEntity agent, String task, String childConvId,
+                             Runnable stopRelay, String subagentId) {}
         List<PreparedChild> prepared = new ArrayList<>();
         List<String> errors = new ArrayList<>();
 
@@ -228,8 +324,14 @@ public class DelegateAgentTool {
             }
 
             String childConvId = createChildConv(agent, parentConversationId);
-            Runnable stopRelay = hasParent ? registerRelay(childConvId, parentConversationId, agent.getName()) : null;
-            prepared.add(new PreparedChild(i, agent, task, childConvId, stopRelay));
+            Runnable stopRelay = hasParent
+                    ? registerBatchedRelay(childConvId, parentConversationId, agent.getName())
+                    : null;
+            String subagentId = parentConversationId != null
+                    ? subagentRegistry.register(parentConversationId, childConvId,
+                            agent.getId(), task, null)
+                    : null;
+            prepared.add(new PreparedChild(i, agent, task, childConvId, stopRelay, subagentId));
         }
 
         if (prepared.isEmpty()) {
@@ -331,9 +433,20 @@ public class DelegateAgentTool {
 
         long totalDurationMs = System.currentTimeMillis() - startTime;
 
-        // 6. Stop all relays
+        // 6. Stop all relays + drain registry entries. Both must run for every
+        // prepared child regardless of whether the future succeeded, timed
+        // out, or threw — otherwise the registry leaks one entry per stuck
+        // child until the JVM restarts.
         for (PreparedChild p : prepared) {
             if (p.stopRelay != null) p.stopRelay.run();
+            if (p.subagentId != null) {
+                subagentRegistry.get(p.subagentId).ifPresent(rec -> {
+                    if ("running".equals(rec.status().get())) {
+                        rec.status().set("completed");
+                    }
+                });
+                subagentRegistry.unregister(p.subagentId);
+            }
         }
 
         // 7. Broadcast delegation_end with per-child structured summary
@@ -440,7 +553,7 @@ public class DelegateAgentTool {
     private ChildResult runSingleChild(int taskIndex, AgentEntity target, String task,
                                         String parentConversationId, String childConversationId,
                                         ChatOrigin parentOrigin) {
-        DelegationContext.enter(parentConversationId, CHILD_DENIED_TOOLS);
+        DelegationContext.enter(parentConversationId, deniedToolsForChild());
         try {
             long startTime = System.currentTimeMillis();
             // RFC-063r §2.5 改动点 5: inherit parent origin, swap agentId
@@ -682,6 +795,43 @@ public class DelegateAgentTool {
                 }
             }
         });
+    }
+
+    /**
+     * Registers a batched relay so a chatty child does not flood the parent
+     * transcript with one tool-call event per LLM step. The streaming layer
+     * batches {@code tool_call_started} / {@code tool_call_completed} into
+     * envelopes (5 events / 500 ms) and flushes immediately on lifecycle
+     * events ({@code subagent_*}, {@code error}, {@code phase}, etc.).
+     *
+     * <p>The wrapper keeps the on-the-wire shape identical to
+     * {@link #registerRelay} so frontend consumers do not need to change
+     * — both batched envelopes and pass-through events surface as
+     * {@code delegation_progress} on the parent.
+     */
+    private Runnable registerBatchedRelay(String childConvId, String parentConvId, String childAgentName) {
+        return streamTracker.addBatchedEventRelay(childConvId, parentConvId, 5, 500L,
+                (eventName, jsonData) -> {
+                    if ("tool_call_started".equals(eventName)
+                            || "tool_call_completed".equals(eventName)
+                            || "phase".equals(eventName)) {
+                        try {
+                            Object parsedData;
+                            try {
+                                parsedData = objectMapper.readValue(jsonData, Object.class);
+                            } catch (Exception ignored) {
+                                parsedData = jsonData;
+                            }
+                            streamTracker.broadcastObject(parentConvId, "delegation_progress", Map.of(
+                                    "childConversationId", childConvId,
+                                    "childAgentName", childAgentName,
+                                    "originalEvent", eventName,
+                                    "data", parsedData));
+                        } catch (Exception e) {
+                            log.debug("Batched relay error: {}", e.getMessage());
+                        }
+                    }
+                });
     }
 
     private void broadcastEnd(String parentConvId, String childConvId, String agentName, ChildResult result) {

@@ -364,6 +364,17 @@ public class ReasoningNode implements NodeAction {
 
         GraphEventPublisher.GraphEvent phaseEvent = GraphEventPublisher.phase("reasoning",
                 Map.of("iteration", accessor.iterationCount()));
+        // Iteration boundary marker for the parent ReAct loop. Reason
+        // distinguishes the very first turn of the conversation from a
+        // mid-loop repeat for consumers grouping events into per-turn cards.
+        boolean iterationEventsOn = streamTracker == null || streamTracker.isIterationEventsEnabled();
+        GraphEventPublisher.GraphEvent iterStartEvent = iterationEventsOn
+                ? GraphEventPublisher.iterationStart(
+                        accessor.iterationCount(),
+                        accessor.iterationCount() == 0 ? "first_turn" : "react_step",
+                        "parent",
+                        null)
+                : null;
         pushPhase(conversationId, "reasoning", Map.of(
                 "iteration", accessor.iterationCount(),
                 "llmCallCount", nextLlmCallCount
@@ -481,7 +492,7 @@ public class ReasoningNode implements NodeAction {
                     .thinkingStreamed(!result.thinking().isEmpty())
                     .llmCallCount(nextLlmCallCount)
                     .mergeUsage(state, result)
-                    .events(List.of(phaseEvent))
+                    .events(buildEvents(phaseEvent, iterStartEvent))
                     .build();
         } else {
             String content = result.text();
@@ -491,6 +502,14 @@ public class ReasoningNode implements NodeAction {
                     "answerChars", content != null ? content.length() : 0
             ));
 
+            // Final-answer path: iteration ends in this same node because
+            // ReAct never re-enters the loop afterwards.
+            GraphEventPublisher.GraphEvent iterEndEvent = iterationEventsOn
+                    ? GraphEventPublisher.iterationEnd(accessor.iterationCount(),
+                            "parent", null,
+                            content != null ? content.length() : 0,
+                            result.thinking() != null ? result.thinking().length() : 0)
+                    : null;
             return MateClawStateAccessor.output()
                     .needsToolCall(false)
                     .shouldSummarize(false)
@@ -502,7 +521,7 @@ public class ReasoningNode implements NodeAction {
                     .thinkingStreamed(!result.thinking().isEmpty())
                     .llmCallCount(nextLlmCallCount)
                     .mergeUsage(state, result)
-                    .events(List.of(phaseEvent))
+                    .events(buildEvents(phaseEvent, iterStartEvent, iterEndEvent))
                     .build();
         }
     }
@@ -521,6 +540,19 @@ public class ReasoningNode implements NodeAction {
             log.error("[ReasoningNode] Failed to deserialize forced_tool_call: {}", e.getMessage());
             throw new RuntimeException("无法反序列化 forced_tool_call: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Compose the per-call event list, dropping any null entries so the
+     * iteration-boundary toggle ({@code mateclaw.stream.iteration-events})
+     * works without forcing every caller into branching code.
+     */
+    private static List<GraphEventPublisher.GraphEvent> buildEvents(GraphEventPublisher.GraphEvent... events) {
+        List<GraphEventPublisher.GraphEvent> out = new ArrayList<>(events.length);
+        for (GraphEventPublisher.GraphEvent ev : events) {
+            if (ev != null) out.add(ev);
+        }
+        return out;
     }
 
     private void pushPhase(String conversationId, String phase, Map<String, Object> extra) {

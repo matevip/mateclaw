@@ -162,6 +162,18 @@ export interface MessageSegment {
   plan?: PlanMeta
   /** 时间戳 */
   timestamp?: number
+  /**
+   * Iteration index this segment belongs to (0-based). Set by iteration_start —
+   * lets MessageBubble group thinking/tool/content segments per iteration so
+   * the next iteration's output never appends onto the previous one's tail.
+   */
+  iterationIndex?: number
+  /** Subagent / delegation child ID, when this segment was emitted under a child scope. */
+  subagentId?: string
+  /** Backend signaled the running content was truncated to break a repetition pattern. */
+  repetitionWarning?: 'char_pattern' | 'sentence_repetition'
+  /** Number of trailing characters dropped when the repetition guard fired. */
+  truncatedChars?: number
 }
 
 export interface MessageMetadata {

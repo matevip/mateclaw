@@ -23,10 +23,26 @@
           <div class="segments-view">
             <!-- 计划步骤面板（始终显示在 segments 之上） -->
             <PlanStepsPanel v-if="planMeta" :plan="planMeta" :is-generating="isGenerating" />
-            <template v-for="(seg, index) in segments" :key="seg.id">
-              <ThinkingSegment v-if="seg.type === 'thinking'" :segment="seg" />
-              <ToolCallSegment v-if="seg.type === 'tool_call'" :segment="seg" />
-              <ContentSegment v-if="seg.type === 'content'" :segment="seg" :show-cursor="showCursor && seg.status === 'running'" />
+            <template v-for="iter in groupedIterations" :key="iter.key">
+              <!-- Iteration interrupted before any output landed — surface a chip
+                   so the user knows the agent moved on instead of silently
+                   skipping a turn. -->
+              <div v-if="iter.empty" class="iter-empty-chip">
+                <el-icon><WarningFilled /></el-icon>
+                <span>{{ $t('chat.iterationEmpty', { index: iter.index + 1 }) }}</span>
+              </div>
+              <template v-else>
+                <ThinkingSegment v-for="t in iter.thinkings" :key="t.id" :segment="t" />
+                <ToolCallSegment v-for="tool in iter.tools" :key="tool.id" :segment="tool" />
+                <template v-for="c in iter.contents" :key="c.id">
+                  <div v-if="c.repetitionWarning" class="repetition-warning">
+                    <el-icon><WarningFilled /></el-icon>
+                    <span class="repetition-warning__text">{{ $t('chat.contentRepetitionWarning') }}</span>
+                    <span v-if="c.truncatedChars" class="repetition-warning__meta">({{ c.truncatedChars }} chars)</span>
+                  </div>
+                  <ContentSegment :segment="c" :show-cursor="showCursor && c.status === 'running'" />
+                </template>
+              </template>
             </template>
           </div>
         </template>
@@ -751,6 +767,45 @@ const segments = computed<MessageSegment[]>(() => {
 /** 是否使用分段模式渲染（有 segments 数据且包含多个分段） */
 const useSegmentedView = computed(() => segments.value.length > 1)
 
+/**
+ * Group segments by iterationIndex so each ReAct iteration renders as its own
+ * thinking/tool-calls/content cluster. Falls back to a single ungrouped bucket
+ * for legacy messages (no iterationIndex tagged) so historical conversations
+ * keep rendering as before — including the existing "single-thinking reorder"
+ * normalization done in the `segments` computed above.
+ */
+const groupedIterations = computed(() => {
+  const segs = segments.value || []
+  const anyTagged = segs.some(s => typeof s.iterationIndex === 'number')
+  if (!anyTagged) {
+    return [{
+      key: 'all',
+      index: 0,
+      empty: false,
+      thinkings: segs.filter(s => s.type === 'thinking'),
+      tools: segs.filter(s => s.type === 'tool_call'),
+      contents: segs.filter(s => s.type === 'content'),
+    }]
+  }
+  const buckets = new Map<number, { thinkings: MessageSegment[]; tools: MessageSegment[]; contents: MessageSegment[] }>()
+  for (const s of segs) {
+    const idx = s.iterationIndex ?? 0
+    if (!buckets.has(idx)) buckets.set(idx, { thinkings: [], tools: [], contents: [] })
+    const b = buckets.get(idx)!
+    if (s.type === 'thinking') b.thinkings.push(s)
+    else if (s.type === 'tool_call') b.tools.push(s)
+    else if (s.type === 'content') b.contents.push(s)
+  }
+  return [...buckets.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([index, b]) => ({
+      key: `iter-${index}`,
+      index,
+      empty: b.thinkings.length === 0 && b.tools.length === 0 && b.contents.length === 0,
+      ...b,
+    }))
+})
+
 const toolCallsMeta = computed<ToolCallMeta[]>(() => {
   return parsedMetadata.value?.toolCalls || []
 })
@@ -857,6 +912,43 @@ watch(isGenerating, (generating) => {
   flex-direction: column;
   gap: 2px;
   padding: 4px 0;
+}
+
+/* Iteration "no output" chip (interrupted iteration). */
+.iter-empty-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  margin: 4px 0;
+  font-size: 12px;
+  color: var(--mc-text-tertiary, #94a3b8);
+  background: var(--mc-bg-elevated, #f8fafc);
+  border: 1px dashed var(--mc-border, #e2e8f0);
+  border-radius: 12px;
+}
+
+/* Inline informational banner shown when the backend trimmed a repetitive
+   tail off a content segment. Amber, not red — this is informational. */
+.repetition-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin: 6px 0 2px;
+  font-size: 12px;
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.08);
+  border-left: 3px solid var(--mc-warning, #f59e0b);
+  border-radius: 4px;
+}
+.repetition-warning__text {
+  flex: 1;
+}
+.repetition-warning__meta {
+  color: var(--mc-text-tertiary, #94a3b8);
+  font-size: 11px;
 }
 
 .message-wrapper {

@@ -146,6 +146,15 @@ public class StepExecutionNode implements NodeAction {
         log.info("[StepExecution] Executing step {}/{}: {}", stepIndex + 1, steps.size(), step);
 
         List<GraphEventPublisher.GraphEvent> events = new ArrayList<>();
+        // Iteration boundary for the plan-execute loop: each step is one
+        // iteration that may itself fan out to multiple LLM calls. Reason is
+        // "plan_step" so consumers can distinguish it from ReAct's
+        // "react_step" / "first_turn" markers when both stream into the
+        // same SSE feed.
+        boolean iterationEventsOn = streamTracker == null || streamTracker.isIterationEventsEnabled();
+        if (iterationEventsOn) {
+            events.add(GraphEventPublisher.iterationStart(stepIndex, "plan_step", "parent", null));
+        }
         events.add(GraphEventPublisher.stepStarted(stepIndex, step));
         events.add(GraphEventPublisher.phase("executing", Map.of("stepIndex", stepIndex, "stepTitle", step)));
 
@@ -344,6 +353,10 @@ public class StepExecutionNode implements NodeAction {
                         "Plan completed via returnDirect tool: " +
                         stepDirectOutputs.get(0).toolName());
                 events.add(GraphEventPublisher.stepCompleted(stepIndex, assembled));
+                if (iterationEventsOn) {
+                    events.add(GraphEventPublisher.iterationEnd(stepIndex, "parent", null,
+                            assembled != null ? assembled.length() : 0, 0));
+                }
                 return PlanStateAccessor.output()
                         .currentStepResult(assembled)
                         .currentStepIndex(steps.size())  // 越界 → dispatcher 收束
@@ -376,6 +389,10 @@ public class StepExecutionNode implements NodeAction {
             planningService.updateSubPlanFailure(planId, stepIndex, shortError);
             planningService.markPlanFailed(planId, "步骤" + (stepIndex + 1) + " 执行失败：" + shortError);
             events.add(GraphEventPublisher.stepCompleted(stepIndex, shortError));
+            if (iterationEventsOn) {
+                events.add(GraphEventPublisher.iterationEnd(stepIndex, "parent", null,
+                        shortError != null ? shortError.length() : 0, 0));
+            }
             return PlanStateAccessor.output()
                     .currentStepResult(shortError)
                     .currentPhase("plan_aborted")
@@ -388,6 +405,11 @@ public class StepExecutionNode implements NodeAction {
 
         planningService.updateSubPlanResult(planId, stepIndex, finalResult);
         events.add(GraphEventPublisher.stepCompleted(stepIndex, finalResult));
+        if (iterationEventsOn) {
+            events.add(GraphEventPublisher.iterationEnd(stepIndex, "parent", null,
+                    finalResult != null ? finalResult.length() : 0,
+                    stepThinking != null ? stepThinking.length() : 0));
+        }
 
         log.info("[StepExecution] Step {}/{} completed: {}",
                 stepIndex + 1, steps.size(),

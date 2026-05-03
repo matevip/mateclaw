@@ -164,6 +164,27 @@ public class ToolExecutionExecutor {
         this.skillRuntimeService = s;
     }
 
+    /**
+     * Optional audit sink. When set, child-agent denied-tool attempts are
+     * recorded so admins can see what children are trying that gets blocked.
+     * Left optional because legacy constructors and tests run without an
+     * audit pipeline.
+     */
+    private vip.mate.audit.service.AuditEventService auditEventService;
+
+    public void setAuditEventService(vip.mate.audit.service.AuditEventService s) {
+        this.auditEventService = s;
+    }
+
+    /**
+     * Per-turn deduplication key set for child-agent denial audit. Without
+     * this, a child that retries the same denied tool many times in one
+     * turn would write one audit row per call. Cleared at the start of
+     * every {@code execute(...)} so it does not retain entries across turns.
+     */
+    private final ThreadLocal<Set<String>> auditedDenials =
+            ThreadLocal.withInitial(HashSet::new);
+
     public ToolExecutionExecutor(AgentToolSet toolSet, ToolGuardService toolGuardService,
                                   ApprovalWorkflowService approvalService, ChatStreamTracker streamTracker) {
         this(toolSet, toolGuardService, null, approvalService, streamTracker, null, null, null);
@@ -284,6 +305,10 @@ public class ToolExecutionExecutor {
                                         String workspaceBasePath,
                                         ChatOrigin origin) {
         ChatOrigin safeOrigin = origin != null ? origin : ChatOrigin.EMPTY;
+        // Reset per-turn audit dedupe state. A retried denied tool inside the
+        // same turn writes a single audit row; the set is repopulated by the
+        // denial branch below.
+        auditedDenials.get().clear();
         List<ToolResponseMessage.ToolResponse> allResponses = new ArrayList<>();
         List<GraphEventPublisher.GraphEvent> events = Collections.synchronizedList(new ArrayList<>());
         // RFC-052: accumulate full-text outputs from returnDirect tools so the
@@ -329,6 +354,22 @@ public class ToolExecutionExecutor {
                 if (denied.contains(toolName)) {
                     String msg = "[安全限制] 子 Agent 不允许使用工具: " + toolName;
                     log.info("[ToolExecutor] Child agent blocked from using tool: {}", toolName);
+                    // Audit per (toolName, conversationId) tuple at most once
+                    // per turn so a child retrying the same denied tool many
+                    // times does not spam the audit table.
+                    if (auditEventService != null && auditedDenials.get().add(toolName)) {
+                        try {
+                            String detail = "{\"toolName\":\"" + toolName + "\",\"conversationId\":\""
+                                    + (conversationId != null ? conversationId : "")
+                                    + "\",\"agentId\":\"" + (agentId != null ? agentId : "")
+                                    + "\"}";
+                            auditEventService.record("subagent.tool.denied", "tool",
+                                    toolName, toolName, detail);
+                        } catch (Exception auditEx) {
+                            log.debug("[ToolExecutor] Audit write failed for denied tool {}: {}",
+                                    toolName, auditEx.getMessage());
+                        }
+                    }
                     events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, msg, false));
                     allResponses.add(new org.springframework.ai.chat.messages.ToolResponseMessage.ToolResponse(
                             toolCall.id(), toolName, msg));

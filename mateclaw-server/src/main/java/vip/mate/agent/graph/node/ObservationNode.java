@@ -4,6 +4,7 @@ import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import vip.mate.agent.GraphEventPublisher;
 import vip.mate.agent.graph.observation.ObservationProcessor;
 import vip.mate.agent.graph.state.MateClawStateAccessor;
 
@@ -119,6 +120,17 @@ public class ObservationNode implements NodeAction {
                 .put(OBSERVATION_HISTORY, updatedHistory)
                 .shouldSummarize(shouldSummarize)
                 .toolCallCount(newToolCallCount);
+
+        // Close out the iteration we just observed. We use currentIteration
+        // (not nextIteration) so the index pairs with whatever
+        // iteration_start the ReasoningNode emitted at the top of this turn.
+        // Char totals are best-effort: ObservationNode doesn't see the LLM
+        // delta stream directly, so 0/0 is acceptable for now — consumers
+        // that care fall back to summing the deltas themselves.
+        if (streamTracker == null || streamTracker.isIterationEventsEnabled()) {
+            builder.events(List.of(
+                    GraphEventPublisher.iterationEnd(currentIteration, "parent", null, 0, 0)));
+        }
 
         // 重复观察时标记错误，让 ObservationDispatcher 路由到 limitExceededNode
         if (duplicateObservation) {

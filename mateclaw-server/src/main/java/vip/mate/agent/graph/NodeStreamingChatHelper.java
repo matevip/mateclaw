@@ -701,11 +701,46 @@ public class NodeStreamingChatHelper {
         AtomicInteger cacheReadTokens = new AtomicInteger(0);
         AtomicInteger cacheWriteTokens = new AtomicInteger(0);
 
-        // 重复检测器：检测 LLM 退化输出（如不断重复同一句话）
-        RepetitionDetector contentRepDetector = new RepetitionDetector();
-        RepetitionDetector thinkingRepDetector = new RepetitionDetector();
+        // Cross-call repetition detectors: scoped to the conversation rather
+        // than this single LLM call so the sentence-level path can catch
+        // adjacent-iteration loops. Tracker returns a fresh detector when
+        // conversationId is unknown (tests, legacy callers); mocked trackers
+        // without stubs may return null, so we fall back defensively.
+        final RepetitionDetector contentRepDetector =
+                pickDetector(streamTracker != null ? streamTracker.getContentRepDetector(conversationId) : null);
+        final RepetitionDetector thinkingRepDetector =
+                pickDetector(streamTracker != null ? streamTracker.getThinkingRepDetector(conversationId) : null);
         // 重复检测触发后设为 true，外层轮询线程据此 dispose 订阅
         AtomicBoolean repetitionTriggered = new AtomicBoolean(false);
+
+        // Lifecycle events emitted at most once per call so consumers can
+        // pivot the UI between "thinking" and "drafting" without inspecting
+        // delta rates.
+        AtomicBoolean thinkingStartEmitted = new AtomicBoolean(false);
+        AtomicBoolean thinkingEndEmitted = new AtomicBoolean(false);
+        AtomicBoolean firstTokenSignaled = new AtomicBoolean(false);
+
+        // Pre-stream lifecycle: tell the front-end how the prompt was sized
+        // and which provider/model is being asked. These events ride on the
+        // existing SSE bus, so the heartbeat / first_token signaling stays
+        // consistent.
+        if (broadcast && streamTracker != null && conversationId != null && !conversationId.isEmpty()) {
+            int messageCount = prompt.getInstructions() != null ? prompt.getInstructions().size() : 0;
+            int contextChars = approximatePromptChars(prompt);
+            streamTracker.broadcastObject(conversationId, "context_prepared", Map.of(
+                    "messages", messageCount,
+                    "contextChars", contextChars,
+                    "timestamp", System.currentTimeMillis()
+            ));
+            String modelId = identifyModel(chatModel);
+            String providerId = primaryProviderId != null ? primaryProviderId : "";
+            streamTracker.broadcastObject(conversationId, "llm_request_sent", Map.of(
+                    "provider", providerId,
+                    "model", modelId != null ? modelId : "",
+                    "phase", phase != null ? phase : "",
+                    "timestamp", System.currentTimeMillis()
+            ));
+        }
 
         CountDownLatch latch = new CountDownLatch(1);
 
@@ -729,8 +764,24 @@ public class NodeStreamingChatHelper {
                         if (contentRepDetector.appendAndCheck(contentDelta)) {
                             log.warn("[{}] Content repetition detected, will cancel stream " +
                                     "for conversation {}", phase, conversationId);
+                            broadcastContentTruncated(conversationId,
+                                    contentRepDetector.lastTriggerReason(),
+                                    contentAccum.length());
                             repetitionTriggered.set(true);
                             return;
+                        }
+                        // First content delta closes the thinking phase if one
+                        // was open, and arms first-token heartbeat relaxation.
+                        if (broadcast && streamTracker != null
+                                && firstTokenSignaled.compareAndSet(false, true)) {
+                            streamTracker.markFirstTokenReceived(conversationId);
+                        }
+                        if (broadcast && thinkingAccum.length() > 0
+                                && thinkingEndEmitted.compareAndSet(false, true)) {
+                            streamTracker.broadcastObject(conversationId, "thinking_end", Map.of(
+                                    "thinkingChars", thinkingAccum.length(),
+                                    "timestamp", System.currentTimeMillis()
+                            ));
                         }
                         contentAccum.append(contentDelta);
                         if (broadcast) {
@@ -744,8 +795,28 @@ public class NodeStreamingChatHelper {
                         if (thinkingRepDetector.appendAndCheck(thinkingDelta)) {
                             log.warn("[{}] Thinking repetition detected, will cancel stream " +
                                     "for conversation {}", phase, conversationId);
+                            broadcastContentTruncated(conversationId,
+                                    thinkingRepDetector.lastTriggerReason(),
+                                    thinkingAccum.length());
                             repetitionTriggered.set(true);
                             return;
+                        }
+                        // First-token signaling fires for thinking too — UI
+                        // shows "thinking" activity before any content streams.
+                        if (broadcast && streamTracker != null
+                                && firstTokenSignaled.compareAndSet(false, true)) {
+                            streamTracker.markFirstTokenReceived(conversationId);
+                        }
+                        // First thinking delta opens the thinking phase. We
+                        // emit the start lazily (on first delta) rather than
+                        // before subscription so models that never produce
+                        // thinking don't ghost-pair an empty segment.
+                        if (broadcast && thinkingAccum.length() == 0
+                                && thinkingStartEmitted.compareAndSet(false, true)) {
+                            streamTracker.broadcastObject(conversationId, "thinking_start", Map.of(
+                                    "phase", phase != null ? phase : "",
+                                    "timestamp", System.currentTimeMillis()
+                            ));
                         }
                         thinkingAccum.append(thinkingDelta);
                         // thinkingLevel=off 时不广播 thinking（模型仍可能产生，但前端不展示）
@@ -1409,6 +1480,79 @@ public class NodeStreamingChatHelper {
         // 手动构建 JSON 避免序列化开销，格式与 ChatController.broadcastEvent 一致
         String json = buildDeltaJson(delta);
         streamTracker.broadcast(conversationId, eventName, json);
+    }
+
+    /**
+     * Broadcast a {@code content_truncated} lifecycle event so consumers can
+     * surface why the stream stopped early. {@code reason} is "char_pattern"
+     * or "sentence_repetition" depending on which detector fired.
+     */
+    private void broadcastContentTruncated(String conversationId, String reason, int truncatedChars) {
+        if (streamTracker == null || conversationId == null || conversationId.isEmpty()) {
+            return;
+        }
+        try {
+            streamTracker.broadcastObject(conversationId, "content_truncated", Map.of(
+                    "reason", reason != null ? reason : "char_pattern",
+                    "truncatedChars", truncatedChars,
+                    "timestamp", System.currentTimeMillis()
+            ));
+        } catch (Exception e) {
+            log.debug("Failed to broadcast content_truncated for {}: {}", conversationId, e.getMessage());
+        }
+    }
+
+    /**
+     * Resolve a non-null {@link RepetitionDetector}. Returns the supplied
+     * detector when present; otherwise creates a fresh per-call instance so
+     * mocked trackers (Mockito returns null for unstubbed methods) and
+     * legacy code paths never trip a NullPointerException.
+     */
+    private static RepetitionDetector pickDetector(RepetitionDetector candidate) {
+        return candidate != null ? candidate : new RepetitionDetector();
+    }
+
+    /**
+     * Best-effort character count of the outbound prompt for the
+     * {@code context_prepared} event. Cheaper than tokenizing and only used
+     * for UI presentation, so an exact figure is unnecessary.
+     */
+    private static int approximatePromptChars(Prompt prompt) {
+        if (prompt == null || prompt.getInstructions() == null) return 0;
+        int total = 0;
+        for (Message m : prompt.getInstructions()) {
+            String text = m.getText();
+            if (text != null) total += text.length();
+        }
+        return total;
+    }
+
+    /**
+     * Pick a stable model identifier from whatever {@link ChatModel}
+     * implementation we received — Spring AI doesn't expose a single accessor.
+     * We try the well-known fields by reflection so this stays decoupled from
+     * concrete provider classes (Anthropic / OpenAI / DashScope all expose
+     * {@code defaultOptions.model} or equivalent).
+     */
+    private static String identifyModel(ChatModel chatModel) {
+        if (chatModel == null) return "";
+        try {
+            // Common Spring AI shape: getDefaultOptions().getModel()
+            java.lang.reflect.Method getDefaultOptions = chatModel.getClass().getMethod("getDefaultOptions");
+            Object opts = getDefaultOptions.invoke(chatModel);
+            if (opts != null) {
+                try {
+                    java.lang.reflect.Method getModel = opts.getClass().getMethod("getModel");
+                    Object model = getModel.invoke(opts);
+                    if (model != null) return model.toString();
+                } catch (NoSuchMethodException ignored) {
+                    // fall through
+                }
+            }
+        } catch (Exception ignored) {
+            // fall through to class-name fallback
+        }
+        return chatModel.getClass().getSimpleName();
     }
 
     /**

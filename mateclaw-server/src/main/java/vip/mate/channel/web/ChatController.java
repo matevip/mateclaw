@@ -448,6 +448,19 @@ public class ChatController {
         registerEmitterCallbacks(emitter, conversationId);
         streamTracker.attach(conversationId, emitter);
 
+        // Per-emitter "the SSE channel is open and you should reset any
+        // pending placeholder UI". Sent directly to the emitter rather than
+        // broadcast so reconnecting subscribers don't see a duplicate marker
+        // for an already-open conversation.
+        try {
+            sendEvent(emitter, "stream_started", Map.of(
+                    "conversationId", conversationId,
+                    "timestamp", System.currentTimeMillis()
+            ));
+        } catch (IOException e) {
+            log.debug("Failed to send stream_started event for {}: {}", conversationId, e.getMessage());
+        }
+
         // 标记 emitter 是否已结束，防止 Flux 回调再次写入已关闭的 emitter
         AtomicBoolean emitterDone = new AtomicBoolean(false);
 

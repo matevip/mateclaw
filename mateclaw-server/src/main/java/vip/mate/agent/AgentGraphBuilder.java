@@ -135,6 +135,19 @@ public class AgentGraphBuilder {
     private final vip.mate.agent.chatmodel.AgentDashScopeChatModelBuilder dashScopeBuilder;
 
     /**
+     * Optional audit pipeline. Setter injection (rather than a constructor
+     * parameter) keeps existing constructor-based wiring + tests intact.
+     * When present, the executor receives it so child-agent denied-tool
+     * attempts can be recorded.
+     */
+    private vip.mate.audit.service.AuditEventService auditEventService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setAuditEventService(vip.mate.audit.service.AuditEventService s) {
+        this.auditEventService = s;
+    }
+
+    /**
      * 根据 AgentEntity 构建完整的 Agent 实例
      */
     public BaseAgent build(AgentEntity entity) {
@@ -347,6 +360,11 @@ public class AgentGraphBuilder {
             // LLM mis-calls a skill name as a tool, the response tells it
             // the right invocation pattern instead of a dead-end error.
             executor.setSkillRuntimeService(skillRuntimeService);
+            // Optional: route child-agent denied-tool audit events through
+            // the audit pipeline. Null when audit is not wired (legacy / test).
+            if (auditEventService != null) {
+                executor.setAuditEventService(auditEventService);
+            }
             PlanGenerationNode planGenerationNode = new PlanGenerationNode(chatModel, planningService, streamingHelper, conversationWindowManager, toolSet);
             StepExecutionNode stepExecutionNode = new StepExecutionNode(chatModel, toolSet, executor, planningService, streamTracker, reasoningEffort, streamingHelper, conversationWindowManager);
             PlanSummaryNode planSummaryNode = new PlanSummaryNode(chatModel, planningService, streamingHelper);
@@ -478,6 +496,11 @@ public class AgentGraphBuilder {
             // LLM mis-calls a skill name as a tool, the response tells it
             // the right invocation pattern instead of a dead-end error.
             executor.setSkillRuntimeService(skillRuntimeService);
+            // Optional: route child-agent denied-tool audit events through
+            // the audit pipeline. Null when audit is not wired (legacy / test).
+            if (auditEventService != null) {
+                executor.setAuditEventService(auditEventService);
+            }
             // PR-1.2 (RFC-049 L1-B): propagate the bound model's capability so ReasoningNode
             // can gate the ThinkingLevelHolder override explicitly, rather than inferring
             // capability from reasoningEffort == null.

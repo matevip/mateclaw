@@ -44,6 +44,20 @@ export type SSEEventType =
   | 'delegation_progress'
   | 'delegation_end'
   | 'delegation_child_complete'
+  // Stream lifecycle + per-iteration boundaries (single-turn UX overhaul).
+  // The parser handles arbitrary `event:` lines via parseEvent — these names
+  // exist in the union purely so TypeScript callers can register handlers
+  // with a typed `on(event, handler)` signature.
+  | 'stream_started'
+  | 'context_prepared'
+  | 'llm_request_sent'
+  | 'thinking_start'
+  | 'thinking_end'
+  | 'iteration_start'
+  | 'iteration_end'
+  | 'content_truncated'
+  | 'tool_result_chunk'
+  | 'delegation_batch'
 
 export interface SSEEvent {
   type: SSEEventType
