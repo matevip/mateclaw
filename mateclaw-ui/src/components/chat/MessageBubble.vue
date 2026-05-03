@@ -649,10 +649,31 @@ watch(model3dAttachments, (atts) => {
 // --- 时间 ---
 const formattedTime = computed(() => {
   if (!props.message.createTime) return ''
-  return new Date(props.message.createTime).toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+
+  const date = new Date(props.message.createTime)
+  const now = new Date()
+
+  const isSameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+
+  if (isSameDay) {
+    // 当天：时:分
+    return date.toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } else {
+    // 非当天：年-月-日 时:分
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  }
 })
 
 const formatFileSize = (size: number) => {
