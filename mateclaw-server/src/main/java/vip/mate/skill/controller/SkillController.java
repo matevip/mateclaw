@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 技能管理接口
@@ -65,6 +66,11 @@ public class SkillController {
             @RequestParam(required = false) Boolean enabled,
             @RequestParam(required = false) String scanStatus) {
         IPage<SkillEntity> dbPage = skillService.pageSkills(page, size, keyword, skillType, enabled, scanStatus);
+        boolean mergeMcpVirtuals = page == 1
+                && (skillType == null || skillType.isBlank() || "mcp".equalsIgnoreCase(skillType));
+        boolean mergeAcpVirtuals = page == 1
+                && (skillType == null || skillType.isBlank() || "acp".equalsIgnoreCase(skillType));
+        Set<String> realNames = (mergeMcpVirtuals || mergeAcpVirtuals) ? realSkillNames() : Set.of();
 
         // RFC-090 §3.2 — surface MCP servers as virtual skills on the
         // first page so users see GitHub / Filesystem / etc. as cards
@@ -72,14 +78,14 @@ public class SkillController {
         // because virtual rows are unpaginated; a follow-up can push
         // them through proper SQL UNION ALL when MCP server count gets
         // into the dozens.
-        if (page == 1 && (skillType == null || skillType.isBlank() || "mcp".equalsIgnoreCase(skillType))) {
+        if (mergeMcpVirtuals) {
             try {
                 List<SkillEntity> mcpSkills = mcpSkillBridge.listMcpDerivedSkillEntities();
                 if (!mcpSkills.isEmpty()) {
                     // In-memory filter mirrors the DB filters so the
                     // user's filter chips still apply to virtual rows.
                     String kw = keyword == null ? "" : keyword.trim().toLowerCase();
-                    List<SkillEntity> filtered = mcpSkills.stream()
+                    List<SkillEntity> filtered = filterShadowedVirtualSkills(mcpSkills, realNames).stream()
                             .filter(s -> kw.isEmpty()
                                     || (s.getName() != null && s.getName().toLowerCase().contains(kw))
                                     || (s.getDescription() != null && s.getDescription().toLowerCase().contains(kw)))
@@ -97,12 +103,12 @@ public class SkillController {
             }
         }
         // RFC-090 §3.2 (parallel) — same auto-bridge for ACP endpoints.
-        if (page == 1 && (skillType == null || skillType.isBlank() || "acp".equalsIgnoreCase(skillType))) {
+        if (mergeAcpVirtuals) {
             try {
                 List<SkillEntity> acpSkills = acpSkillBridge.listAcpDerivedSkillEntities();
                 if (!acpSkills.isEmpty()) {
                     String kw = keyword == null ? "" : keyword.trim().toLowerCase();
-                    List<SkillEntity> filtered = acpSkills.stream()
+                    List<SkillEntity> filtered = filterShadowedVirtualSkills(acpSkills, realNames).stream()
                             .filter(s -> kw.isEmpty()
                                     || (s.getName() != null && s.getName().toLowerCase().contains(kw))
                                     || (s.getDescription() != null && s.getDescription().toLowerCase().contains(kw)))
@@ -126,11 +132,13 @@ public class SkillController {
     @GetMapping("/counts")
     public R<Map<String, Long>> counts() {
         Map<String, Long> result = skillService.countByType();
+        Set<String> realNames = realSkillNames();
         // RFC-090 §3.2 — virtual MCP-derived skills aren't in mate_skill,
         // so countByType() misses them. Fold in the live count so the
         // "MCP" and "all" tab badges match what the list endpoint shows.
         try {
-            long virtualMcp = mcpSkillBridge.listMcpDerivedSkillEntities().size();
+            long virtualMcp = countUnshadowedVirtualSkills(
+                    mcpSkillBridge.listMcpDerivedSkillEntities(), realNames);
             if (virtualMcp > 0) {
                 result.merge("mcp", virtualMcp, Long::sum);
                 result.merge("all", virtualMcp, Long::sum);
@@ -139,7 +147,8 @@ public class SkillController {
             // Bridge failure must not break the badge fetch.
         }
         try {
-            long virtualAcp = acpSkillBridge.listAcpDerivedSkillEntities().size();
+            long virtualAcp = countUnshadowedVirtualSkills(
+                    acpSkillBridge.listAcpDerivedSkillEntities(), realNames);
             if (virtualAcp > 0) {
                 result.merge("acp", virtualAcp, Long::sum);
                 result.merge("all", virtualAcp, Long::sum);
@@ -148,6 +157,32 @@ public class SkillController {
             // Same defensive stance as the MCP bridge above.
         }
         return R.ok(result);
+    }
+
+    /**
+     * Real skill rows own their slug. Same-name MCP/ACP virtual rows are
+     * shadowed even when the real row is disabled, matching the runtime status
+     * view and avoiding duplicate cards for the same capability. The comparison
+     * is name-only because {@code mate_skill.name} is the unique skill slug.
+     */
+    static List<SkillEntity> filterShadowedVirtualSkills(List<SkillEntity> virtualSkills,
+                                                         Set<String> realSkillNames) {
+        if (virtualSkills == null || virtualSkills.isEmpty()) return List.of();
+        Set<String> realNames = realSkillNames == null ? Set.of() : realSkillNames;
+        return virtualSkills.stream()
+                .filter(s -> s != null && !realNames.contains(s.getName()))
+                .toList();
+    }
+
+    static long countUnshadowedVirtualSkills(List<SkillEntity> virtualSkills,
+                                             Set<String> realSkillNames) {
+        return filterShadowedVirtualSkills(virtualSkills, realSkillNames).size();
+    }
+
+    private Set<String> realSkillNames() {
+        return skillService.listSkills().stream()
+                .map(SkillEntity::getName)
+                .collect(java.util.stream.Collectors.toSet());
     }
 
     @Operation(summary = "重新扫描单个技能（RFC-042 §2.3.4）")

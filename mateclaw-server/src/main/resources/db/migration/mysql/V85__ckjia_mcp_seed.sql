@@ -1,6 +1,8 @@
--- Seed default ckjia-shopping MCP server config (disabled by default).
--- Admin enables in Settings > MCP Connections after pointing url to their
--- ckjia instance and configuring CKJIA_MCP_KEY env var for authorization.
+-- Seed ckjia-shopping MCP server config (disabled by default).
+-- The localhost URL below is a dev/test placeholder only. Production admins
+-- must replace it in Settings > MCP Connections with the official CKJIA SaaS
+-- domain or their private CKJIA deployment URL before enabling the server,
+-- then configure CKJIA_MCP_KEY for authorization.
 --
 -- Column name is `url` (not `endpoint`) per McpServerEntity.
 -- headers_json uses ${CKJIA_MCP_KEY} placeholder so the plaintext API key
@@ -20,7 +22,7 @@ SELECT 1000000903,
        'http://localhost:8085/sse',
        '{"Authorization": "Bearer ${CKJIA_MCP_KEY}"}',
        FALSE,
-       'CKJIA cross-platform price comparison MCP server (Taobao/JD/Tmall/Pinduoduo).',
+       'CKJIA price comparison MCP server. Disabled by default; replace the dev/test localhost URL with the production CKJIA domain before enabling.',
        30, 30, TRUE,
        NOW(), NOW(), 0
 FROM dual
