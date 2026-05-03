@@ -53,7 +53,14 @@ public class RepetitionDetector {
      * (other) ABC (other)" duplication while keeping the cost bounded.
      */
     private static final int SENTENCE_TAIL_COUNT = 3;
-    private static final int SENTENCE_LOOKBACK = 10;
+    /**
+     * Number of historical sentences the tail compares against. Bumped from 10
+     * to 30 to catch markdown-list duplication where the model emits the same
+     * 4-6 item list twice with a transition sentence in between — at 10 the
+     * tail of the second list could not see the corresponding sentence of the
+     * first list, leaving the duplicate undetected.
+     */
+    private static final int SENTENCE_LOOKBACK = 30;
     private static final double JACCARD_THRESHOLD = 0.85;
     /**
      * Lower bound on the per-sentence token count. Below this both the
@@ -68,11 +75,15 @@ public class RepetitionDetector {
     private static final int SENTENCE_MIN_BUFFER = 1500;
     /**
      * Sentence delimiters: full-width Chinese punctuation plus ASCII end-of
-     * -sentence punctuation and newline. Splitting greedily on any of these
-     * is good enough for Jaccard's set-of-tokens semantics.
+     * -sentence punctuation and newline. ASCII '.' '!' '?' are NOT treated as
+     * sentence boundaries when preceded by a digit — that prevents markdown
+     * list ordinals like "1." / "2." / "3." from fragmenting a paragraph into
+     * noise sentences, which used to push the tail past SENTENCE_LOOKBACK and
+     * mask whole-list duplication. Decimal numbers (e.g. "1.5") are also
+     * spared by the same rule, which is the desired behavior.
      */
     private static final Pattern SENTENCE_SPLIT =
-            Pattern.compile("[\\u3002\\uff01\\uff1f.!?\\n]+");
+            Pattern.compile("[\\u3002\\uff01\\uff1f\\n]+|(?<!\\d)[.!?]+");
 
     private final StringBuilder buffer = new StringBuilder();
     private boolean repetitionDetected = false;
