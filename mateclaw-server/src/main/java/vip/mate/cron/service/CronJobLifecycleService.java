@@ -70,6 +70,15 @@ public class CronJobLifecycleService {
         run.setDeliveryStatus("NONE");
         runMapper.insert(run);
 
+        // Self-heal the parent conversation row before saving messages.
+        // saveMessage only inserts message rows; if the conversation row is
+        // missing (e.g. tasks_<wsId> seed never ran on this DB, or was
+        // deleted manually) the messages become orphans the sidebar cannot
+        // surface. getOrCreateSharedConversation makes the row land with
+        // username=system so every workspace member sees it.
+        conversationService.getOrCreateSharedConversation(
+                conversationId, job.getAgentId(), job.getWorkspaceId());
+
         // Cron-run header (system role) so users browsing the unified
         // tasks_<wsId> conversation can tell which job's run starts here.
         // Renderable as a divider card on the frontend; LLM history reads
