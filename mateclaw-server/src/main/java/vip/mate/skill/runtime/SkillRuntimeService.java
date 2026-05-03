@@ -202,19 +202,29 @@ public class SkillRuntimeService {
             .map(packageResolver::resolve)
             .filter(SkillRuntimeService::passesActiveGate)
             .collect(Collectors.toList());
+        // Track real skill names so a same-named bridged virtual skill is
+        // suppressed (real wins). Without this, a real SKILL.md packaged
+        // alongside a same-name MCP/ACP server produces two cards on the
+        // Skills page.
+        Set<String> realNames = resolved.stream()
+            .map(ResolvedSkill::getName)
+            .collect(Collectors.toSet());
         try {
-            // RFC-090 §3.2 — MCP-derived virtual skills go through the
-            // same active gate so a disconnected MCP server doesn't
-            // pollute the prompt enhancement.
+            // MCP-derived virtual skills go through the same active gate
+            // so a disconnected MCP server doesn't pollute the prompt
+            // enhancement. Same-name virtuals are suppressed by the real
+            // skill above.
             for (ResolvedSkill virt : mcpSkillBridge.listMcpDerivedResolvedSkills()) {
+                if (realNames.contains(virt.getName())) continue;
                 if (passesActiveGate(virt)) resolved.add(virt);
             }
         } catch (Exception e) {
             log.warn("MCP skill bridge active merge failed: {}", e.getMessage());
         }
         try {
-            // RFC-090 §3.2 (parallel) — ACP-derived virtual skills.
+            // ACP-derived virtual skills. Same dedup as MCP.
             for (ResolvedSkill virt : acpSkillBridge.listAcpDerivedResolvedSkills()) {
+                if (realNames.contains(virt.getName())) continue;
                 if (passesActiveGate(virt)) resolved.add(virt);
             }
         } catch (Exception e) {
@@ -240,13 +250,25 @@ public class SkillRuntimeService {
         List<ResolvedSkill> resolved = allSkills.stream()
             .map(packageResolver::resolve)
             .collect(Collectors.toList());
+        // Same dedup-by-name as refreshActiveSkills(): a real skill with
+        // the same name as a bridged virtual one suppresses the virtual,
+        // so the Skills admin page never shows two cards for the same name.
+        Set<String> realNames = resolved.stream()
+            .map(ResolvedSkill::getName)
+            .collect(Collectors.toSet());
         try {
-            resolved.addAll(mcpSkillBridge.listMcpDerivedResolvedSkills());
+            for (ResolvedSkill virt : mcpSkillBridge.listMcpDerivedResolvedSkills()) {
+                if (realNames.contains(virt.getName())) continue;
+                resolved.add(virt);
+            }
         } catch (Exception e) {
             log.warn("MCP skill bridge merge failed: {}", e.getMessage());
         }
         try {
-            resolved.addAll(acpSkillBridge.listAcpDerivedResolvedSkills());
+            for (ResolvedSkill virt : acpSkillBridge.listAcpDerivedResolvedSkills()) {
+                if (realNames.contains(virt.getName())) continue;
+                resolved.add(virt);
+            }
         } catch (Exception e) {
             log.warn("ACP skill bridge merge failed: {}", e.getMessage());
         }
