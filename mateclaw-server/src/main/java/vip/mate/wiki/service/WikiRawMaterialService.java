@@ -42,6 +42,9 @@ public class WikiRawMaterialService {
     private final WikiProperties properties;
     private final ApplicationEventPublisher eventPublisher;
     private final DocumentExtractTool documentExtractTool;
+    /** Optional — wired by Spring; null in minimal test harnesses where the cascade path is exercised separately. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private WikiPageService pageService;
     /** RFC-013：删除时级联清理 chunk */
     private final WikiChunkService chunkService;
     private final ImageVisionService imageVisionService;
@@ -333,8 +336,30 @@ public class WikiRawMaterialService {
 
     @Transactional
     public void delete(Long id) {
+        // Load the entity first so we know which KB the cascade lives in.
+        // Once the raw row is gone we'd lose kb_id and couldn't run the
+        // page cleanup; do it before the deleteById.
+        WikiRawMaterialEntity entity = rawMapper.selectById(id);
+
+        // Cascade-delete pages this raw was the sole source of, and strip
+        // the raw_id reference from multi-source pages — same semantics
+        // reprocess uses (WikiProcessingService line ~257). Without this,
+        // pages survive the raw delete and become orphans: search keeps
+        // returning them, the page list is polluted, citations dangle.
+        if (entity != null && entity.getKbId() != null && pageService != null) {
+            try {
+                int cleaned = pageService.deleteExclusiveBySourceRawId(entity.getKbId(), id);
+                if (cleaned > 0) {
+                    log.info("[Wiki] Cascade-deleted {} exclusive page(s) for raw={}", cleaned, id);
+                }
+            } catch (Exception e) {
+                log.warn("[Wiki] Failed to cascade-delete pages for raw={}: {}", id, e.getMessage());
+            }
+        }
+
         rawMapper.deleteById(id);
-        // RFC-013：级联清理 chunk，避免语义搜索命中孤儿 chunk
+
+        // Cascade-clean chunks so semantic search doesn't hit orphan rows.
         try {
             if (chunkService != null) {
                 chunkService.deleteByRawId(id);
