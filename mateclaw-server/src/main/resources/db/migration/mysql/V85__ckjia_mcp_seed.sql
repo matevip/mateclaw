@@ -6,11 +6,16 @@
 -- headers_json uses ${CKJIA_MCP_KEY} placeholder so the plaintext API key
 -- never lands in the database (parseHeaders expands env vars at request time).
 
+-- mate_mcp_server.id is BIGINT NOT NULL PRIMARY KEY without DB-side auto-increment;
+-- production uses MyBatis Plus Snowflake at insert time, but Flyway bypasses that.
+-- Following existing seed convention (1000000901=filesystem, 1000000902=github),
+-- ckjia-shopping takes 1000000903.
 INSERT INTO mate_mcp_server (
-    name, transport, url, headers_json, enabled, description,
+    id, name, transport, url, headers_json, enabled, description,
     connect_timeout_seconds, read_timeout_seconds, builtin, create_time, update_time, deleted
 )
-SELECT 'ckjia-shopping',
+SELECT 1000000903,
+       'ckjia-shopping',
        'sse',
        'http://localhost:8088/mcp/sse',
        '{"Authorization": "Bearer ${CKJIA_MCP_KEY}"}',
