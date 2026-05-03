@@ -183,6 +183,70 @@ export const activityApi = {
     http.get('/activity/feed', { params }),
 }
 
+// ==================== Backstage (admin runtime view) ====================
+export interface BackstageRunCard {
+  conversationId: string
+  agentId: number | null
+  agentName: string | null
+  agentIcon: string | null
+  username: string | null
+  currentPhase: string | null
+  runningToolName: string | null
+  waitingReason: string | null
+  done: boolean
+  stopRequested: boolean
+  firstTokenReceived: boolean
+  subscriberCount: number
+  queueLen: number
+  ageMs: number
+  msSinceLastEvent: number
+  /** null when healthy; otherwise: 'idle_silent' | 'tool_silent' | 'hard_cap' */
+  stuckReason: string | null
+  orphan: boolean
+  subagentCount: number
+}
+
+export interface BackstageSubagentCard {
+  subagentId: string
+  parentConversationId: string | null
+  childConversationId: string | null
+  agentId: number | null
+  agentName: string | null
+  agentIcon: string | null
+  goal: string | null
+  status: string | null
+  currentPhase: string | null
+  lastTool: string | null
+  toolCount: number
+  ageMs: number
+}
+
+export interface BackstageSummary {
+  running: number
+  stuck: number
+  orphan: number
+  queued: number
+  subagentsActive: number
+}
+
+export interface BackstageSnapshot {
+  summary: BackstageSummary
+  runs: BackstageRunCard[]
+  subagents: BackstageSubagentCard[]
+  timestamp: number
+}
+
+export const backstageApi = {
+  snapshot: () => http.get<{ data: BackstageSnapshot }>('/admin/agent-runtime/snapshot'),
+  stop: (conversationId: string) =>
+    http.post(`/admin/agent-runtime/runs/${encodeURIComponent(conversationId)}/stop`),
+  recycle: (conversationId: string) =>
+    http.post(`/admin/agent-runtime/runs/${encodeURIComponent(conversationId)}/recycle`),
+  interruptSubagent: (subagentId: string) =>
+    http.post(`/admin/agent-runtime/subagents/${encodeURIComponent(subagentId)}/interrupt`),
+  sweep: () => http.post('/admin/agent-runtime/sweep'),
+}
+
 // ==================== ACP Endpoints (RFC-090 Phase 7) ====================
 export const acpApi = {
   list: () => http.get('/acp/endpoints'),

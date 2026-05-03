@@ -8,12 +8,31 @@
             <h1 class="mc-page-title">{{ t('agents.title') }}</h1>
             <p class="mc-page-desc">{{ t('agents.desc') }}</p>
           </div>
-          <button class="btn-primary" @click="openCreateModal">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-            {{ t('agents.newAgent') }}
-          </button>
+          <div class="header-right">
+            <router-link
+              v-if="isAdminRole && backstageRunning > 0"
+              to="/backstage"
+              class="live-pill"
+              :class="{ 'live-pill--alert': backstageStuck > 0 }"
+              :title="t('backstage.attention')"
+            >
+              <span class="live-pill-dot"></span>
+              <span class="live-pill-text">
+                {{ backstageStuck > 0
+                  ? t('agents.live.needsAttention', { n: backstageStuck })
+                  : t('agents.live.atWork', { n: backstageRunning }) }}
+              </span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </router-link>
+            <button class="btn-primary" @click="openCreateModal">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              {{ t('agents.newAgent') }}
+            </button>
+          </div>
         </div>
 
         <div class="agents-toolbar mc-surface-card">
@@ -349,12 +368,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { mcConfirm } from '@/components/common/useConfirm'
-import { agentApi, agentBindingApi, modelApi, skillApi, toolApi, templateApi } from '@/api/index'
+import { agentApi, agentBindingApi, modelApi, skillApi, toolApi, templateApi, backstageApi } from '@/api/index'
 import type { Agent } from '@/types/index'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import SkillIconPicker from '@/components/common/SkillIconPicker.vue'
@@ -433,11 +452,37 @@ const filteredAgents = computed(() => {
   return list
 })
 
+// Live signal for the "see what's running" header pill — admin only.
+const isAdminRole = computed(() => (localStorage.getItem('role') || 'user') === 'admin')
+const backstageRunning = ref(0)
+const backstageStuck = ref(0)
+let backstagePollTimer: ReturnType<typeof setInterval> | null = null
+
+async function refreshBackstagePill() {
+  if (!isAdminRole.value) return
+  try {
+    const res: any = await backstageApi.snapshot()
+    const data = res?.data ?? res
+    backstageRunning.value = data?.summary?.running ?? 0
+    backstageStuck.value = data?.summary?.stuck ?? 0
+  } catch {
+    // Silent — stale value is preferable to a flapping number.
+  }
+}
+
 onMounted(() => {
   loadAgents()
   // RFC-03 G1: load models once for the per-Agent override dropdown.
   // Failure is non-fatal — the dropdown just shows only "global default".
   loadAvailableModels()
+  if (isAdminRole.value) {
+    refreshBackstagePill()
+    backstagePollTimer = setInterval(refreshBackstagePill, 10_000)
+  }
+})
+
+onBeforeUnmount(() => {
+  if (backstagePollTimer) clearInterval(backstagePollTimer)
 })
 
 async function loadAgents() {
@@ -663,6 +708,94 @@ async function toggleAgent(agent: Agent) {
 
 <style scoped>
 .agents-page { gap: 18px; }
+
+/* ===== Backstage live pill in page header ===== */
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--mc-border-light);
+  color: var(--mc-text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  backdrop-filter: blur(8px);
+}
+
+html.dark .live-pill {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.live-pill:hover {
+  border-color: var(--mc-border);
+  color: var(--mc-text-primary);
+  transform: translateY(-1px);
+}
+
+.live-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: hsl(155, 55%, 50%);
+  position: relative;
+  animation: live-pill-pulse 2.4s ease-in-out infinite;
+}
+
+.live-pill-dot::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: hsla(155, 55%, 50%, 0.3);
+  animation: live-pill-halo 2.4s ease-in-out infinite;
+}
+
+@keyframes live-pill-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.7; transform: scale(0.85); }
+}
+
+@keyframes live-pill-halo {
+  0%, 100% { opacity: 0; transform: scale(0.85); }
+  50%      { opacity: 1; transform: scale(1.6); }
+}
+
+.live-pill--alert {
+  background: linear-gradient(135deg, hsla(28, 90%, 60%, 0.12), hsla(20, 90%, 55%, 0.16));
+  border-color: hsla(20, 80%, 55%, 0.32);
+  color: hsl(20, 70%, 40%);
+}
+
+.live-pill--alert:hover {
+  background: linear-gradient(135deg, hsla(28, 90%, 60%, 0.2), hsla(20, 90%, 55%, 0.25));
+  color: hsl(20, 75%, 35%);
+}
+
+.live-pill--alert .live-pill-dot {
+  background: hsl(20, 80%, 55%);
+  animation-duration: 4s;
+}
+
+.live-pill--alert .live-pill-dot::before {
+  background: hsla(20, 80%, 55%, 0.32);
+  animation-duration: 4s;
+}
+
+.live-pill-text {
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+}
 
 .btn-primary { display: flex; align-items: center; gap: 6px; padding: 10px 16px; background: linear-gradient(135deg, var(--mc-primary), var(--mc-primary-hover)); color: white; border: none; border-radius: 14px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s, transform 0.15s; box-shadow: var(--mc-shadow-soft); }
 .btn-primary:hover { background: var(--mc-primary-hover); }

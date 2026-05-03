@@ -28,6 +28,12 @@ const router = createRouter({
           meta: { title: 'Agents' },
         },
         {
+          path: 'backstage',
+          name: 'Backstage',
+          component: () => import('@/views/Backstage.vue'),
+          meta: { title: 'Backstage', requireAdmin: true },
+        },
+        {
           path: 'wiki',
           name: 'Wiki',
           component: () => import('@/views/Wiki/index.vue'),
