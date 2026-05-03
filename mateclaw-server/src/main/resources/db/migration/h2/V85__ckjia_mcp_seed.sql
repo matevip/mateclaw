@@ -19,7 +19,7 @@ VALUES (
     1000000903,
     'ckjia-shopping',
     'sse',
-    'http://localhost:8088/ai/mcp/sse',
+    'http://localhost:8085/sse',
     '{"Authorization": "Bearer ${CKJIA_MCP_KEY}"}',
     FALSE,
     'CKJIA cross-platform price comparison MCP server (Taobao/JD/Tmall/Pinduoduo).',
