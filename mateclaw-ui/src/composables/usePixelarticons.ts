@@ -79,6 +79,13 @@ export function parseIconValue(value: string | null | undefined): ParsedIcon {
   if (v.startsWith('http://') || v.startsWith('https://')) {
     return { kind: 'url', url: v }
   }
+  // Site-absolute path (e.g. /skill-assets/<skill>/assets/<file>.png served
+  // by the WebMvcConfig resource handler) — treat as a URL the browser will
+  // resolve against the current host, so deployments don't need to hardcode
+  // their public origin in SKILL.md.
+  if (v.startsWith('/')) {
+    return { kind: 'url', url: v }
+  }
   // Anything else falls through as an emoji / text glyph. We don't
   // validate "is this really an emoji" — letting the user pick any
   // unicode glyph is intentionally flexible.

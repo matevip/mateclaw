@@ -1,10 +1,18 @@
 ---
 name: ckjia-shopping
+nameZh: 查价 · 比价购物
+nameEn: CKJIA Shopping
 version: "1.0.0"
 icon: /skill-assets/ckjia-shopping/assets/ckjia_logo_new.png
-description: "跨平台比价与购物推荐 / Cross-platform price comparison and shopping recommendation. 淘宝 / 京东 / 天猫 / 拼多多商品聚合搜索，拍图识物，AI 购物意图识别。Phase 1 ships shopping_recommend + image_recognize; unified_search / price_history / compare_skus 在后续迭代追加。"
+description: "跨平台比价与购物推荐 / Cross-platform price comparison. 淘宝 / 京东 / 天猫 / 拼多多商品聚合搜索 + 拍图识物。需要先启用 ckjia-shopping MCP server 并配置 CKJIA_MCP_KEY 才能用。"
 category: data
 type: mcp
+tags:
+  - shopping
+  - price
+  - ecommerce
+  - 比价
+  - 购物
 dependencies:
   tools:
     - ckjia_shopping_recommend
