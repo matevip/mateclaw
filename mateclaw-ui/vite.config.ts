@@ -37,6 +37,15 @@ export default defineConfig({
         // whole feature is dead in dev mode without it.
         ws: true,
       },
+      // Backend-served per-skill bundled assets (logos / screenshots) — see
+      // WebMvcConfig.addResourceHandlers. Without this proxy entry vite
+      // treats the path as a SPA route and returns index.html, which the
+      // browser then tries to render as an image and shows a broken-icon
+      // placeholder for any built-in skill that ships a logo.
+      '/skill-assets': {
+        target: 'http://localhost:18088',
+        changeOrigin: true,
+      },
     },
   },
   build: {
