@@ -1,6 +1,6 @@
 ---
 name: ckjia-shopping
-nameZh: 查价 · 比价购物
+nameZh: 参考价 - 比价购物
 nameEn: CKJIA Shopping
 version: "1.0.0"
 icon: /skill-assets/ckjia-shopping/assets/ckjia_logo_new.png
@@ -20,7 +20,7 @@ dependencies:
     - ckjia_ping
 ---
 
-# 查价 · 比价购物
+# 参考价 - 比价购物
 
 当用户询问"X 多少钱 / 哪里便宜 / 帮我推荐 X / 这个值不值买 / 拍照认一下这是什么"时使用本技能。
 
