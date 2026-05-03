@@ -13,12 +13,17 @@ tags:
   - ecommerce
   - 比价
   - 购物
-dependencies:
-  tools:
-    - ckjia_shopping_recommend
-    - ckjia_image_recognize
-    - ckjia_ping
 ---
+
+<!-- NOTE: dependencies.tools intentionally omitted. The three MCP tools
+     (ckjia_shopping_recommend / ckjia_image_recognize / ckjia_ping) live
+     on a remote MCP server and are registered into ToolRegistry at
+     runtime via McpToolCallbackProvider — they're never persisted to the
+     mate_tool table that SkillDependencyChecker.selectCount queries, so
+     listing them here would permanently mark the skill as "unresolved".
+     Tool availability is enforced by the ckjia-shopping MCP server being
+     enabled + healthy in Settings ▸ MCP Connections instead. -->
+
 
 # 参考价 - 比价购物
 
