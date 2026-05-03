@@ -773,10 +773,35 @@ public class WikiProcessingService {
         if (!structuredOk) {
             JsonNode routeJson = parseJsonResponse(routeResponse);
             if (routeJson == null) {
-                log.warn("[Wiki] Route phase: failed to parse JSON for kbId={}, rawId={}, responseLen={}, first200={}",
-                        kbId, rawId, routeResponse != null ? routeResponse.length() : 0,
-                        routeResponse != null ? routeResponse.substring(0, Math.min(200, routeResponse.length())) : "null");
-                return 0;
+                // Some models (GLM in "thinking" mode, Kimi with a "Let me
+                // analyze..." preamble) ignore the strict-JSON instruction
+                // on first try and emit prose instead. Their response often
+                // contains no { or } at all, so even substring extraction
+                // can't recover. Re-issue once with an explicit corrective
+                // suffix — empirically this is enough to cut the preamble
+                // and get clean JSON. One retry only; we don't want to
+                // chase down the rabbit hole if the model is fundamentally
+                // misaligned with the schema.
+                log.info("[Wiki] Route phase: first parse failed, retrying with strict-JSON correction for rawId={}", rawId);
+                String correctedUser = routeUser
+                        + "\n\n⚠️ 你上一次的回答无法解析为 JSON。"
+                        + "这次请**只输出**符合 schema 的 JSON 对象（必须以 `{` 开头、以 `}` 结尾），"
+                        + "不要包含任何思考过程、解释说明、Markdown 代码块标记或前后文字。";
+                Prompt retryPrompt = new Prompt(List.of(
+                        new SystemMessage(routeSystem),
+                        new UserMessage(correctedUser)
+                ));
+                String retryResponse = callLlmWithResilientRetry(retryPrompt,
+                        "route chunk RETRY of raw=" + rawId,
+                        kbId, vip.mate.wiki.job.WikiJobStep.ROUTE);
+                routeJson = parseJsonResponse(retryResponse);
+                if (routeJson == null) {
+                    log.warn("[Wiki] Route phase: failed to parse JSON for kbId={}, rawId={}, responseLen={}, first200={}",
+                            kbId, rawId, retryResponse != null ? retryResponse.length() : 0,
+                            retryResponse != null ? retryResponse.substring(0, Math.min(200, retryResponse.length())) : "null");
+                    return 0;
+                }
+                log.info("[Wiki] Route phase: JSON correction retry succeeded for rawId={}", rawId);
             }
             JsonNode createNode = routeJson.path("create");
             if (createNode.isArray()) {
