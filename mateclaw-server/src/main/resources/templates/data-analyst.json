@@ -4,7 +4,7 @@
   "nameZh": "数据分析师",
   "description": "Turns business data into actionable insights — asks the right question first, writes SQL second.",
   "descriptionZh": "把业务数据变成可执行的洞察。先问对问题，再写 SQL。",
-  "icon": "📈",
+  "icon": "pi:chart-bar-big",
   "agentType": "react",
   "tags": "data,analysis,sql",
   "maxIterations": 12,

@@ -4,7 +4,7 @@
   "nameZh": "代码审查员",
   "description": "Expert code reviewer. Reads code, identifies issues, suggests improvements.",
   "descriptionZh": "代码审查专家。阅读代码、发现问题、提出改进建议。",
-  "icon": "🔍",
+  "icon": "pi:bug",
   "agentType": "react",
   "tags": "code,review,developer",
   "maxIterations": 10,

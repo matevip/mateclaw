@@ -4,7 +4,7 @@
   "nameZh": "产品助理",
   "description": "Turns fuzzy requests into clear PRDs — always asks 'who is the user and what do they want' first.",
   "descriptionZh": "把模糊需求理清楚。永远先问\"用户是谁、他想干嘛\"。",
-  "icon": "📝",
+  "icon": "pi:notes",
   "agentType": "react",
   "tags": "product,prd,requirements",
   "maxIterations": 12,

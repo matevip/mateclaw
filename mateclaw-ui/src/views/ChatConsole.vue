@@ -26,7 +26,7 @@
 
       <div class="agent-selector">
         <button class="agent-select-trigger" @click="agentDropdownOpen = !agentDropdownOpen" :title="`${$t('chat.selectAgent')} (⌘K)`">
-          <span class="agent-select-trigger__icon"><SkillIcon :value="currentAgent?.icon" :size="24" :fallback="'🤖'" /></span>
+          <span class="agent-select-trigger__icon" :style="{ color: agentIconColor(currentAgent?.icon) }"><SkillIcon :value="currentAgent?.icon" :size="24" :fallback="'🤖'" /></span>
           <span v-if="!convPanelCollapsed || isMobile" class="agent-select-trigger__name">{{ currentAgent?.name || $t('chat.selectAgent') }}</span>
           <svg v-if="!convPanelCollapsed || isMobile" class="agent-select-trigger__arrow" :class="{ open: agentDropdownOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
@@ -42,10 +42,10 @@
               :class="{ active: String(agent.id) === String(selectedAgentId) }"
               @click="selectAgent(agent)"
             >
-              <span class="agent-dropdown-item__icon"><SkillIcon :value="agent.icon" :size="18" :fallback="'🤖'" /></span>
+              <span class="agent-dropdown-item__icon" :style="{ color: agentIconColor(agent.icon) }"><SkillIcon :value="agent.icon" :size="18" :fallback="'🤖'" /></span>
               <div class="agent-dropdown-item__info">
                 <span class="agent-dropdown-item__name">{{ agent.name }}</span>
-                <span class="agent-dropdown-item__desc">{{ agent.description || agent.agentType }}</span>
+                <span class="agent-dropdown-item__desc">{{ agentTagline(agent) }}</span>
               </div>
               <span v-if="String(agent.id) === String(selectedAgentId)" class="agent-dropdown-item__check">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
@@ -153,10 +153,21 @@
           </button>
           <div class="chat-stage-copy" v-if="currentAgent">
             <div class="chat-stage-kicker">{{ $t('nav.chat') }}</div>
-            <div class="agent-badge" :title="currentAgent.name">
-              <span class="agent-badge-icon"><SkillIcon :value="currentAgent.icon" :size="22" :fallback="'🤖'" /></span>
-              <span class="agent-badge-name">{{ currentAgent.name }}</span>
-              <span class="agent-badge-type">{{ currentAgent.agentType === 'react' ? 'ReAct' : 'Plan-Execute' }}</span>
+            <!--
+              Header reads as "who is this employee" — name + tagline.
+              The runtime mode (ReAct / Plan-Execute) is technical jargon
+              to end users and lives in the badge tooltip instead, so the
+              header doesn't get polluted.
+            -->
+            <div
+              class="agent-badge"
+              :title="`${currentAgent.name}${currentAgentRuntimeMode ? ' · ' + currentAgentRuntimeMode : ''}`"
+            >
+              <span class="agent-badge-icon" :style="{ color: agentIconColor(currentAgent.icon) }"><SkillIcon :value="currentAgent.icon" :size="22" :fallback="'🤖'" /></span>
+              <div class="agent-badge-text">
+                <span class="agent-badge-name">{{ currentAgent.name }}</span>
+                <span v-if="currentAgentTagline" class="agent-badge-tagline">{{ currentAgentTagline }}</span>
+              </div>
               <span class="status-dot" :class="connectionStatusClass" :title="connectionStatusLabel"></span>
             </div>
           </div>
@@ -314,6 +325,8 @@ import type { Conversation, Agent, ModelConfig, ProviderInfo, ActiveModelsInfo, 
 // 导入组件化组件
 import MessageList from '@/components/chat/MessageList.vue'
 import SkillIcon from '@/components/common/SkillIcon.vue'
+import { parsePrompt, deriveTagline } from '@/utils/agentPromptProfile'
+import { agentIconColor } from '@/utils/agentIconColor'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import StreamLoadingBar from '@/components/chat/StreamLoadingBar.vue'
 import TalkMode from '@/components/chat/TalkMode.vue'
@@ -662,6 +675,25 @@ const connectionStatusLabel = computed(() => {
 
 // ============ 计算属性 ============
 const currentAgent = computed(() => agents.value.find(a => String(a.id) === String(selectedAgentId.value)))
+
+/** Tagline derived from the agent's role/goal — same source of truth as the
+ *  Agents page card, so the chat header reads the employee identically.
+ *  Falls back to the agent's description when no triad is set. */
+function agentTagline(agent: Agent): string {
+  const profile = parsePrompt(agent.systemPrompt)
+  return deriveTagline(profile, agent.description) || (agent.description || '')
+}
+
+const currentAgentTagline = computed(() =>
+  currentAgent.value ? agentTagline(currentAgent.value) : '',
+)
+/** Human label for the agent's runtime mode — surfaces in the badge tooltip
+ *  only, never in the visible header. */
+const currentAgentRuntimeMode = computed(() => {
+  const a = currentAgent.value
+  if (!a) return ''
+  return a.agentType === 'react' ? t('agents.types.react') : t('agents.types.planExecute')
+})
 
 // 按日期分组的会话列表
 // Per-conversation last-viewed timestamp store (localStorage-backed, MVP).
@@ -2334,6 +2366,13 @@ function handleCodeCopy(e: MouseEvent) {
   font-size: 14px;
 }
 
+.agent-badge-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
 .agent-badge-name {
   font-size: 13px;
   font-weight: 600;
@@ -2341,14 +2380,18 @@ function handleCodeCopy(e: MouseEvent) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.2;
 }
 
-.agent-badge-type {
+/* The tagline answers "what does this employee do" — runtime mode lives in
+   the badge tooltip, not on screen, so we don't compete for attention. */
+.agent-badge-tagline {
   font-size: 11px;
-  color: var(--mc-primary-light);
-  background: var(--mc-bg-elevated);
-  padding: 1px 6px;
-  border-radius: 10px;
+  color: var(--mc-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
 }
 
 .status-dot {
@@ -2561,8 +2604,7 @@ function handleCodeCopy(e: MouseEvent) {
     display: none;
   }
 
-  .agent-badge-name,
-  .agent-badge-type {
+  .agent-badge-text {
     display: none;
   }
 

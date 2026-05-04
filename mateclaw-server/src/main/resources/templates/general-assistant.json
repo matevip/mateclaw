@@ -4,7 +4,7 @@
   "nameZh": "通用助手",
   "description": "A versatile AI assistant for everyday tasks — search, write, analyze, and more.",
   "descriptionZh": "通用 AI 助手，适合日常任务——搜索、写作、分析等。",
-  "icon": "🤖",
+  "icon": "pi:robot-face-happy",
   "agentType": "react",
   "tags": "general,assistant,default",
   "maxIterations": 10,

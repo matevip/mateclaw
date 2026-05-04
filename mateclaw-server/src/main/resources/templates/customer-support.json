@@ -4,7 +4,7 @@
   "nameZh": "客服助理",
   "description": "Empathy first, solution second — answers customers in 5 minutes without sounding like a script.",
   "descriptionZh": "先共情，再解决。5 分钟内给客户一个不像机器的答复。",
-  "icon": "💬",
+  "icon": "pi:headphone",
   "agentType": "react",
   "tags": "support,customer,operations",
   "maxIterations": 10,

@@ -918,11 +918,26 @@ public class AgentGraphBuilder {
 
     private String buildEnhancedPrompt(AgentEntity entity, boolean builtinSearchEnabled,
                                        Set<String> boundTools, Integer maxInputTokens) {
-        // 通过 MemoryManager 从所有 MemoryProvider 组装系统提示词（快照冻结）
+        // The agent's own systemPrompt encodes its identity (role / goal /
+        // backstory). The memory block from workspace files (AGENTS.md, SOUL.md,
+        // PROFILE.md, MEMORY.md, ...) augments that identity with durable
+        // context. Both are independently optional, but when both exist they
+        // must be joined — earlier this branch picked memory and silently
+        // dropped the identity prompt, so editor-side identity changes never
+        // reached runtime if the agent had any workspace files.
+        String identityPrompt = entity.getSystemPrompt() != null ? entity.getSystemPrompt().trim() : "";
         String memoryPrompt = memoryManager.buildSystemPromptBlock(entity.getId());
-        String basePrompt = (memoryPrompt != null && !memoryPrompt.isBlank())
-                ? memoryPrompt
-                : (entity.getSystemPrompt() != null ? entity.getSystemPrompt() : "");
+        StringBuilder basePromptBuilder = new StringBuilder();
+        if (!identityPrompt.isEmpty()) {
+            basePromptBuilder.append(identityPrompt);
+        }
+        if (memoryPrompt != null && !memoryPrompt.isBlank()) {
+            if (basePromptBuilder.length() > 0) {
+                basePromptBuilder.append("\n\n");
+            }
+            basePromptBuilder.append(memoryPrompt);
+        }
+        String basePrompt = basePromptBuilder.toString();
 
         // 使用 skill runtime 构建技能增强（per-agent 绑定过滤）
         Set<Long> boundSkillIds = agentBindingService.getBoundSkillIds(entity.getId());

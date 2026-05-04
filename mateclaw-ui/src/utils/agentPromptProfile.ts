@@ -54,9 +54,17 @@ export function isStructuredPrompt(systemPrompt: string | null | undefined): boo
 }
 
 /**
- * Parse a systemPrompt into role/goal/backstory/extra. If no section markers
- * are present, the entire prompt becomes `extra` so legacy agents keep their
- * prompt verbatim.
+ * Parse a systemPrompt into role/goal/backstory/extra. The parse contract is
+ * lossless: every byte of the original prompt ends up in one of the four
+ * fields, so a parse → serialize round-trip never silently drops content.
+ *
+ * - If no recognized section markers exist, the whole prompt becomes `extra`.
+ * - If recognized markers exist:
+ *   - Lines before the first heading (preamble) prepend to `extra`.
+ *   - Unknown `## Heading` blocks (e.g. `## Notes`, `## Examples`) keep
+ *     their heading line and content and append to `extra` verbatim.
+ *   - Multiple headings of the same kind concatenate (last writer wins on
+ *     intent, but content is preserved).
  */
 export function parsePrompt(systemPrompt: string | null | undefined): AgentPromptProfile {
   const profile = emptyProfile()
@@ -68,29 +76,57 @@ export function parsePrompt(systemPrompt: string | null | undefined): AgentPromp
   }
 
   const lines = systemPrompt.split(/\r?\n/)
-  let current: SectionKey | null = null
   const buffers: Record<SectionKey, string[]> = {
     role: [],
     goal: [],
     backstory: [],
     extra: [],
   }
+  const preamble: string[] = []
+  // Unknown sections are captured as { heading, body } pairs so we can
+  // re-emit them verbatim (including their `## Heading` line) into `extra`.
+  const unknownSections: { heading: string; body: string[] }[] = []
+
+  type Bucket = { kind: 'preamble' } | { kind: 'known'; key: SectionKey } | { kind: 'unknown'; index: number }
+  let bucket: Bucket = { kind: 'preamble' }
 
   for (const line of lines) {
     const m = line.match(SECTION_HEADING_REGEX)
     if (m) {
-      const key = HEADING_TO_KEY[m[1].trim().toLowerCase()]
+      const headingText = m[1].trim()
+      const key = HEADING_TO_KEY[headingText.toLowerCase()]
       if (key) {
-        current = key
+        bucket = { kind: 'known', key }
         continue
       }
+      // Unknown heading — start a new captured block, keep the original
+      // heading text so we can round-trip it back.
+      const idx = unknownSections.length
+      unknownSections.push({ heading: line, body: [] })
+      bucket = { kind: 'unknown', index: idx }
+      continue
     }
-    if (current) buffers[current].push(line)
+    if (bucket.kind === 'preamble') preamble.push(line)
+    else if (bucket.kind === 'known') buffers[bucket.key].push(line)
+    else unknownSections[bucket.index].body.push(line)
   }
 
-  for (const key of SECTION_KEYS) {
-    profile[key] = buffers[key].join('\n').trim()
+  // Compose `extra` lossless: preamble first, then the recognized "extra"
+  // section's content, then any unknown sections (keeping their headings).
+  const extraParts: string[] = []
+  const trimmedPreamble = preamble.join('\n').trim()
+  if (trimmedPreamble) extraParts.push(trimmedPreamble)
+  const trimmedExtra = buffers.extra.join('\n').trim()
+  if (trimmedExtra) extraParts.push(trimmedExtra)
+  for (const sec of unknownSections) {
+    const body = sec.body.join('\n').trimEnd()
+    extraParts.push(body ? `${sec.heading}\n${body}` : sec.heading)
   }
+
+  profile.role = buffers.role.join('\n').trim()
+  profile.goal = buffers.goal.join('\n').trim()
+  profile.backstory = buffers.backstory.join('\n').trim()
+  profile.extra = extraParts.join('\n\n').trim()
   return profile
 }
 

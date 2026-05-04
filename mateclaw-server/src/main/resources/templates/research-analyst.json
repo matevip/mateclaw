@@ -4,7 +4,7 @@
   "nameZh": "研究分析师",
   "description": "Breaks down complex research tasks into steps. Uses web search and Wiki for deep analysis.",
   "descriptionZh": "将复杂研究任务分解为步骤。使用网络搜索和 Wiki 进行深度分析。",
-  "icon": "📊",
+  "icon": "pi:book-open",
   "agentType": "plan_execute",
   "tags": "research,analysis,planning",
   "maxIterations": 20,

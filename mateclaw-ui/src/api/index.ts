@@ -7,7 +7,7 @@ export const http = axios.create({
   timeout: 30000,
 })
 
-// 请求拦截器：注入 Token + Workspace ID
+// 请求拦截器：注入 Token + Workspace ID + Accept-Language
 http.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) {
@@ -16,6 +16,15 @@ http.interceptors.request.use((config) => {
   const workspaceId = localStorage.getItem('mc-workspace-id')
   if (workspaceId) {
     config.headers['X-Workspace-Id'] = workspaceId
+  }
+  // Forward the user's UI locale so locale-sensitive endpoints (e.g.
+  // template apply) can pick the right display strings. Native browsers
+  // already send Accept-Language, but the user's chosen UI language may
+  // differ from the OS default — explicitly setting it keeps the two
+  // in sync.
+  const locale = localStorage.getItem('mateclaw_locale')
+  if (locale) {
+    config.headers['Accept-Language'] = locale
   }
   return config
 })

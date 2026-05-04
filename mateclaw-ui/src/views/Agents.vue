@@ -4,7 +4,7 @@
       <div class="mc-page-inner agents-page">
         <div class="mc-page-header">
           <div>
-            <div class="mc-page-kicker">Agent Studio</div>
+            <div class="mc-page-kicker">{{ t('agents.kicker') }}</div>
             <h1 class="mc-page-title">{{ t('agents.title') }}</h1>
             <p class="mc-page-desc">{{ t('agents.desc') }}</p>
           </div>
@@ -67,7 +67,11 @@
               the card readable at a glance.
             -->
             <div class="agent-card__top">
-              <span class="agent-card__avatar" :class="{ 'agent-card__avatar--off': !agent.enabled }">
+              <span
+                class="agent-card__avatar"
+                :class="{ 'agent-card__avatar--off': !agent.enabled }"
+                :style="{ color: agentIconColor(agent.icon) }"
+              >
                 <SkillIcon :value="agent.icon" :size="40" :fallback="'🧑‍💼'" />
               </span>
               <div class="agent-card__identity">
@@ -144,7 +148,9 @@
               :class="{ applying: applyingTemplate }"
               @click="!applyingTemplate && applyTemplate(tpl.id)"
             >
-              <div class="template-icon">{{ tpl.icon }}</div>
+              <div class="template-icon" :style="{ color: agentIconColor(tpl.icon) }">
+                <SkillIcon :value="tpl.icon" :size="28" :fallback="'🧑‍💼'" />
+              </div>
               <div class="template-info">
                 <h4 class="template-name">{{ $i18n.locale === 'zh-CN' && tpl.nameZh ? tpl.nameZh : tpl.name }}</h4>
                 <p class="template-detail">{{ $i18n.locale === 'zh-CN' && tpl.descriptionZh ? tpl.descriptionZh : tpl.description }}</p>
@@ -432,6 +438,7 @@ import {
   TAGLINE_CJK_BUDGET,
   type AgentPromptProfile,
 } from '@/utils/agentPromptProfile'
+import { agentIconColor } from '@/utils/agentIconColor'
 
 const router = useRouter()
 const { t } = useI18n()
