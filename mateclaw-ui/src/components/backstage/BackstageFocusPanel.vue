@@ -188,11 +188,16 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* ===== Backdrop + entry/leave ===== */
+/* ===== Backdrop + entry/leave =====
+ * z-index sits below the global mcConfirm host (2000) so a confirm
+ * prompt opened from inside the focus panel — like the "force end"
+ * dialog — surfaces above it. Page-level modals stay below system
+ * prompts; same convention as iOS sheet vs alert.
+ */
 .focus-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  z-index: 1500;
   display: flex;
   align-items: center;
   justify-content: center;

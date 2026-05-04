@@ -166,10 +166,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import BackstageFocusPanel from '@/components/backstage/BackstageFocusPanel.vue'
 import { useBackstageAgent } from '@/composables/useBackstageAgent'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { backstageApi, type BackstageSnapshot, type BackstageRunCard, type BackstageSubagentCard } from '@/api'
 
 const { t } = useI18n()
@@ -346,66 +347,78 @@ function toggleAutoRefresh() {
 }
 
 async function confirmStop(run: BackstageRunCard) {
+  const ok = await mcConfirm({
+    title: t('backstage.confirm.stopTitle'),
+    message: t('backstage.confirm.stopBody', { name: run.agentName || t('backstage.unknownAgent') }),
+    confirmText: t('backstage.actions.stop'),
+    cancelText: t('common.cancel'),
+    tone: 'primary',
+  })
+  if (!ok) return
   try {
-    await ElMessageBox.confirm(
-      t('backstage.confirm.stopBody', { name: run.agentName || t('backstage.unknownAgent') }),
-      t('backstage.confirm.stopTitle'),
-      { confirmButtonText: t('backstage.actions.stop'), cancelButtonText: t('common.cancel') }
-    )
     await backstageApi.stop(run.conversationId)
     ElMessage.success(t('backstage.toast.stopped'))
     refresh()
-  } catch { /* dismissed */ }
+  } catch (e: any) {
+    ElMessage.error(e?.message || t('backstage.errors.loadFailed'))
+  }
 }
 
 async function confirmRecycle(run: BackstageRunCard) {
+  const ok = await mcConfirm({
+    title: t('backstage.confirm.endTitle', { name: run.agentName || t('backstage.unknownAgent') }),
+    message: t('backstage.confirm.endBody', { name: run.agentName || t('backstage.unknownAgent') }),
+    confirmText: t('backstage.actions.endIt'),
+    cancelText: t('common.cancel'),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
-    await ElMessageBox.confirm(
-      t('backstage.confirm.endBody', { name: run.agentName || t('backstage.unknownAgent') }),
-      t('backstage.confirm.endTitle'),
-      {
-        confirmButtonText: t('backstage.actions.endIt'),
-        cancelButtonText: t('common.cancel'),
-        confirmButtonClass: 'el-button--danger',
-      }
-    )
     await backstageApi.recycle(run.conversationId)
     ElMessage.success(t('backstage.toast.ended'))
     drawerOpen.value = false
     refresh()
-  } catch { /* dismissed */ }
+  } catch (e: any) {
+    ElMessage.error(e?.message || t('backstage.errors.loadFailed'))
+  }
 }
 
 async function confirmInterruptSub(sub: BackstageSubagentCard) {
+  const ok = await mcConfirm({
+    title: t('backstage.confirm.subTitle'),
+    message: t('backstage.confirm.subBody', { name: sub.agentName || sub.subagentId }),
+    confirmText: t('backstage.actions.stop'),
+    cancelText: t('common.cancel'),
+    tone: 'primary',
+  })
+  if (!ok) return
   try {
-    await ElMessageBox.confirm(
-      t('backstage.confirm.subBody', { name: sub.agentName || sub.subagentId }),
-      t('backstage.confirm.subTitle'),
-      { confirmButtonText: t('backstage.actions.stop'), cancelButtonText: t('common.cancel') }
-    )
     await backstageApi.interruptSubagent(sub.subagentId)
     ElMessage.success(t('backstage.toast.subStopped'))
     refresh()
-  } catch { /* dismissed */ }
+  } catch (e: any) {
+    ElMessage.error(e?.message || t('backstage.errors.loadFailed'))
+  }
 }
 
 async function confirmSweep() {
   const stuckCount = snapshot.value?.summary.stuck ?? 0
+  const ok = await mcConfirm({
+    title: t('backstage.confirm.sweepTitle'),
+    message: t('backstage.confirm.sweepBody', { n: stuckCount }),
+    confirmText: t('backstage.actions.tidyUp'),
+    cancelText: t('common.cancel'),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
-    await ElMessageBox.confirm(
-      t('backstage.confirm.sweepBody', { n: stuckCount }),
-      t('backstage.confirm.sweepTitle'),
-      {
-        confirmButtonText: t('backstage.actions.tidyUp'),
-        cancelButtonText: t('common.cancel'),
-        confirmButtonClass: 'el-button--danger',
-      }
-    )
     const res: any = await backstageApi.sweep()
     const recycled = res?.data?.recycled ?? 0
     ElMessage.success(t('backstage.toast.swept', { n: recycled }))
     refresh()
-  } catch { /* dismissed */ }
+  } catch (e: any) {
+    ElMessage.error(e?.message || t('backstage.errors.loadFailed'))
+  }
 }
 
 onMounted(() => {
