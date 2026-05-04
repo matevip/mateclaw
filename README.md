@@ -60,7 +60,7 @@ This is the difference between a warehouse and a library.
 
 | Surface | What it is |
 |---|---|
-| **Web Console** | Full admin — agents, models, tools, skills, knowledge, security, cron |
+| **Web Console** | Full admin — digital employees, models, skills, knowledge, security, cron, **runtime console** (see what every employee is doing, force-recycle in one click) |
 | **Desktop** | Electron app with a bundled JRE 21. Double-click, run. No Java install |
 | **Webchat Widget** | One `<script>` tag embed. Drop it on any site |
 | **IM Channels** | DingTalk · Feishu · WeChat Work · WeChat · Telegram · Discord · QQ · Slack |
@@ -74,22 +74,28 @@ Same brain. Same memory. Same tools. Different doors.
 
 ## What's in the box
 
-### Agent runtime
-**ReAct** for iterative reasoning. **Plan-and-Execute** for complex multi-step work. Dynamic context pruning, smart truncation, stale-stream cleanup — the boring stuff that makes long conversations actually work.
+### Digital employees, not chatbots
+You hire coworkers, not chat boxes. Each one has a **Role**, a **Goal**, a **Backstory**, a pixel-art avatar, and a color of their own — five career templates ship ready (Product Researcher · Customer Support · Knowledge Curator · Data Analyst · Executive Assistant). **ReAct** drives iterative reasoning, **Plan-and-Execute** decomposes complex multi-step work, employees can delegate to one another in parallel. Dynamic context pruning, smart truncation, stale-stream cleanup — the boring stuff that makes long conversations actually work.
 
 ### Knowledge & memory
-- **LLM Wiki** — raw materials digest into linked pages with citations
+- **LLM Wiki** — raw materials digest into linked pages with citations; the **hot cache** auto-injects into every employee's system prompt
 - **Workspace memory** — `AGENTS.md`, `SOUL.md`, `PROFILE.md`, `MEMORY.md`, daily notes
-- **Memory lifecycle** — post-conversation extraction, scheduled consolidation, dreaming workflows
+- **Memory lifecycle** — post-conversation extraction, scheduled consolidation, Dreaming workflows
 
-### Tools, skills, MCP
-Built-in tools for web search, files, memory, date/time. **MCP** over stdio / SSE / Streamable HTTP. **SKILL.md** packages from the ClawHub marketplace. A **Tool Guard** layer with RBAC, approval flows, and path protection — capability needs boundaries.
+### Skills · MCP · ACP — three ways to extend capability
+- **SKILL.md packages** — manifest + prompt + tool list + **LESSONS.md (gets smarter the more you use it)**. Eight starter templates plus a five-step creation wizard, with **Pre-flight checks** that tell you what's missing before install
+- **MCP** — stdio / SSE / Streamable HTTP, plug into any external tool server
+- **ACP** — bring top-tier coding agents like Claude Code and Codex in as employees, auto-bridged to skill cards with wrapper tools
+- **Tool Guard** — RBAC + approval flow + path protection. Capability needs boundaries
+
+### You see what every employee is doing
+**Admin Runtime Console** (`Settings → System → Runtime`) — who's running, what step they're on, how many tokens, one-click force-recycle when stuck. Streaming is staged honestly (thinking / tool / answer), per-event SSE IDs make reconnects safe, multi-employee delegation no longer fights itself, long tasks demand evidence-grounded answers.
 
 ### Multimodal creation
-Text-to-speech · Speech-to-text · Image · Music · Video. First-class, not add-ons.
+Text-to-speech · Speech-to-text · Image · Music · Video · 3D. First-class, not add-ons.
 
 ### Enterprise-ready
-RBAC + JWT. Full audit trail. Flyway-managed schema that auto-heals on upgrade. One JAR to ship. MySQL in production, H2 for dev — nothing to change in your code.
+RBAC + JWT. **Personal Access Tokens** for headless scripts and CI. **HMAC-SHA-256 outbound webhook signing**. **Distributed Cron lock** so multi-instance deployments don't double-fire. Full audit trail. Flyway-managed schema that auto-heals on upgrade. One JAR to ship. MySQL in production, H2 for dev — nothing to change in your code.
 
 ---
 
@@ -109,14 +115,15 @@ This is the same shift databases went through around 2010 and cloud went through
 |:---|:---:|:---:|:---:|:---:|:---:|
 | **Multi-vendor failover** | **Chain + health tracker + cooldown** | Swap providers via config | Orchestration w/ retry | Anthropic only | One model |
 | **Knowledge digestion** | **LLM Wiki + page-level citations** | Canvas + memory | Skills Hub + memory | — | Code index |
-| **Multi-user admin** | **RBAC + approval flow + audit** | Config-file first | Single-user CLI | Enterprise tier | Teams plan |
+| **Multi-user admin** | **RBAC + approval + audit + runtime console** | Config-file first | Single-user CLI | Enterprise tier | Teams plan |
+| **Capability extension** | **Skills (LESSONS) + MCP + ACP** | — | — | MCP | MCP |
 | **Surfaces** | Web admin + Desktop + Widget + SDK + 8 IM | 25+ chat channels | 15+ channels (CLI-led) | 3 IM preview | IDE only |
 | **Stack** | **Java (Spring Boot)** | TypeScript | Python | TypeScript | Electron/TS |
 | **License / Price** | **Apache 2.0 · Free** | MIT · Free | MIT · Free | Proprietary · $20–200/mo | Proprietary · $0–200/mo |
 
 **OpenClaw and Hermes Agent are excellent personal AI platforms** — pick either if you're running one user on one laptop, building your own agent from CLI, and treating everything as config files to hand-tune. Both have bigger communities than MateClaw today.
 
-**MateClaw is the version built for teams.** RBAC per agent, per model, per tool. An approval flow that pauses risky actions for review. Full audit trail. A web admin dashboard where one operator manages 50 agents across 14 vendors. Spring Boot inside — drop-in for any Java shop already running production services.
+**MateClaw is the version built for teams.** RBAC per digital employee, per model, per tool. An approval flow that pauses risky actions for review. Full audit trail. The Admin Runtime Console gives one operator real-time visibility into 50 employees running across 14 vendors — stuck? force-recycle in one click. Spring Boot inside — drop-in for any Java shop already running production services.
 
 Same "whole widget" philosophy. Different center of gravity.
 
@@ -184,7 +191,8 @@ Desktop binaries ship via [GitHub Releases](https://github.com/matevip/mateclaw/
 | Layer | Technology |
 |---|---|
 | Backend | Spring Boot 3.5 · Spring AI Alibaba 1.1 · MyBatis Plus · Flyway |
-| Agent | StateGraph runtime · ReAct + Plan-Execute |
+| Digital Employee Runtime | StateGraph · ReAct + Plan-Execute · Role / Goal / Backstory · LESSONS self-evolution |
+| Capability Extension | SKILL.md packages · MCP (stdio / SSE / HTTP) · ACP bridge (Claude Code / Codex) |
 | Database | H2 (dev) · MySQL 8.0+ (prod) |
 | Auth | Spring Security + JWT |
 | Frontend | Vue 3 · TypeScript · Vite · Element Plus · TailwindCSS 4 |
@@ -199,7 +207,7 @@ Full docs at **[claw.mate.vip/docs](https://claw.mate.vip/docs)** — setup, arc
 
 ## Roadmap
 
-Sharper multi-agent collaboration · Smarter model routing · Deeper multimodal understanding · Longer-lived memory · A richer ClawHub.
+Sharper multi-employee collaboration · Smarter model routing · Deeper multimodal understanding · Longer-lived memory · A richer ClawHub · More ACP upstream integrations.
 
 ## Contributing
 
