@@ -1509,6 +1509,18 @@ export default {
       someoneNeedsAttention: '有 {n} 个需要你看看。',
       workingAlone: '{running} 个在干活 — 其中 {orphan} 个没人在听。',
     },
+    status: {
+      running: '{n} 个在跑',
+      stuck: '{n} 个卡住',
+      orphan: '{n} 个无人看',
+      helpers: '{n} 个帮手',
+    },
+    filters: {
+      all: '全部',
+      working: '工作中',
+      attention: '需关注',
+      quiet: '无人看',
+    },
     saying: {
       thinking: '正在思考...',
       replying: '正在写回复...',

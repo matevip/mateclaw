@@ -329,6 +329,18 @@ export default {
       someoneNeedsAttention: '{n} need a look from you.',
       workingAlone: '{running} working — {orphan} with no one listening.',
     },
+    status: {
+      running: '{n} running',
+      stuck: '{n} stuck',
+      orphan: '{n} unwatched',
+      helpers: '{n} helpers',
+    },
+    filters: {
+      all: 'All',
+      working: 'Working',
+      attention: 'Needs attention',
+      quiet: 'Unwatched',
+    },
     saying: {
       thinking: 'Thinking...',
       replying: 'Writing the reply...',

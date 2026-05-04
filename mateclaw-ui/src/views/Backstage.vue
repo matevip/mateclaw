@@ -4,10 +4,16 @@
       <div class="mc-page-inner backstage-page">
         <!-- Header: one sentence, no jargon -->
         <div class="mc-page-header">
-          <div>
+          <div class="header-lead">
             <div class="mc-page-kicker">{{ t('backstage.kicker') }}</div>
             <h1 class="mc-page-title">{{ t('backstage.title') }}</h1>
             <p class="mc-page-desc">{{ headlineMessage }}</p>
+            <div v-if="statusSegments.length" class="head-meta">
+              <template v-for="(seg, i) in statusSegments" :key="seg.key">
+                <span class="head-meta-sep" v-if="i > 0">·</span>
+                <span class="head-meta-seg" :class="seg.tone">{{ seg.text }}</span>
+              </template>
+            </div>
           </div>
           <div class="header-actions">
             <button
@@ -51,68 +57,84 @@
           <div class="empty-hint">{{ t('backstage.empty.hint') }}</div>
         </div>
 
-        <!-- Cards -->
-        <div v-else class="cards-grid">
-          <article
-            v-for="run in snapshot?.runs ?? []"
-            :key="run.conversationId"
-            class="agent-card mc-surface-card"
-            :class="cardClass(run)"
-            @click="openDetail(run)"
-          >
-            <!-- Top: avatar + name + breathing dot -->
-            <div class="agent-card-top">
-              <div class="agent-avatar" :style="avatarBgStyle(run)">
-                <SkillIcon
-                  v-if="run.agentIcon"
-                  :value="run.agentIcon"
-                  :size="34"
-                  fallback="🤖"
-                />
-                <span v-else class="agent-avatar-letter">{{ avatarLetter(run) }}</span>
-              </div>
-              <div class="agent-id">
-                <div class="agent-name">{{ run.agentName || t('backstage.unknownAgent') }}</div>
-                <div class="agent-owner" v-if="run.username">@{{ run.username }}</div>
-              </div>
-              <div class="breathing-dot-wrap" :title="dotTitle(run)">
-                <span class="breathing-dot" :class="dotClass(run)"></span>
-              </div>
-            </div>
+        <!-- Active runs: filter row (when there's variety) + cards grid -->
+        <template v-else>
+          <div v-if="showFilterRow" class="filter-row">
+            <button
+              v-for="opt in filterOptions"
+              :key="opt.key"
+              class="filter-chip"
+              :class="{ 'is-active': activeFilter === opt.key, [`tone-${opt.tone}`]: true }"
+              @click="activeFilter = opt.key"
+            >
+              <span class="filter-chip-label">{{ opt.label }}</span>
+              <span class="filter-chip-count">{{ opt.count }}</span>
+            </button>
+          </div>
 
-            <!-- Single human sentence -->
-            <div class="agent-saying">{{ humanSentence(run) }}</div>
+          <div class="cards-grid">
+            <article
+              v-for="run in visibleRuns"
+              :key="run.conversationId"
+              class="agent-card mc-surface-card"
+              :class="cardClass(run)"
+              @click="openDetail(run)"
+            >
+              <!-- Top: avatar + name + breathing dot -->
+              <div class="agent-card-top">
+                <div class="agent-avatar" :style="avatarBgStyle(run)">
+                  <SkillIcon
+                    v-if="run.agentIcon"
+                    :value="run.agentIcon"
+                    :size="34"
+                    fallback="🤖"
+                  />
+                  <span v-else class="agent-avatar-letter">{{ avatarLetter(run) }}</span>
+                </div>
+                <div class="agent-id">
+                  <div class="agent-name">{{ run.agentName || t('backstage.unknownAgent') }}</div>
+                  <div class="agent-owner" v-if="run.username">@{{ run.username }}</div>
+                </div>
+                <div class="breathing-dot-wrap" :title="dotTitle(run)">
+                  <span class="breathing-dot" :class="dotClass(run)"></span>
+                </div>
+              </div>
 
-            <!-- Meta + soft progress, only when meaningful -->
-            <div class="agent-meta-row">
-              <span class="meta-time">{{ formatAge(run.ageMs) }}</span>
-              <span v-if="run.subagentCount > 0" class="meta-pill">
-                {{ t('backstage.subagentsBadge', { n: run.subagentCount }) }}
-              </span>
-              <span v-if="run.orphan && !run.stuckReason" class="meta-pill meta-pill-orphan" :title="t('backstage.orphanHint')">
-                {{ t('backstage.orphan') }}
-              </span>
-            </div>
-            <div class="agent-bar" v-if="showBar(run)">
-              <div class="bar-fill" :style="progressFillStyle(run)"></div>
-            </div>
+              <!-- Single human sentence -->
+              <div class="agent-saying">{{ humanSentence(run) }}</div>
 
-            <!-- Foot: action hierarchy -->
-            <div class="agent-card-foot">
-              <button
-                class="card-action card-action-soft"
-                @click.stop="confirmStop(run)"
-                :title="t('backstage.actions.stopHint')"
-              >{{ t('backstage.actions.stop') }}</button>
-              <button
-                v-if="run.stuckReason"
-                class="card-action card-action-strong"
-                @click.stop="confirmRecycle(run)"
-                :title="t('backstage.actions.endHint')"
-              >{{ t('backstage.actions.endIt') }}</button>
-            </div>
-          </article>
-        </div>
+              <!-- Meta + soft progress, only when meaningful -->
+              <div class="agent-meta-row">
+                <span class="meta-time">{{ formatAge(run.ageMs) }}</span>
+                <span class="meta-id" :title="run.conversationId">#{{ shortId(run.conversationId) }}</span>
+                <span v-if="run.subagentCount > 0" class="meta-pill">
+                  {{ t('backstage.subagentsBadge', { n: run.subagentCount }) }}
+                </span>
+                <span v-if="run.orphan && !run.stuckReason" class="meta-pill meta-pill-orphan" :title="t('backstage.orphanHint')">
+                  {{ t('backstage.orphan') }}
+                </span>
+              </div>
+              <div class="agent-bar" v-if="showBar(run)">
+                <div class="bar-fill" :style="progressFillStyle(run)"></div>
+              </div>
+
+              <!-- Foot: action hierarchy -->
+              <div class="agent-card-foot">
+                <button
+                  class="card-action card-action-soft"
+                  @click.stop="confirmStop(run)"
+                  :title="t('backstage.actions.stopHint')"
+                >{{ t('backstage.actions.stop') }}</button>
+                <button
+                  v-if="run.stuckReason"
+                  class="card-action card-action-strong"
+                  @click.stop="confirmRecycle(run)"
+                  :title="t('backstage.actions.endHint')"
+                >{{ t('backstage.actions.endIt') }}</button>
+              </div>
+            </article>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -193,7 +215,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SkillIcon from '@/components/common/SkillIcon.vue'
@@ -201,11 +223,14 @@ import { backstageApi, type BackstageSnapshot, type BackstageRunCard, type Backs
 
 const { t } = useI18n()
 
+type FilterKey = 'all' | 'working' | 'attention' | 'quiet'
+
 const snapshot = ref<BackstageSnapshot | null>(null)
 const isInitialLoading = ref(true)
 const autoRefresh = ref(true)
 const drawerOpen = ref(false)
 const detail = ref<BackstageRunCard | null>(null)
+const activeFilter = ref<FilterKey>('all')
 let timer: ReturnType<typeof setInterval> | null = null
 
 const headlineMessage = computed(() => {
@@ -215,6 +240,90 @@ const headlineMessage = computed(() => {
   if (s.stuck > 0) return t('backstage.headline.someoneNeedsAttention', { n: s.stuck })
   if (s.orphan > 0) return t('backstage.headline.workingAlone', { running: s.running, orphan: s.orphan })
   return t('backstage.headline.working', { n: s.running })
+})
+
+/**
+ * Runbook-style monospace status line. Each segment is a small fact, joined
+ * with a `·` separator. Tone hints colour subtly (warn / accent / muted).
+ * Hidden when nothing is running — empty state already says it best.
+ */
+const statusSegments = computed<{ key: string; text: string; tone: 'muted' | 'accent' | 'warn' }[]>(() => {
+  const s = snapshot.value?.summary
+  if (!s || s.running === 0) return []
+  const segs: { key: string; text: string; tone: 'muted' | 'accent' | 'warn' }[] = []
+  segs.push({ key: 'running', text: t('backstage.status.running', { n: s.running }), tone: 'accent' })
+  if (s.stuck > 0) segs.push({ key: 'stuck', text: t('backstage.status.stuck', { n: s.stuck }), tone: 'warn' })
+  if (s.orphan > 0) segs.push({ key: 'orphan', text: t('backstage.status.orphan', { n: s.orphan }), tone: 'muted' })
+  if (s.subagentsActive > 0) segs.push({ key: 'helpers', text: t('backstage.status.helpers', { n: s.subagentsActive }), tone: 'muted' })
+  return segs
+})
+
+function isWorking(r: BackstageRunCard): boolean {
+  return !r.stuckReason && !r.orphan
+}
+function isAttention(r: BackstageRunCard): boolean {
+  return !!r.stuckReason
+}
+function isQuiet(r: BackstageRunCard): boolean {
+  return r.orphan && !r.stuckReason
+}
+
+const filterOptions = computed(() => {
+  const runs = snapshot.value?.runs ?? []
+  const counts = {
+    all: runs.length,
+    working: runs.filter(isWorking).length,
+    attention: runs.filter(isAttention).length,
+    quiet: runs.filter(isQuiet).length,
+  }
+  // Always show All; only show secondary chips that have at least one match —
+  // an empty chip is dead pixels.
+  const opts: { key: FilterKey; label: string; count: number; tone: string }[] = [
+    { key: 'all', label: t('backstage.filters.all'), count: counts.all, tone: 'neutral' },
+  ]
+  if (counts.working > 0) opts.push({ key: 'working', label: t('backstage.filters.working'), count: counts.working, tone: 'good' })
+  if (counts.attention > 0) opts.push({ key: 'attention', label: t('backstage.filters.attention'), count: counts.attention, tone: 'warn' })
+  if (counts.quiet > 0) opts.push({ key: 'quiet', label: t('backstage.filters.quiet'), count: counts.quiet, tone: 'muted' })
+  return opts
+})
+
+/**
+ * Filter row only earns its keep when there's variety to filter.
+ * Pure-healthy fleets shouldn't pay the visual tax.
+ */
+const showFilterRow = computed(() => {
+  const s = snapshot.value?.summary
+  if (!s || s.running === 0) return false
+  return s.stuck > 0 || s.orphan > 0
+})
+
+const visibleRuns = computed<BackstageRunCard[]>(() => {
+  const runs = snapshot.value?.runs ?? []
+  switch (activeFilter.value) {
+    case 'working': return runs.filter(isWorking)
+    case 'attention': return runs.filter(isAttention)
+    case 'quiet': return runs.filter(isQuiet)
+    default: return runs
+  }
+})
+
+/**
+ * Last 8 chars of a conversation id, rendered as `#a1b2c3d4` — gives each
+ * card a stable serial without leaking the full UUID. Falls back gracefully
+ * for short ids.
+ */
+function shortId(id: string | null | undefined): string {
+  if (!id) return '——'
+  return id.length <= 8 ? id : id.slice(-8)
+}
+
+// If the filter the user picked no longer matches any rows (e.g., the stuck
+// run resolved itself between refreshes), drop back to All so the page
+// doesn't go inexplicably empty.
+watch(filterOptions, opts => {
+  if (!opts.some(o => o.key === activeFilter.value)) {
+    activeFilter.value = 'all'
+  }
 })
 
 function avatarLetter(run: BackstageRunCard | BackstageSubagentCard): string {
@@ -415,6 +524,151 @@ onBeforeUnmount(() => {
 <style scoped>
 .backstage-page {
   --card-radius: 24px;
+}
+
+.header-lead {
+  min-width: 0;
+}
+
+/* ===== Runbook-style monospace status line ===== */
+.head-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--mc-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.head-meta-sep {
+  color: var(--mc-border-strong);
+  user-select: none;
+}
+
+html.dark .head-meta-sep {
+  /* Border-strong reads too pale in dark mode for a punctuation glyph. */
+  color: var(--mc-text-tertiary);
+  opacity: 0.45;
+}
+
+.head-meta-seg.muted {
+  color: var(--mc-text-tertiary);
+}
+
+.head-meta-seg.accent {
+  color: hsl(155, 50%, 38%);
+}
+
+html.dark .head-meta-seg.accent {
+  color: hsl(155, 55%, 62%);
+}
+
+.head-meta-seg.warn {
+  color: hsl(20, 75%, 42%);
+}
+
+html.dark .head-meta-seg.warn {
+  color: hsl(28, 80%, 70%);
+}
+
+/* ===== Filter chip row (kanban-inspired, soft) ===== */
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--mc-border-light);
+  background: transparent;
+  color: var(--mc-text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+  font-family: inherit;
+  letter-spacing: -0.005em;
+}
+
+.filter-chip:hover {
+  background: var(--mc-bg-muted);
+  color: var(--mc-text-primary);
+  border-color: var(--mc-border);
+}
+
+.filter-chip-count {
+  font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--mc-bg-muted);
+  color: var(--mc-text-tertiary);
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+}
+
+.filter-chip:hover .filter-chip-count {
+  background: var(--mc-bg-sunken);
+}
+
+.filter-chip.is-active {
+  background: var(--mc-text-primary);
+  color: var(--mc-bg-elevated);
+  border-color: var(--mc-text-primary);
+}
+
+.filter-chip.is-active .filter-chip-count {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--mc-bg-elevated);
+}
+
+html.dark .filter-chip.is-active {
+  /* Inverted-pill on a warm-dark surface looks too harsh as pure white;
+     soften with the elevated surface token (which already adapts). */
+  background: var(--mc-text-primary);
+  color: var(--mc-bg);
+  border-color: var(--mc-text-primary);
+}
+
+html.dark .filter-chip.is-active .filter-chip-count {
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--mc-bg);
+}
+
+/* Active-filter accent tints — stay readable in both themes */
+.filter-chip.is-active.tone-warn {
+  background: hsl(20, 75%, 48%);
+  border-color: hsl(20, 75%, 48%);
+  color: #fff;
+}
+
+html.dark .filter-chip.is-active.tone-warn {
+  background: hsl(20, 70%, 52%);
+  border-color: hsl(20, 70%, 52%);
+  color: #fff;
+}
+
+.filter-chip.is-active.tone-good {
+  background: hsl(155, 45%, 38%);
+  border-color: hsl(155, 45%, 38%);
+  color: #fff;
+}
+
+html.dark .filter-chip.is-active.tone-good {
+  background: hsl(155, 45%, 46%);
+  border-color: hsl(155, 45%, 46%);
+  color: #fff;
 }
 
 /* ===== Header chips ===== */
@@ -703,6 +957,25 @@ html.dark .agent-card.is-stuck .agent-saying {
 .meta-time {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
+}
+
+.meta-id {
+  font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--mc-text-tertiary);
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--mc-bg-muted);
+  border: 1px solid var(--mc-border-light);
+  opacity: 0.85;
+  cursor: default;
+}
+
+html.dark .meta-id {
+  /* Slightly lift contrast on the warm-dark surface */
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--mc-border-light);
 }
 
 .meta-pill {
