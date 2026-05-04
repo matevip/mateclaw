@@ -9,6 +9,7 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import vip.mate.agent.graph.executor.ToolExecutionExecutor;
 import vip.mate.agent.graph.state.MateClawStateAccessor;
 import vip.mate.agent.graph.state.MateClawStateKeys;
+import vip.mate.agent.graph.state.SourceEvidenceLedger;
 
 import java.util.*;
 import java.util.concurrent.CancellationException;
@@ -77,11 +78,23 @@ public class ActionNode implements NodeAction {
                 .responses(result.responses())
                 .build();
 
+        // Use the executor's raw-stage ledger instead of re-parsing the
+        // spill-compacted responses. ToolExecutionExecutor builds this
+        // ledger from the full pre-truncate text, so a 30 KB grep result
+        // whose head/tail-cut version no longer mentions a path will still
+        // contribute that path to the evidence pool. Falls back to empty
+        // for legacy executor stubs (tests, mocks) that didn't populate
+        // the new field — fine, the merge with `accessor.sourceEvidenceLedger`
+        // is no-op in that case.
+        SourceEvidenceLedger rawLedger = result.rawEvidenceLedger() != null
+                ? result.rawEvidenceLedger()
+                : SourceEvidenceLedger.empty();
         MateClawStateAccessor.OutputBuilder output = MateClawStateAccessor.output()
                 .toolResults(result.responses())
                 .messages(List.of((Message) toolResponseMessage))
                 .currentPhase("action")
-                .events(result.events());
+                .events(result.events())
+                .sourceEvidenceLedger(accessor.sourceEvidenceLedger().merge(rawLedger));
 
         if (result.awaitingApproval()) {
             output.awaitingApproval(true);

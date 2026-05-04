@@ -32,6 +32,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class SkillFileTool {
 
+    private static final int DEFAULT_MAX_LINES = 200;
+    private static final int MAX_OUTPUT_CHARS = 8_000;
+
     private final SkillRuntimeService runtimeService;
     private final SkillFileAccessPolicy accessPolicy;
     private final SkillUsageService usageService;
@@ -59,6 +62,14 @@ public class SkillFileTool {
         @JsonPropertyDescription("Relative file path (e.g., 'references/doc.md' or 'scripts/run.py')")
         String filePath,
 
+        @JsonProperty(required = false)
+        @JsonPropertyDescription("Start line number (1-based). Omit to start from line 1")
+        Integer startLine,
+
+        @JsonProperty(required = false)
+        @JsonPropertyDescription("Maximum number of lines to read, default 300")
+        Integer maxLines,
+
         @Nullable ToolContext ctx
     ) {
         log.info("Reading skill file: skill={}, path={}", skillName, filePath);
@@ -75,7 +86,18 @@ public class SkillFileTool {
                 log.info("Skill loaded: skill={}, path=SKILL.md, bytes={}, estimatedTokens={}",
                         skillName, skill.getContent().length(), TokenEstimator.estimateTokens(skill.getContent()));
                 recordLoaded(skill, "SKILL.md", skill.getContent(), ctx);
-                return skill.getContent();
+                // SKILL.md is the model's primary contract for using a skill —
+                // pagination by default would let the model see only the first
+                // 200 lines / 8KB and silently miss later mandatory sections.
+                // Return the full content unless the caller explicitly requested
+                // pagination via startLine or maxLines. References / scripts are
+                // still paginated below because they can be large supplementary
+                // material the model loads on demand.
+                boolean paginationRequested = startLine != null || maxLines != null;
+                if (!paginationRequested) {
+                    return skill.getContent();
+                }
+                return paginateSkillContent(skillName, "SKILL.md", skill.getContent(), startLine, maxLines);
             }
             return "Error: SKILL.md content not available";
         }
@@ -105,12 +127,82 @@ public class SkillFileTool {
             log.info("Skill loaded: skill={}, path={}, bytes={}, estimatedTokens={}",
                     skillName, filePath, content.length(), TokenEstimator.estimateTokens(content));
             recordLoaded(skill, filePath, content, ctx);
-            return content;
+            return paginateSkillContent(skillName, filePath, content, startLine, maxLines);
 
         } catch (Exception e) {
             log.error("Failed to read skill file {}/{}: {}", skillName, filePath, e.getMessage());
             return "Error: Failed to read file: " + e.getMessage();
         }
+    }
+
+    private String paginateSkillContent(String skillName, String filePath, String content,
+                                        Integer startLine, Integer maxLines) {
+        int safeStart = startLine == null || startLine <= 0 ? 1 : startLine;
+        int safeMaxLines = maxLines == null || maxLines <= 0
+                ? DEFAULT_MAX_LINES
+                : Math.min(maxLines, DEFAULT_MAX_LINES);
+        String[] lines = content.split("\\R", -1);
+        if (safeStart > lines.length) {
+            return "Error: startLine " + safeStart + " exceeds total lines " + lines.length;
+        }
+
+        StringBuilder out = new StringBuilder();
+        int emitted = 0;
+        int lineIndex = safeStart - 1;
+        boolean truncated = false;
+        boolean longLineSplit = false;
+        while (lineIndex < lines.length && emitted < safeMaxLines) {
+            String rendered = lines[lineIndex] + "\n";
+            if (out.length() + rendered.length() > MAX_OUTPUT_CHARS) {
+                // P2 fix: a single line longer than MAX_OUTPUT_CHARS would
+                // otherwise loop forever — the model gets a banner saying
+                // "next startLine=N" but N still points at the same long line,
+                // so the next call yields the same banner with zero content.
+                // Big JSON / minified scripts / base64 fixtures all hit this.
+                // When we have already emitted some shorter lines this round,
+                // stop and let the caller re-request from this line. When the
+                // FIRST attempted line is the over-long one, head-truncate it
+                // verbatim into the remaining budget so the model sees real
+                // content and can advance lineIndex on the next call.
+                if (emitted == 0) {
+                    int budget = Math.max(0, MAX_OUTPUT_CHARS - out.length());
+                    if (budget > 0) {
+                        out.append(rendered, 0, Math.min(budget, rendered.length()));
+                    }
+                    emitted = 1;
+                    lineIndex++;
+                    longLineSplit = true;
+                }
+                truncated = true;
+                break;
+            }
+            out.append(rendered);
+            emitted++;
+            lineIndex++;
+        }
+        if (lineIndex < lines.length) {
+            truncated = true;
+        }
+        if (truncated) {
+            int nextLine = safeStart + emitted;
+            out.append("\n[Skill file truncated: skill=").append(skillName)
+                    .append(", path=").append(filePath)
+                    .append(", shownLines=").append(safeStart).append("-").append(nextLine - 1)
+                    .append(", totalLines=").append(lines.length);
+            if (longLineSplit) {
+                // Tell the model the truncation crossed a single long line so
+                // it knows the displayed text for that line is not the whole
+                // line — it should switch tools (e.g. an external read with a
+                // byte range) rather than just paginating again.
+                out.append(", note=\"line ").append(safeStart)
+                        .append(" exceeds per-call budget; shown content is head-truncated\"");
+            }
+            out.append(". Continue with readSkillFile(skillName=\"").append(skillName)
+                    .append("\", filePath=\"").append(filePath)
+                    .append("\", startLine=").append(nextLine)
+                    .append(", maxLines=").append(safeMaxLines).append(").]");
+        }
+        return out.toString();
     }
 
     private void recordLoaded(ResolvedSkill skill, String filePath, String content, @Nullable ToolContext ctx) {

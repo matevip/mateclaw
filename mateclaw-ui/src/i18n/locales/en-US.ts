@@ -257,6 +257,13 @@ export default {
     // Per-iteration grouping
     iterationEmpty: 'Iteration {index} interrupted (no output)',
     contentRepetitionWarning: 'Repetitive content detected near the end (model artifact)',
+    // INCOMPLETE truncation card (finishReason=incomplete)
+    incompleteTitle: 'Answer auto-truncated after repeated output was detected',
+    incompleteDescription: 'After the visible text above, the model started repeating itself (or stalled in thinking with no output) and was cut short to avoid wasted tokens. Click below to regenerate the full answer, or refine your prompt to focus on the missing parts.',
+    incompleteRetry: 'Regenerate',
+    // EVIDENCE_INSUFFICIENT info card (finishReason=evidence_insufficient)
+    evidenceTitle: 'Run completed — some source references could not be verified',
+    evidenceDescription: 'The full answer is preserved above. The classes/files listed in the trailing "[evidence insufficient] …" line were not actually opened during this run; the model may have inferred them from naming. Ask a follow-up to have each one read before relying on those references.',
     // Approval bar
     approvalAllow: 'Allow',
     approvalExecute: 'to execute?',

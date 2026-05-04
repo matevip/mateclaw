@@ -210,6 +210,10 @@ public class StepExecutionNode implements NodeAction {
                 oaiOpts.setInternalToolExecutionEnabled(false);
                 ChatOptions options = oaiOpts;
 
+                if (conversationWindowManager != null) {
+                    messages = conversationWindowManager.pruneOldToolResultsForModelInput(messages);
+                }
+
                 NodeStreamingChatHelper.StreamResult result = streamingHelper.streamCall(
                         chatModel, new Prompt(messages, options), conversationId,
                         "step_execution[" + stepIndex + "]");

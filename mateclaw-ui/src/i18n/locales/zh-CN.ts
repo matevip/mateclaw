@@ -257,6 +257,13 @@ export default {
     // 按轮次分组渲染
     iterationEmpty: '第 {index} 轮被中断（无输出）',
     contentRepetitionWarning: '检测到内容尾部重复（疑似模型输出 artifact）',
+    // INCOMPLETE 截断卡片（finishReason=incomplete）
+    incompleteTitle: '回答因检测到重复输出已被自动截断',
+    incompleteDescription: '系统在你看到的部分之后检测到模型开始重复同一段内容（或在思考阶段无产出），已自动截断以避免无效输出。点下方按钮重新生成完整回答，或在输入框补充提示让模型聚焦剩余内容。',
+    incompleteRetry: '重新生成',
+    // EVIDENCE_INSUFFICIENT 提示卡（finishReason=evidence_insufficient）
+    evidenceTitle: '任务已完成，但部分源码引用未被验证',
+    evidenceDescription: '回答全文已保留并展示。底部「[证据不足] …」列出的类/文件并未在本次工具结果里被实际读取，模型可能基于命名推断。如需确认这些引用，请追问让模型逐一读取后再下结论。',
     // 审批栏
     approvalAllow: '允许',
     approvalExecute: '执行？',

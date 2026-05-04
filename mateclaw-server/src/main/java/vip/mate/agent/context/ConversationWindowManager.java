@@ -72,6 +72,7 @@ public class ConversationWindowManager {
     private static final int CONTENT_MAX = 6000;
     private static final int CONTENT_HEAD = 4000;
     private static final int CONTENT_TAIL = 1500;
+    private static final int OLD_TOOL_RESULT_SUMMARY_THRESHOLD = 500;
 
     // ==================== 冷却机制 ====================
 
@@ -137,6 +138,7 @@ public class ConversationWindowManager {
         if (messages == null || messages.isEmpty()) {
             return messages;
         }
+        messages = pruneOldToolResultsForModelInput(messages);
 
         int effectiveMax = (maxInputTokens != null && maxInputTokens > 0)
                 ? maxInputTokens : properties.getDefaultMaxInputTokens();
@@ -357,6 +359,84 @@ public class ConversationWindowManager {
     }
 
     // ==================== 工具结果处理 ====================
+
+    public List<Message> pruneOldToolResultsForModelInput(List<Message> messages) {
+        int latestToolResponseIndex = -1;
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if (messages.get(i) instanceof ToolResponseMessage) {
+                latestToolResponseIndex = i;
+                break;
+            }
+        }
+        if (latestToolResponseIndex <= 0) {
+            return messages;
+        }
+
+        List<Message> pruned = new ArrayList<>(messages);
+        java.util.Set<String> seenLargeOutputs = new java.util.HashSet<>();
+        int changed = 0;
+        for (int i = pruned.size() - 1; i >= 0; i--) {
+            if (!(pruned.get(i) instanceof ToolResponseMessage trm)) {
+                continue;
+            }
+            boolean keepFull = i == latestToolResponseIndex;
+            List<ToolResponseMessage.ToolResponse> newResponses = new ArrayList<>();
+            boolean messageChanged = false;
+            for (ToolResponseMessage.ToolResponse r : trm.getResponses()) {
+                String data = r.responseData();
+                if (keepFull || data == null || data.length() <= OLD_TOOL_RESULT_SUMMARY_THRESHOLD) {
+                    newResponses.add(r);
+                    if (data != null && data.length() > OLD_TOOL_RESULT_SUMMARY_THRESHOLD) {
+                        seenLargeOutputs.add(data);
+                    }
+                    continue;
+                }
+                String replacement;
+                if (seenLargeOutputs.contains(data)) {
+                    replacement = "[" + r.name() + "] duplicate tool output omitted; same content appeared later.";
+                } else {
+                    replacement = summarizeToolResponse(r.name(), data);
+                    seenLargeOutputs.add(data);
+                }
+                newResponses.add(new ToolResponseMessage.ToolResponse(r.id(), r.name(), replacement));
+                messageChanged = true;
+            }
+            if (messageChanged) {
+                pruned.set(i, ToolResponseMessage.builder().responses(newResponses).build());
+                changed++;
+            }
+        }
+        if (changed > 0) {
+            log.info("[ConversationWindow] Pruned {} older tool response message(s) before model request", changed);
+        }
+        return changed > 0 ? pruned : messages;
+    }
+
+    private static String summarizeToolResponse(String toolName, String data) {
+        int chars = data.length();
+        int lines = data.isBlank() ? 0 : data.split("\\R", -1).length;
+        String firstLine = firstNonBlankLine(data);
+        if (firstLine.length() > 160) {
+            firstLine = firstLine.substring(0, 160) + "...";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append('[').append(toolName).append("] previous tool output summarized for model context: ")
+                .append(chars).append(" chars, ").append(lines).append(" lines");
+        if (!firstLine.isBlank()) {
+            sb.append(". First line: ").append(firstLine);
+        }
+        return sb.toString();
+    }
+
+    private static String firstNonBlankLine(String data) {
+        for (String line : data.split("\\R")) {
+            String trimmed = line.trim();
+            if (!trimmed.isBlank()) {
+                return trimmed.replace('|', '/');
+            }
+        }
+        return "";
+    }
 
     /**
      * Phase 1 - Soft trim：对工具结果做 head+tail 裁剪（保留首尾各 200 字符）。

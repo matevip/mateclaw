@@ -3,9 +3,11 @@ package vip.mate.agent.graph.node;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
 import lombok.extern.slf4j.Slf4j;
+import vip.mate.agent.GraphEventPublisher;
 import vip.mate.agent.graph.state.DirectToolOutput;
 import vip.mate.agent.graph.state.FinishReason;
 import vip.mate.agent.graph.state.MateClawStateAccessor;
+import vip.mate.agent.graph.state.SourceEvidenceLedger;
 
 import java.util.List;
 import java.util.Map;
@@ -54,7 +56,9 @@ public class FinalAnswerNode implements NodeAction {
                         outputs.size(), assembled.length(), preservedThinking.length());
                 var builder = MateClawStateAccessor.output()
                         .finalAnswer(assembled)
-                        .finishReason(FinishReason.RETURN_DIRECT);
+                        .finishReason(FinishReason.RETURN_DIRECT)
+                        .events(List.of(GraphEventPublisher.finishReason(
+                                FinishReason.RETURN_DIRECT.getValue())));
                 if (!preservedThinking.isEmpty()) {
                     builder.finalThinking(preservedThinking);
                 }
@@ -76,7 +80,9 @@ public class FinalAnswerNode implements NodeAction {
                     .finalAnswer(preservedContent)
                     .finishReason(FinishReason.NORMAL)
                     .contentStreamed(true)
-                    .thinkingStreamed(true);
+                    .thinkingStreamed(true)
+                    .events(List.of(GraphEventPublisher.finishReason(
+                            FinishReason.NORMAL.getValue())));
             if (!preservedThinking.isEmpty()) {
                 builder.finalThinking(preservedThinking);
             }
@@ -133,16 +139,40 @@ public class FinalAnswerNode implements NodeAction {
             }
         }
 
+        SourceEvidenceLedger.Validation validation = accessor.sourceEvidenceLedger().validateAnswer(finalAnswer);
+        if (finishReason == FinishReason.NORMAL && !validation.valid()) {
+            finishReason = FinishReason.EVIDENCE_INSUFFICIENT;
+            finalAnswer = appendEvidenceWarning(finalAnswer, validation.unsupportedReferences());
+            log.warn("[FinalAnswerNode] Evidence insufficient for final answer, unsupportedReferences={}",
+                    validation.unsupportedReferences());
+        }
+
         // 不重置 CONTENT_STREAMED/THINKING_STREAMED，保留上游节点的标志
         var builder = MateClawStateAccessor.output()
                 .finalAnswer(finalAnswer)
-                .finishReason(finishReason);
+                .finishReason(finishReason)
+                // Emit the resolved FinishReason as a GraphEvent so it rides
+                // the PENDING_EVENTS → StreamDelta pipeline that the channel-
+                // side accumulator subscribes to. A sibling SSE broadcast (e.g.
+                // streamTracker.broadcastObject) reaches the browser but never
+                // touches the accumulator, so toMetadataJson() would not see
+                // it and MemorySummarizationGate would lose the structured
+                // signal. APPEND-strategy on PENDING_EVENTS means this
+                // composes safely with any earlier events upstream nodes
+                // attached.
+                .events(List.of(GraphEventPublisher.finishReason(finishReason.getValue())));
 
         if (!finalThinking.isEmpty()) {
             builder.finalThinking(finalThinking);
         }
 
         return builder.build();
+    }
+
+    private static String appendEvidenceWarning(String answer, List<String> unsupportedReferences) {
+        return answer + "\n\n[证据不足] 以下源码引用未出现在已读取/搜索到的工具证据中："
+                + String.join(", ", unsupportedReferences)
+                + "。请继续读取相关文件后再下结论。";
     }
 
     /**

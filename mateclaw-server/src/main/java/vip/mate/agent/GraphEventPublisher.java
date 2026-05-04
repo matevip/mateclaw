@@ -37,6 +37,15 @@ public final class GraphEventPublisher {
     public static final String EVENT_TOOL_DIRECT_RESULT = "tool_direct_result";
 
     /**
+     * Terminal {@link vip.mate.agent.graph.state.FinishReason} for the turn,
+     * emitted at FinalAnswerNode so channel-side accumulators can persist it
+     * into message metadata. Downstream filters (e.g. memory promotion gate)
+     * branch on this structured value instead of doing brittle text matching
+     * on the assistant content.
+     */
+    public static final String EVENT_FINISH_REASON = "finish_reason";
+
+    /**
      * 事件记录
      */
     public record GraphEvent(String type, Map<String, Object> data, long timestamp) {}
@@ -187,6 +196,25 @@ public final class GraphEventPublisher {
         data.put("phase", phase);
         data.put("timestamp", ts);
         return new GraphEvent(EVENT_PERF_SUMMARY, Map.copyOf(data), ts);
+    }
+
+    /**
+     * Terminal {@code finish_reason} event. Emitted from FinalAnswerNode so it
+     * rides through the same PENDING_EVENTS → StreamDelta pipeline that
+     * channel-side accumulators consume — a sibling SSE-only broadcast would
+     * bypass {@code ChatController.StreamAccumulator.accept(...)} and fail to
+     * persist the reason into message metadata.
+     *
+     * @param reason {@link vip.mate.agent.graph.state.FinishReason#getValue()}
+     *               (e.g. {@code "incomplete"}, {@code "stopped"},
+     *               {@code "evidence_insufficient"}, {@code "normal"}).
+     */
+    public static GraphEvent finishReason(String reason) {
+        long ts = System.currentTimeMillis();
+        return new GraphEvent(EVENT_FINISH_REASON, Map.of(
+                "reason", reason != null ? reason : "",
+                "timestamp", ts
+        ), ts);
     }
 
     // ===== 提取方法 =====

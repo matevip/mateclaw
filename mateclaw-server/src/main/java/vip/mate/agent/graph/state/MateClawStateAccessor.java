@@ -207,6 +207,10 @@ public final class MateClawStateAccessor {
         return state.<List<DirectToolOutput>>value(DIRECT_TOOL_OUTPUTS).orElse(List.of());
     }
 
+    public SourceEvidenceLedger sourceEvidenceLedger() {
+        return state.<SourceEvidenceLedger>value(SOURCE_EVIDENCE_LEDGER).orElse(SourceEvidenceLedger.empty());
+    }
+
     // ===== 审批重放 =====
 
     public String forcedToolCall() {
@@ -403,6 +407,10 @@ public final class MateClawStateAccessor {
 
         public OutputBuilder directToolOutputs(List<DirectToolOutput> outputs) {
             return put(DIRECT_TOOL_OUTPUTS, outputs);
+        }
+
+        public OutputBuilder sourceEvidenceLedger(SourceEvidenceLedger ledger) {
+            return put(SOURCE_EVIDENCE_LEDGER, ledger);
         }
 
         // ---- 审批重放 ----

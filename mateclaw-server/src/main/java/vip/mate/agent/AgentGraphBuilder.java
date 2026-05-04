@@ -433,6 +433,13 @@ public class AgentGraphBuilder {
                     .addStrategy(MateClawStateKeys.COMPLETION_TOKENS, KeyStrategy.REPLACE)
                     .addStrategy(MateClawStateKeys.RUNTIME_MODEL_NAME, KeyStrategy.REPLACE)
                     .addStrategy(MateClawStateKeys.RUNTIME_PROVIDER_ID, KeyStrategy.REPLACE)
+                    // SourceEvidenceLedger: ActionNode 把每轮 ToolResponse 抽取出的
+                    // (sourcePaths, sourceSymbols, failedPaths) merge 进这个 ledger，
+                    // 后续 ReasoningNode / FinalAnswerNode 调 validateAnswer 校验
+                    // 模型引用是否有真实证据。漏注册时框架在多 node merge 时会偶发
+                    // 丢这个键，evidence_insufficient 检查会"静默地不生效" ——
+                    // StateKeyRegistrationCoverageTest 专门兜这条。
+                    .addStrategy(MateClawStateKeys.SOURCE_EVIDENCE_LEDGER, KeyStrategy.REPLACE)
                     .build();
 
             // Graph 拓扑：
@@ -588,6 +595,13 @@ public class AgentGraphBuilder {
                     .addStrategy(MateClawStateKeys.COMPLETION_TOKENS, KeyStrategy.REPLACE)
                     .addStrategy(MateClawStateKeys.RUNTIME_MODEL_NAME, KeyStrategy.REPLACE)
                     .addStrategy(MateClawStateKeys.RUNTIME_PROVIDER_ID, KeyStrategy.REPLACE)
+                    // SourceEvidenceLedger: ActionNode 把每轮 ToolResponse 抽取出的
+                    // (sourcePaths, sourceSymbols, failedPaths) merge 进这个 ledger，
+                    // 后续 ReasoningNode / FinalAnswerNode 调 validateAnswer 校验
+                    // 模型引用是否有真实证据。漏注册时框架在多 node merge 时会偶发
+                    // 丢这个键，evidence_insufficient 检查会"静默地不生效" ——
+                    // StateKeyRegistrationCoverageTest 专门兜这条。
+                    .addStrategy(MateClawStateKeys.SOURCE_EVIDENCE_LEDGER, KeyStrategy.REPLACE)
                     .build();
 
             StateGraph graph = new StateGraph("react-agent-v2", keyStrategyFactory)

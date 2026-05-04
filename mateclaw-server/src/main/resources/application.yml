@@ -200,6 +200,7 @@ mate:
       per-result-threshold-chars: 16000   # was 4000 — prevents WebSearch spill-to-disk
       per-turn-budget-chars: 32000        # was 16000 — headroom for multi-tool turns
       preview-head-chars: 800
+      excluded-tool-inline-chars: 2500
       storage-base-dir: ""
       # Retrieval-style tools that must NEVER be spilled. Spilling read_file's
       # output causes a recursion: the agent reads the spill path, that read also

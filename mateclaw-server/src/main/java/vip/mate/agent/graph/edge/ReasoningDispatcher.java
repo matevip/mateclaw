@@ -34,7 +34,7 @@ public class ReasoningDispatcher implements EdgeAction {
     public String apply(OverAllState state) throws Exception {
         MateClawStateAccessor accessor = new MateClawStateAccessor(state);
 
-        // 1. 迭代超限检查（最高优先级）
+        // 1. 迭代超限检查
         if (accessor.isLimitReached()) {
             log.warn("[ReasoningDispatcher] Iteration limit reached ({}/{}), routing to limitExceededNode",
                     accessor.iterationCount(), accessor.maxIterations());

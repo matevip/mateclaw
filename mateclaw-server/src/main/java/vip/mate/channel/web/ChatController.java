@@ -1475,6 +1475,19 @@ public class ChatController {
         private String runtimeProviderId = "";
         private boolean awaitingApproval = false;
         private String currentPhase = "";
+        /**
+         * Graph-emitted FinishReason for the turn (e.g. {@code "incomplete"},
+         * {@code "stopped"}, {@code "evidence_insufficient"}). Sourced from
+         * the {@code finish_reason} {@link vip.mate.agent.GraphEventPublisher}
+         * event that {@code FinalAnswerNode} attaches to its PENDING_EVENTS
+         * output — same pipeline the SSE accumulator already drains, so the
+         * value is delivered alongside the assistant content (not via a
+         * sibling SSE-only broadcast that would bypass this accumulator).
+         * Persisted into message metadata so downstream filters
+         * (memory promotion gate) see a machine-readable status instead of
+         * having to guess from text. Empty string until the event arrives.
+         */
+        private String finishReason = "";
         private Long planId = null;
         private List<String> planSteps = List.of();
         private Integer currentPlanStep = null;
@@ -1499,6 +1512,17 @@ public class ChatController {
                         streamTracker.updatePhase(conversationId, phase);
                         // phase 切换时关闭 running 的 content/thinking segment，保留边界
                         finalizeRunningSegments("content", "thinking");
+                    }
+                }
+                if ("finish_reason".equals(delta.eventType())) {
+                    Object reason = delta.eventData().get("reason");
+                    if (reason != null) {
+                        // Last-write-wins: graph normally fires this exactly once
+                        // at FinalAnswerNode completion. Replay paths that re-enter
+                        // the graph after approval will emit a fresh value, which
+                        // is the correct behavior — the latest reason is what gets
+                        // persisted with the assistant message.
+                        finishReason = String.valueOf(reason);
                     }
                 }
                 accumulateToolEvent(delta.eventType(), delta.eventData(), conversationId);
@@ -1773,6 +1797,14 @@ public class ChatController {
                     // (assembled by FinalAnswerNode). UI uses this to badge
                     // historical messages as "data returned directly by tool".
                     metadata.put("directToolNames", directToolNames);
+                }
+                if (!finishReason.isEmpty()) {
+                    // Surface graph FinishReason so MemorySummarizationGate and
+                    // any other downstream consumer can branch on a structured
+                    // status (e.g. skip INCOMPLETE / STOPPED / ERROR_FALLBACK
+                    // turns from long-term memory promotion) instead of doing
+                    // brittle text matching on the assistant content.
+                    metadata.put("finishReason", finishReason);
                 }
                 return objectMapper.writeValueAsString(metadata);
             } catch (Exception e) {

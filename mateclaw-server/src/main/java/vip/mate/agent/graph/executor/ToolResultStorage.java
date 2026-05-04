@@ -164,10 +164,12 @@ public class ToolResultStorage {
                 }
             }
             if (targetIdx < 0) {
-                // Nothing left to spill; remaining oversize is from excluded tools or
-                // already-spilled responses. Accept the over-budget state — better than
-                // breaking the agent's retrieval path.
-                log.warn("[ToolResultStorage] aggregate still {} chars after spilling everything eligible (excluded tools may push past budget)",
+                int compactedIdx = compactLargestExcludedResult(mutable);
+                if (compactedIdx >= 0) {
+                    aggregate = aggregateSize(mutable);
+                    continue;
+                }
+                log.warn("[ToolResultStorage] aggregate still {} chars after spilling/compacting everything eligible",
                         aggregate);
                 break;
             }
@@ -189,6 +191,46 @@ public class ToolResultStorage {
             aggregate = aggregateSize(mutable);
         }
         return mutable;
+    }
+
+    private int compactLargestExcludedResult(List<ToolResponseMessage.ToolResponse> mutable) {
+        int targetIdx = -1;
+        int targetLen = props.getExcludedToolInlineChars();
+        for (int i = 0; i < mutable.size(); i++) {
+            ToolResponseMessage.ToolResponse r = mutable.get(i);
+            String body = r.responseData();
+            if (body == null || body.startsWith(SPILL_MARKER_PREFIX)) continue;
+            if (!isExcluded(r.name())) continue;
+            if (body.length() > targetLen) {
+                targetLen = body.length();
+                targetIdx = i;
+            }
+        }
+        if (targetIdx < 0) {
+            return -1;
+        }
+        ToolResponseMessage.ToolResponse target = mutable.get(targetIdx);
+        String compacted = compactInline(target.responseData(), target.name(), props.getExcludedToolInlineChars());
+        mutable.set(targetIdx, new ToolResponseMessage.ToolResponse(target.id(), target.name(), compacted));
+        log.info("[ToolResultStorage] compacted excluded tool result: tool={} chars={} -> {}",
+                target.name(), targetLen, compacted.length());
+        return targetIdx;
+    }
+
+    static String compactInline(String body, String toolName, int maxChars) {
+        if (body == null || body.length() <= maxChars) {
+            return body;
+        }
+        int markerBudget = 120;
+        int available = Math.max(200, maxChars - markerBudget);
+        int headLen = Math.max(100, (int) (available * 0.45));
+        int tailLen = Math.max(100, available - headLen);
+        if (headLen + tailLen >= body.length()) {
+            return body;
+        }
+        String marker = "\n\n... [tool result compacted for model context: tool="
+                + toolName + ", original_chars=" + body.length() + "] ...\n\n";
+        return body.substring(0, headLen) + marker + body.substring(body.length() - tailLen);
     }
 
     private static int aggregateSize(List<ToolResponseMessage.ToolResponse> responses) {

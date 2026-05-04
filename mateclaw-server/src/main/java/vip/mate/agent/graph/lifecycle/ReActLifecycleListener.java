@@ -24,6 +24,14 @@ import static vip.mate.agent.graph.state.MateClawStateKeys.*;
  * [ReAct] node=reasoning event=complete iteration=2 durationMs=1234 toolCallCount=3
  * [ReAct] node=limit_exceeded event=complete iteration=10 finishReason=max_iterations_reached
  * </pre>
+ * <p>
+ * Note: this listener is intentionally read-only / log-only. Surfacing
+ * graph state to channel-side accumulators (e.g. publishing the resolved
+ * {@code FinishReason} to message metadata) lives in {@code FinalAnswerNode}
+ * via a {@code finish_reason} GraphEvent — that path goes through the
+ * PENDING_EVENTS → StreamDelta pipeline that {@code ChatController.StreamAccumulator}
+ * actually consumes. A sibling sink that called {@code streamTracker.broadcastObject}
+ * here would only reach the browser SSE bus and bypass the accumulator entirely.
  *
  * @author MateClaw Team
  */

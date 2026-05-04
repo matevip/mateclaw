@@ -184,6 +184,43 @@
 
         </template><!-- /传统合并渲染模式 -->
 
+        <!--
+          INCOMPLETE banner: graph emitted finishReason=incomplete after
+          the thinking-only soft cap stopped the stream.
+          Lives outside the segmented/traditional fork so both rendering
+          modes show it. Click "regenerate" reuses the existing emit path
+          that the error-card already relies on.
+        -->
+        <div v-if="isIncomplete" class="incomplete-card">
+          <div class="incomplete-card__header">
+            <el-icon class="incomplete-card__icon"><WarningFilled /></el-icon>
+            <span class="incomplete-card__title">{{ $t('chat.incompleteTitle') }}</span>
+          </div>
+          <p class="incomplete-card__description">{{ $t('chat.incompleteDescription') }}</p>
+          <div class="incomplete-card__footer">
+            <button class="incomplete-card__retry" type="button" @click="$emit('regenerate')">
+              <el-icon><RefreshRight /></el-icon>
+              {{ $t('chat.incompleteRetry') }}
+            </button>
+          </div>
+        </div>
+
+        <!--
+          EVIDENCE_INSUFFICIENT banner (info color, not warning). Run completed
+          fully — the answer text is preserved above; the model just cited
+          source files / classes it didn't actually open. Without an explicit
+          card the trailing "[证据不足] …" line reads like a mid-answer cut.
+          No regenerate button: the user typically wants to either accept
+          the gap or follow up asking the model to read the listed files.
+        -->
+        <div v-if="isEvidenceInsufficient" class="evidence-card">
+          <div class="evidence-card__header">
+            <el-icon class="evidence-card__icon"><InfoFilled /></el-icon>
+            <span class="evidence-card__title">{{ $t('chat.evidenceTitle') }}</span>
+          </div>
+          <p class="evidence-card__description">{{ $t('chat.evidenceDescription') }}</p>
+        </div>
+
         <!-- 附件列表 -->
         <div v-if="attachments?.length" class="message-attachments">
           <div
@@ -315,6 +352,7 @@ import {
   CloseBold,
   CopyDocument,
   Document,
+  InfoFilled,
   Loading,
   Microphone,
   Opportunity,
@@ -814,6 +852,32 @@ const groupedIterations = computed(() => {
 
 const toolCallsMeta = computed<ToolCallMeta[]>(() => {
   return parsedMetadata.value?.toolCalls || []
+})
+
+/**
+ * True when the assistant turn was auto-truncated by the backend's
+ * thinking-only soft-cap and ended in INCOMPLETE.
+ * Surfaced as a banner with a "continue / regenerate" affordance so the
+ * user knows the answer ended early on purpose, not silently skipped.
+ *
+ * Reads `metadata.finishReason` set by the graph's FinalAnswerNode via
+ * the finish_reason GraphEvent → StreamDelta → accumulator pipeline.
+ */
+const isIncomplete = computed<boolean>(() => {
+  if (props.message.role !== 'assistant') return false
+  return parsedMetadata.value?.finishReason === 'incomplete'
+})
+
+/**
+ * True when the graph completed normally but {@code SourceEvidenceLedger}
+ * found unsupported references. The visible answer is full and persisted;
+ * the trailing "[证据不足] …" line just lists which file/class citations
+ * were never confirmed by an actual tool result. Without this banner the
+ * user often misreads that single line as a mid-answer cut.
+ */
+const isEvidenceInsufficient = computed<boolean>(() => {
+  if (props.message.role !== 'assistant') return false
+  return parsedMetadata.value?.finishReason === 'evidence_insufficient'
 })
 
 const browserActionsMeta = computed<BrowserAction[]>(() => {
@@ -1504,6 +1568,105 @@ watch(isGenerating, (generating) => {
 .error-card__retry:hover {
   background: color-mix(in srgb, var(--mc-danger) 15%, var(--mc-bg-elevated));
   border-color: color-mix(in srgb, var(--mc-danger) 50%, transparent);
+}
+
+/* ==================== INCOMPLETE 截断卡片（重复检测 / thinking-only 软上限） ==================== */
+.incomplete-card {
+  margin-top: 8px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--mc-warning, #d97706) 8%, var(--mc-bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--mc-warning, #d97706) 30%, transparent);
+  font-size: 13px;
+  max-width: 480px;
+  line-height: 1.5;
+}
+
+.incomplete-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.incomplete-card__icon {
+  flex-shrink: 0;
+  color: var(--mc-warning, #d97706);
+}
+
+.incomplete-card__title {
+  font-weight: 600;
+  color: var(--mc-warning, #d97706);
+  font-size: 14px;
+}
+
+.incomplete-card__description {
+  margin: 4px 0 8px;
+  color: var(--mc-text-primary);
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+.incomplete-card__footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.incomplete-card__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--mc-warning, #d97706) 35%, transparent);
+  background: color-mix(in srgb, var(--mc-warning, #d97706) 10%, var(--mc-bg-elevated));
+  color: var(--mc-warning, #d97706);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.incomplete-card__retry:hover {
+  background: color-mix(in srgb, var(--mc-warning, #d97706) 18%, var(--mc-bg-elevated));
+  border-color: color-mix(in srgb, var(--mc-warning, #d97706) 55%, transparent);
+}
+
+/* ==================== EVIDENCE_INSUFFICIENT 提示卡（info 调，非警告） ==================== */
+.evidence-card {
+  margin-top: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--mc-info, #0891b2) 6%, var(--mc-bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--mc-info, #0891b2) 25%, transparent);
+  font-size: 12.5px;
+  max-width: 480px;
+  line-height: 1.5;
+}
+
+.evidence-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.evidence-card__icon {
+  flex-shrink: 0;
+  color: var(--mc-info, #0891b2);
+}
+
+.evidence-card__title {
+  font-weight: 600;
+  color: var(--mc-info, #0891b2);
+  font-size: 13.5px;
+}
+
+.evidence-card__description {
+  margin: 4px 0 0;
+  color: var(--mc-text-primary);
+  font-size: 12.5px;
+  opacity: 0.85;
 }
 
 /* ==================== 附件 ==================== */

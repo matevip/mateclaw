@@ -7,7 +7,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
-import vip.mate.agent.graph.RepetitionDetector;
 import vip.mate.workspace.conversation.model.MessageContentPart;
 
 import java.io.IOException;
@@ -206,16 +205,6 @@ public class ChatStreamTracker {
          * frequent keep-alives because the UI has no other signal of activity.
          */
         volatile boolean firstTokenReceived = false;
-
-        /**
-         * Cross-call repetition detectors scoped to the conversation, not the
-         * single LLM call. Sharing across {@code streamLLMChat} invocations
-         * lets the sentence-level path catch "the model produces N near-
-         * identical sentences across two consecutive iterations" — a common
-         * failure that the per-call detectors used to miss.
-         */
-        volatile RepetitionDetector contentRepDetector = new RepetitionDetector();
-        volatile RepetitionDetector thinkingRepDetector = new RepetitionDetector();
 
         /** 已广播的 pending approval ID 集合（用于幂等去重） */
         final java.util.Set<String> broadcastedApprovalIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -784,28 +773,6 @@ public class ChatStreamTracker {
             }
         }
         return null;
-    }
-
-    /**
-     * Conversation-scoped repetition detector for content deltas. Lazily
-     * instantiated (a tracker created without a registered conversation
-     * receives a fresh detector so callers never get null).
-     */
-    public RepetitionDetector getContentRepDetector(String conversationId) {
-        RunState state = runs.get(conversationId);
-        if (state == null) {
-            return new RepetitionDetector();
-        }
-        return state.contentRepDetector;
-    }
-
-    /** Conversation-scoped repetition detector for thinking deltas. */
-    public RepetitionDetector getThinkingRepDetector(String conversationId) {
-        RunState state = runs.get(conversationId);
-        if (state == null) {
-            return new RepetitionDetector();
-        }
-        return state.thinkingRepDetector;
     }
 
     /**

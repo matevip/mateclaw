@@ -11,6 +11,7 @@ import vip.mate.agent.AgentToolSet;
 import vip.mate.agent.GraphEventPublisher;
 import vip.mate.agent.context.ChatOrigin;
 import vip.mate.agent.graph.state.DirectToolOutput;
+import vip.mate.agent.graph.state.SourceEvidenceLedger;
 import vip.mate.approval.ApprovalWorkflowService;
 import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.tool.guard.ToolExecutionGuardHelper;
@@ -334,6 +335,19 @@ public class ToolExecutionExecutor {
 
         events.add(GraphEventPublisher.phase("action", Map.of("toolCount", effectiveCalls.size())));
 
+        // Shared collector for raw-stage SourceEvidenceLedger entries. Every
+        // PreparedToolCall built below points at this same AtomicReference;
+        // executeSingleTool does an atomic accumulateAndGet(merge) right
+        // after the raw tool result is in hand and BEFORE spill/truncate
+        // shrinks it. ActionNode then reads the final ledger off
+        // ToolExecutionResult.rawEvidenceLedger() instead of rebuilding it
+        // from the spill-compacted responses (which routinely lose the
+        // exact lines that mention the cited filenames — see #4b38f04f
+        // production trace, where "ObservationNode.java" only appeared in
+        // a 30 KB grep result that got head/tail-cut to 4 KB).
+        java.util.concurrent.atomic.AtomicReference<SourceEvidenceLedger> rawEvidenceRef =
+                new java.util.concurrent.atomic.AtomicReference<>(SourceEvidenceLedger.empty());
+
         // ═══ Phase 1: 顺序 Guard + 分段 ═══
         List<PreparedToolCall> preparedCalls = new ArrayList<>();
         ApprovalBarrier barrier = null;
@@ -440,7 +454,7 @@ public class ToolExecutionExecutor {
             // 4. 分类: concurrencySafe
             boolean safe = isConcurrencySafe(toolName);
             preparedCalls.add(new PreparedToolCall(toolCall, callback, arguments, safe, allResponses.size(),
-                    conversationId, requesterId, workspaceBasePath, safeOrigin));
+                    conversationId, requesterId, workspaceBasePath, safeOrigin, rawEvidenceRef));
             // 占位，Phase 2 填充
             allResponses.add(null);
         }
@@ -465,7 +479,8 @@ public class ToolExecutionExecutor {
         return new ToolExecutionResult(allResponses, events, hasApprovalPending,
                 barrier != null ? barrier.pendingId : null,
                 barrier != null ? barrier.toolName : null,
-                List.copyOf(directOutputs));
+                List.copyOf(directOutputs),
+                rawEvidenceRef.get());
     }
 
     /**
@@ -543,15 +558,16 @@ public class ToolExecutionExecutor {
                         toolCall.id(), toolName, DIRECT_TOOL_PLACEHOLDER);
             }
 
-            // Phase 3 Layer 2: spill before truncation when storage is wired.
-            // Use the caller-supplied conversationId so spill files inherit the
-            // same per-conversation directory layout as the non-replay path.
+            // RFC-008 Layer 1 first, then Layer 2 — match the non-replay path
+            // in executeSingleTool so behavior stays symmetric across approval
+            // replays. The caller-supplied conversationId scopes spill files
+            // into the same per-conversation directory layout.
+            result = truncateToolResult(result, MAX_TOOL_RESULT_CHARS);
             if (resultStorage != null && result != null) {
                 String spillConv = conversationId != null && !conversationId.isEmpty() ? conversationId : "unknown";
                 result = resultStorage.persistIfOversized(
                         result, toolName, toolCall.id(), spillConv, workspaceBasePath);
             }
-            result = truncateToolResult(result, MAX_TOOL_RESULT_CHARS);
             log.info("[ToolExecutor] Pre-approved tool {} returned {} chars{}", toolName, rawLen,
                     result != null && result.length() < rawLen ? " (now " + result.length() + " after spill/truncate)" : "");
             events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, result, true));
@@ -751,15 +767,36 @@ public class ToolExecutionExecutor {
                         pc.toolCall.id(), toolName, DIRECT_TOOL_PLACEHOLDER);
             }
 
-            // RFC-008 Phase 3 Layer 2: spill oversized results to disk and replace
+            // Capture SourceEvidenceLedger from the RAW result, before truncate/
+            // spill compacts it. Building the ledger from the post-compact
+            // response (the old ActionNode behaviour) loses any file path that
+            // happens to fall outside the head/tail kept by truncateToolResult.
+            // Wrapping the raw string in a synthetic ToolResponseMessage.ToolResponse
+            // lets us reuse SourceEvidenceLedger.fromToolResponses verbatim — no
+            // new parsing path to keep in sync.
+            if (result != null && pc.rawEvidenceCollector != null) {
+                SourceEvidenceLedger rawDelta = SourceEvidenceLedger.fromToolResponses(
+                        java.util.List.of(new ToolResponseMessage.ToolResponse(
+                                pc.toolCall.id(), toolName, result)));
+                if (rawDelta.hasEvidence()) {
+                    pc.rawEvidenceCollector.accumulateAndGet(rawDelta, SourceEvidenceLedger::merge);
+                }
+            }
+
+            // RFC-008 Layer 1: hard truncation cap to prevent oversized results
+            // from inflating the prompt. Runs FIRST (before spill) so the spill
+            // store doesn't need to handle multi-MB writes for run-of-the-mill
+            // greps that happen to spit out a long stdout.
+            result = truncateToolResult(result, MAX_TOOL_RESULT_CHARS);
+            // RFC-008 Layer 2: spill oversized results to disk and replace
             // with preview + path. Falls back to truncation when spilling is
             // disabled or fails. Spill preserves the full output (read_file can
-            // retrieve it); truncation discards the tail.
+            // retrieve it); the Layer 1 truncation above already capped the
+            // inline portion, so this layer mostly catches near-cap residues.
             if (resultStorage != null && result != null) {
                 result = resultStorage.persistIfOversized(
                         result, toolName, pc.toolCall.id(), pc.conversationId, pc.workspaceBasePath);
             }
-            result = truncateToolResult(result, MAX_TOOL_RESULT_CHARS);
             log.info("[ToolExecutor] Tool {} returned {} chars{}", toolName, rawLen,
                     result != null && result.length() < rawLen ? " (now " + result.length() + " after spill/truncate)" : "");
             events.add(GraphEventPublisher.toolComplete(pc.toolCall.id(), toolName, result, true));
@@ -1023,7 +1060,26 @@ public class ToolExecutionExecutor {
             String conversationId,
             String requesterId,
             String workspaceBasePath,
-            ChatOrigin origin
+            ChatOrigin origin,
+            /**
+             * Shared reference (one per execute() invocation) where each
+             * concurrent {@code executeSingleTool} merges a {@link SourceEvidenceLedger}
+             * built from the **raw** tool result, before the spill/truncate
+             * pipeline (Layer 2/Layer 1) shrinks the response that finally
+             * reaches the LLM.
+             *
+             * <p>Why the raw stage: a 30 KB grep output may carry the only
+             * mention of {@code ObservationNode.java}; once {@code truncateToolResult}
+             * head/tail-compacts to 4 KB that line is typically dropped. If the
+             * ledger is built from the compacted response (the old behaviour
+             * in {@code ActionNode}), the answer's later citation of
+             * {@code ObservationNode} gets flagged as evidence-insufficient
+             * even though the model did see the file in its tool result.
+             *
+             * <p>Atomic merge via {@code AtomicReference.accumulateAndGet}
+             * because parallel batches run on {@code TOOL_EXECUTOR}.
+             */
+            java.util.concurrent.atomic.AtomicReference<SourceEvidenceLedger> rawEvidenceCollector
     ) {}
 
     private record ApprovalBarrier(String pendingId, String toolName) {}
@@ -1067,7 +1123,16 @@ public class ToolExecutionExecutor {
              * in this batch. Non-empty list ⇒ graph must short-circuit to
              * FinalAnswerNode without re-entering the LLM.
              */
-            List<DirectToolOutput> directOutputs
+            List<DirectToolOutput> directOutputs,
+            /**
+             * Source evidence accumulated from the RAW (pre-spill, pre-truncate)
+             * tool results in this batch. ActionNode merges this into the
+             * graph-level ledger instead of re-parsing the spill-compacted
+             * {@link #responses} — that compaction routinely drops the line
+             * mentioning a path the model later cites, which would surface
+             * as a false-positive evidence_insufficient.
+             */
+            SourceEvidenceLedger rawEvidenceLedger
     ) {
         /** Backwards-compatible constructor for callers that don't track direct outputs. */
         public ToolExecutionResult(List<ToolResponseMessage.ToolResponse> responses,
@@ -1075,7 +1140,19 @@ public class ToolExecutionExecutor {
                                     boolean awaitingApproval,
                                     String pendingId,
                                     String barrierToolName) {
-            this(responses, events, awaitingApproval, pendingId, barrierToolName, List.of());
+            this(responses, events, awaitingApproval, pendingId, barrierToolName,
+                    List.of(), SourceEvidenceLedger.empty());
+        }
+
+        /** Bridge for callers that pass directOutputs but predate the raw-ledger field. */
+        public ToolExecutionResult(List<ToolResponseMessage.ToolResponse> responses,
+                                    List<GraphEventPublisher.GraphEvent> events,
+                                    boolean awaitingApproval,
+                                    String pendingId,
+                                    String barrierToolName,
+                                    List<DirectToolOutput> directOutputs) {
+            this(responses, events, awaitingApproval, pendingId, barrierToolName,
+                    directOutputs, SourceEvidenceLedger.empty());
         }
 
         public boolean hasDirectOutputs() {
