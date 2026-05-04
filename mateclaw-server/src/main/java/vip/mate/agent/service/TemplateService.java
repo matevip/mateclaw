@@ -85,6 +85,9 @@ public class TemplateService {
         agent.setIcon(template.getIcon());
         agent.setTags(template.getTags());
         agent.setMaxIterations(template.getMaxIterations());
+        if (template.getSystemPrompt() != null && !template.getSystemPrompt().isBlank()) {
+            agent.setSystemPrompt(template.getSystemPrompt());
+        }
         agent.setWorkspaceId(workspaceId);
         agent.setCreatorUserId(creatorUserId);
         AgentEntity created = agentService.createAgent(agent);
