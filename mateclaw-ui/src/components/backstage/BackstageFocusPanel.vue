@@ -32,8 +32,13 @@
             <div class="focus-subtitle" v-if="run.username">@{{ run.username }}</div>
           </div>
 
-          <!-- The one sentence: what it's doing right now -->
+          <!-- The one sentence: what it's doing right now. The tool name,
+               when present, sits below as its own chip — sentence stays
+               short and readable; the tool gets monospace prominence. -->
           <p class="focus-saying">{{ humanSentence(run) }}</p>
+          <div v-if="run.runningToolName" class="focus-tool-row">
+            <span class="focus-tool-chip" :title="run.runningToolName">{{ run.runningToolName }}</span>
+          </div>
 
           <!-- Stuck callout -->
           <div v-if="run.stuckReason" class="focus-callout">
@@ -61,26 +66,30 @@
             </div>
           </div>
 
-          <!-- Secondary metadata -->
-          <dl class="focus-grid">
-            <div class="focus-row">
-              <dt>{{ t('backstage.detail.lastHeard') }}</dt>
-              <dd>{{ formatAge(run.msSinceLastEvent) }} {{ t('backstage.detail.ago') }}</dd>
+          <!-- Secondary metadata as bento KPI tiles. Each tile is one
+               glance: big value, small caption. The third tile carries
+               the conversation id (full id on hover); the previous list
+               form buried these behind label text. -->
+          <div class="focus-tiles">
+            <div class="focus-tile">
+              <div class="focus-tile-value">{{ formatAge(run.msSinceLastEvent) }}</div>
+              <div class="focus-tile-label">{{ t('backstage.detail.lastHeard') }}</div>
             </div>
-            <div class="focus-row">
-              <dt>{{ t('backstage.detail.audience') }}</dt>
-              <dd>
-                <span v-if="run.subscriberCount === 0" class="focus-warn">
-                  {{ t('backstage.detail.noOneListening') }}
-                </span>
-                <span v-else>{{ t('backstage.detail.peopleListening', { n: run.subscriberCount }) }}</span>
-              </dd>
+            <div class="focus-tile">
+              <div
+                class="focus-tile-value"
+                :class="{ 'focus-tile-warn': run.subscriberCount === 0 }"
+              >{{ run.subscriberCount }}</div>
+              <div class="focus-tile-label">{{ t('backstage.detail.audience') }}</div>
             </div>
-            <div class="focus-row">
-              <dt>{{ t('backstage.detail.session') }}</dt>
-              <dd class="focus-id" :title="run.conversationId">#{{ shortId(run.conversationId) }}</dd>
+            <div class="focus-tile">
+              <div
+                class="focus-tile-value focus-tile-id"
+                :title="run.conversationId"
+              >#{{ shortId(run.conversationId) }}</div>
+              <div class="focus-tile-label">{{ t('backstage.detail.session') }}</div>
             </div>
-          </dl>
+          </div>
 
           <!-- Helpers (subagents) -->
           <div v-if="subagents.length > 0" class="focus-section">
@@ -321,7 +330,7 @@ html.dark .focus-backdrop {
   color: var(--mc-text-tertiary);
 }
 
-/* ===== The one sentence ===== */
+/* ===== The one sentence + tool chip ===== */
 .focus-saying {
   font-size: 22px;
   line-height: 1.45;
@@ -329,7 +338,37 @@ html.dark .focus-backdrop {
   letter-spacing: -0.015em;
   color: var(--mc-text-primary);
   text-align: center;
-  margin: 0 0 24px;
+  margin: 0 0 12px;
+}
+
+.focus-tool-row {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+
+.focus-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 8px;
+  background: var(--mc-accent-soft);
+  color: var(--mc-accent);
+  font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  border: 1px solid transparent;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html.dark .focus-tool-chip {
+  background: rgba(92, 166, 157, 0.14);
+  color: hsl(170, 35%, 72%);
+  border-color: rgba(92, 166, 157, 0.2);
 }
 
 .focus-callout {
@@ -467,49 +506,75 @@ html.dark .time-ring-warn::before {
   font-weight: 500;
 }
 
-/* ===== Secondary grid ===== */
-.focus-grid {
-  margin: 0 0 8px;
-  border-top: 1px solid var(--mc-border-light);
+/* ===== Secondary metadata as bento KPI tiles =====
+ * Three equal tiles: each is one glance — big value (mono tabular-nums),
+ * small caption beneath. Replaces the dt/dd list form, which buried the
+ * value behind a label and made the section read like a settings panel
+ * instead of a dashboard.
+ */
+.focus-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
-.focus-row {
+.focus-tile {
+  padding: 14px 10px 12px;
+  background: var(--mc-bg-muted);
+  border: 1px solid var(--mc-border-light);
+  border-radius: 12px;
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  padding: 13px 0;
-  border-bottom: 1px solid var(--mc-border-light);
-  margin: 0;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  min-width: 0;
 }
 
-.focus-row dt {
-  font-size: 12px;
-  color: var(--mc-text-tertiary);
-  margin: 0;
-  letter-spacing: 0.01em;
+html.dark .focus-tile {
+  background: rgba(255, 255, 255, 0.04);
 }
 
-.focus-row dd {
-  font-size: 13.5px;
+.focus-tile-value {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   color: var(--mc-text-primary);
-  margin: 0;
-  text-align: right;
   font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
-.focus-warn {
-  color: hsl(265, 50%, 50%);
-}
-
-html.dark .focus-warn {
-  color: hsl(265, 55%, 70%);
-}
-
-.focus-id {
+.focus-tile-id {
   font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: 14px;
   letter-spacing: 0.02em;
+  color: var(--mc-text-secondary);
+  font-weight: 500;
+  cursor: default;
+}
+
+.focus-tile-warn {
+  color: hsl(265, 50%, 52%);
+}
+
+html.dark .focus-tile-warn {
+  color: hsl(265, 55%, 72%);
+}
+
+.focus-tile-label {
+  font-size: 10.5px;
   color: var(--mc-text-tertiary);
+  letter-spacing: 0.06em;
+  margin-top: 8px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 /* ===== Subagents ===== */

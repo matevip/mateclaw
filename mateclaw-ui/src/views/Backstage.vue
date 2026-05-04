@@ -99,8 +99,14 @@
                 </div>
               </div>
 
-              <!-- Single human sentence -->
-              <div class="agent-saying">{{ humanSentence(run) }}</div>
+              <!-- Status sentence + (when present) the tool chip standing
+                   on its own so a long tool name doesn't get ellipsis-eaten. -->
+              <div class="agent-saying-row">
+                <span class="agent-saying">{{ humanSentence(run) }}</span>
+                <span v-if="run.runningToolName" class="tool-chip" :title="run.runningToolName">
+                  {{ run.runningToolName }}
+                </span>
+              </div>
 
               <!-- Meta: just the time + orphan hint (id moved to detail) -->
               <div class="agent-meta-row">
@@ -257,14 +263,37 @@ const showFilterRow = computed(() => {
   return s.stuck > 0 || s.orphan > 0
 })
 
+/**
+ * Triage order: stuck first (you have to do something), then orphan (a run
+ * that nobody is watching), then working (healthy & boring). Within each
+ * tier, the older run wins — a 5-minute stuck run is more urgent than one
+ * stuck for 8 seconds.
+ *
+ * Without this, runs are listed in whatever order the snapshot returned
+ * them, and the one card you actually need to look at can be 4 rows down.
+ */
+function tierOf(r: BackstageRunCard): number {
+  if (r.stuckReason) return 0
+  if (r.orphan) return 1
+  return 2
+}
+
 const visibleRuns = computed<BackstageRunCard[]>(() => {
   const runs = snapshot.value?.runs ?? []
-  switch (activeFilter.value) {
-    case 'working': return runs.filter(isWorking)
-    case 'attention': return runs.filter(isAttention)
-    case 'quiet': return runs.filter(isQuiet)
-    default: return runs
-  }
+  const filtered = (() => {
+    switch (activeFilter.value) {
+      case 'working': return runs.filter(isWorking)
+      case 'attention': return runs.filter(isAttention)
+      case 'quiet': return runs.filter(isQuiet)
+      default: return runs
+    }
+  })()
+  return [...filtered].sort((a, b) => {
+    const ta = tierOf(a)
+    const tb = tierOf(b)
+    if (ta !== tb) return ta - tb
+    return b.ageMs - a.ageMs
+  })
 })
 
 // If the filter the user picked no longer matches any rows (e.g., the stuck
@@ -867,13 +896,20 @@ html.dark .agent-avatar {
   50%      { opacity: 0.7;  transform: scale(0.85); }
 }
 
-/* ===== Saying ===== */
+/* ===== Saying + tool chip ===== */
+.agent-saying-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  min-height: 22px;
+}
+
 .agent-saying {
   font-size: 14.5px;
   line-height: 1.55;
   color: var(--mc-text-secondary);
-  min-height: 22px;
-  margin-bottom: 16px;
   letter-spacing: -0.005em;
 }
 
@@ -884,6 +920,48 @@ html.dark .agent-avatar {
 
 html.dark .agent-card.is-stuck .agent-saying {
   color: hsl(28, 80%, 76%);
+}
+
+/*
+ * Tool chip — monospace, accent-soft tinted. The tool name was previously
+ * baked into the sentence and got truncated on narrow cards; promoting it
+ * to its own chip makes it ellipsis-resistant and visually weighty. It also
+ * stops competing with the sentence for the same line of attention.
+ */
+.tool-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 6px;
+  background: var(--mc-accent-soft);
+  color: var(--mc-accent);
+  font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+html.dark .tool-chip {
+  background: rgba(92, 166, 157, 0.14);
+  color: hsl(170, 35%, 70%);
+  border-color: rgba(92, 166, 157, 0.18);
+}
+
+.agent-card.is-stuck .tool-chip {
+  background: hsla(20, 100%, 90%, 0.65);
+  color: hsl(20, 75%, 38%);
+  border-color: hsla(20, 80%, 55%, 0.25);
+}
+
+html.dark .agent-card.is-stuck .tool-chip {
+  background: hsla(20, 60%, 30%, 0.4);
+  color: hsl(28, 80%, 78%);
+  border-color: hsla(20, 70%, 55%, 0.3);
 }
 
 /* ===== Meta + bar ===== */

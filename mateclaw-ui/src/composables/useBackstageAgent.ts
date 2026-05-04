@@ -61,12 +61,20 @@ export function useBackstageAgent() {
     return t('backstage.dotTitle.healthy')
   }
 
+  /**
+   * One-sentence status. Deliberately does NOT inline the tool name —
+   * the tool deserves its own monospace chip in the UI, and embedding
+   * it inside a sentence both gets ellipsis-truncated on narrow cards
+   * AND duplicates information when the chip is also rendered.
+   * stuckCallout (used in the focus panel) is the one place that still
+   * mentions the tool name, because there it lives in a long-form alert.
+   */
   function humanSentence(run: BackstageRunCard): string {
-    if (run.stuckReason === 'tool_silent') return t('backstage.saying.toolSilent', { tool: run.runningToolName || t('backstage.aTool') })
+    if (run.stuckReason === 'tool_silent') return t('backstage.saying.toolSilentBare')
     if (run.stuckReason === 'idle_silent') return t('backstage.saying.idleSilent')
     if (run.stuckReason === 'hard_cap') return t('backstage.saying.hardCap')
     if (run.currentPhase === 'awaiting_approval') return t('backstage.saying.awaitingApproval')
-    if (run.runningToolName) return t('backstage.saying.usingTool', { tool: run.runningToolName })
+    if (run.runningToolName) return t('backstage.saying.usingToolBare')
     if (run.currentPhase === 'executing_tool') return t('backstage.saying.usingSomething')
     if (run.currentPhase === 'summarizing') return t('backstage.saying.wrappingUp')
     if (run.currentPhase === 'planning') return t('backstage.saying.planning')
