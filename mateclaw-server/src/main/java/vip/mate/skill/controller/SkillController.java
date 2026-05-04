@@ -16,6 +16,8 @@ import vip.mate.skill.lessons.SkillLessonsService;
 import vip.mate.skill.manifest.SkillManifest;
 import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.runtime.SkillDependencyChecker;
+import vip.mate.skill.runtime.SkillCatalogSort;
+import vip.mate.skill.runtime.SkillCatalogSorter;
 import vip.mate.skill.service.SkillService;
 import vip.mate.skill.synthesis.SkillSynthesisService;
 import vip.mate.skill.runtime.SkillRuntimeService;
@@ -64,66 +66,22 @@ public class SkillController {
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String skillType,
             @RequestParam(required = false) Boolean enabled,
-            @RequestParam(required = false) String scanStatus) {
-        IPage<SkillEntity> dbPage = skillService.pageSkills(page, size, keyword, skillType, enabled, scanStatus);
-        boolean mergeMcpVirtuals = page == 1
-                && (skillType == null || skillType.isBlank() || "mcp".equalsIgnoreCase(skillType));
-        boolean mergeAcpVirtuals = page == 1
-                && (skillType == null || skillType.isBlank() || "acp".equalsIgnoreCase(skillType));
-        Set<String> realNames = (mergeMcpVirtuals || mergeAcpVirtuals) ? realSkillNames() : Set.of();
-
-        // RFC-090 §3.2 — surface MCP servers as virtual skills on the
-        // first page so users see GitHub / Filesystem / etc. as cards
-        // alongside built-in and uploaded skills. Restricted to page 1
-        // because virtual rows are unpaginated; a follow-up can push
-        // them through proper SQL UNION ALL when MCP server count gets
-        // into the dozens.
-        if (mergeMcpVirtuals) {
-            try {
-                List<SkillEntity> mcpSkills = mcpSkillBridge.listMcpDerivedSkillEntities();
-                if (!mcpSkills.isEmpty()) {
-                    // In-memory filter mirrors the DB filters so the
-                    // user's filter chips still apply to virtual rows.
-                    String kw = keyword == null ? "" : keyword.trim().toLowerCase();
-                    List<SkillEntity> filtered = filterShadowedVirtualSkills(mcpSkills, realNames).stream()
-                            .filter(s -> kw.isEmpty()
-                                    || (s.getName() != null && s.getName().toLowerCase().contains(kw))
-                                    || (s.getDescription() != null && s.getDescription().toLowerCase().contains(kw)))
-                            .filter(s -> enabled == null || enabled.equals(s.getEnabled()))
-                            .toList();
-                    if (!filtered.isEmpty()) {
-                        java.util.List<SkillEntity> merged = new java.util.ArrayList<>(filtered);
-                        merged.addAll(dbPage.getRecords());
-                        dbPage.setRecords(merged);
-                        dbPage.setTotal(dbPage.getTotal() + filtered.size());
-                    }
-                }
-            } catch (Exception e) {
-                // Bridge failure must not break the Skills page.
-            }
-        }
-        // RFC-090 §3.2 (parallel) — same auto-bridge for ACP endpoints.
-        if (mergeAcpVirtuals) {
-            try {
-                List<SkillEntity> acpSkills = acpSkillBridge.listAcpDerivedSkillEntities();
-                if (!acpSkills.isEmpty()) {
-                    String kw = keyword == null ? "" : keyword.trim().toLowerCase();
-                    List<SkillEntity> filtered = filterShadowedVirtualSkills(acpSkills, realNames).stream()
-                            .filter(s -> kw.isEmpty()
-                                    || (s.getName() != null && s.getName().toLowerCase().contains(kw))
-                                    || (s.getDescription() != null && s.getDescription().toLowerCase().contains(kw)))
-                            .filter(s -> enabled == null || enabled.equals(s.getEnabled()))
-                            .toList();
-                    if (!filtered.isEmpty()) {
-                        java.util.List<SkillEntity> merged = new java.util.ArrayList<>(filtered);
-                        merged.addAll(dbPage.getRecords());
-                        dbPage.setRecords(merged);
-                        dbPage.setTotal(dbPage.getTotal() + filtered.size());
-                    }
-                }
-            } catch (Exception e) {
-                // Bridge failure must not break the Skills page.
-            }
+            @RequestParam(required = false) String scanStatus,
+            @RequestParam(required = false) String sort,
+            @RequestParam(required = false) String source,
+            @RequestParam(required = false) String runtime,
+            @RequestParam(required = false) Long agentId) {
+        Set<Long> pinnedSkillIds = agentId != null ? agentBindingService.getBoundSkillIds(agentId) : Set.of();
+        if (pinnedSkillIds == null) pinnedSkillIds = Set.of();
+        IPage<SkillEntity> dbPage = skillService.pageSkills(
+                page, size, keyword, skillType, enabled, scanStatus, sort, source, runtime, pinnedSkillIds);
+        List<SkillEntity> virtualSkills = visibleVirtualSkills(
+                keyword, skillType, enabled, scanStatus, sort, source, runtime);
+        if (!virtualSkills.isEmpty()) {
+            VirtualPageMergeResult merged = mergeVirtualTailPageRecords(
+                    dbPage.getRecords(), virtualSkills, dbPage.getTotal(), page, size);
+            dbPage.setRecords(merged.records());
+            dbPage.setTotal(merged.total());
         }
         return R.ok(dbPage);
     }
@@ -177,6 +135,109 @@ public class SkillController {
     static long countUnshadowedVirtualSkills(List<SkillEntity> virtualSkills,
                                              Set<String> realSkillNames) {
         return filterShadowedVirtualSkills(virtualSkills, realSkillNames).size();
+    }
+
+    /**
+     * Keep MyBatis-Plus as the source of truth for DB pagination and append
+     * live virtual ACP/MCP rows after the DB rows. This produces one stable
+     * combined sequence:
+     * <pre>
+     *   [all DB rows sorted by SQL] + [unshadowed live virtual rows]
+     * </pre>
+     *
+     * The tail ordering avoids shifting every DB page whenever a runtime ACP
+     * endpoint appears, and it keeps {@code total} consistent across all pages.
+     */
+    static VirtualPageMergeResult mergeVirtualTailPageRecords(List<SkillEntity> dbRecords,
+                                                              List<SkillEntity> virtualSkills,
+                                                              long dbTotal,
+                                                              int page,
+                                                              int size) {
+        List<SkillEntity> records = new ArrayList<>(dbRecords == null ? List.of() : dbRecords);
+        List<SkillEntity> virtualRows = virtualSkills == null ? List.of() : virtualSkills;
+        long normalizedDbTotal = Math.max(dbTotal, 0);
+        long total = normalizedDbTotal + virtualRows.size();
+        if (virtualRows.isEmpty()) {
+            return new VirtualPageMergeResult(records, total);
+        }
+
+        int safePage = Math.max(page, 1);
+        int safeSize = Math.max(size, 1);
+        long startInclusive = (long) (safePage - 1) * safeSize;
+        long endExclusive = startInclusive + safeSize;
+        if (endExclusive <= normalizedDbTotal || records.size() >= safeSize) {
+            return new VirtualPageMergeResult(records, total);
+        }
+
+        long virtualStart = Math.max(0, startInclusive - normalizedDbTotal);
+        int remainingSlots = safeSize - records.size();
+        for (long i = virtualStart; i < virtualRows.size() && remainingSlots > 0; i++) {
+            records.add(virtualRows.get((int) i));
+            remainingSlots--;
+        }
+        return new VirtualPageMergeResult(records, total);
+    }
+
+    record VirtualPageMergeResult(List<SkillEntity> records, long total) {}
+
+    private List<SkillEntity> visibleVirtualSkills(String keyword,
+                                                   String skillType,
+                                                   Boolean enabled,
+                                                   String scanStatus,
+                                                   String sort,
+                                                   String source,
+                                                   String runtime) {
+        String effectiveSource = source != null && !source.isBlank() ? source : skillType;
+        boolean includeMcpVirtuals = isAllSkillType(effectiveSource) || "mcp".equalsIgnoreCase(effectiveSource);
+        boolean includeAcpVirtuals = isAllSkillType(effectiveSource) || "acp".equalsIgnoreCase(effectiveSource);
+        if (!includeMcpVirtuals && !includeAcpVirtuals) return List.of();
+
+        Set<String> realNames = realSkillNames();
+        List<SkillEntity> result = new ArrayList<>();
+        if (includeMcpVirtuals) {
+            try {
+                result.addAll(filterVirtualSkills(mcpSkillBridge.listMcpDerivedSkillEntities(),
+                        realNames, keyword, enabled, scanStatus, runtime));
+            } catch (Exception ignored) {
+                // Bridge failure must not break the Skills page.
+            }
+        }
+        if (includeAcpVirtuals) {
+            try {
+                result.addAll(filterVirtualSkills(acpSkillBridge.listAcpDerivedSkillEntities(),
+                        realNames, keyword, enabled, scanStatus, runtime));
+            } catch (Exception ignored) {
+                // Bridge failure must not break the Skills page.
+            }
+        }
+        return SkillCatalogSorter.sortEntities(result, SkillCatalogSort.parse(sort));
+    }
+
+    private static List<SkillEntity> filterVirtualSkills(List<SkillEntity> virtualSkills,
+                                                         Set<String> realNames,
+                                                         String keyword,
+                                                         Boolean enabled,
+                                                         String scanStatus,
+                                                         String runtime) {
+        String kw = keyword == null ? "" : keyword.trim().toLowerCase();
+        String normalizedScan = scanStatus == null ? "" : scanStatus.trim().toUpperCase();
+        return filterShadowedVirtualSkills(virtualSkills, realNames).stream()
+                .filter(s -> kw.isEmpty() || containsIgnoreCase(s.getName(), kw)
+                        || containsIgnoreCase(s.getDescription(), kw)
+                        || containsIgnoreCase(s.getTags(), kw))
+                .filter(s -> enabled == null || enabled.equals(s.getEnabled()))
+                .filter(s -> normalizedScan.isEmpty()
+                        || normalizedScan.equalsIgnoreCase(s.getSecurityScanStatus()))
+                .filter(s -> SkillCatalogSorter.runtimeMatches(s, runtime))
+                .toList();
+    }
+
+    private static boolean isAllSkillType(String skillType) {
+        return skillType == null || skillType.isBlank() || "all".equalsIgnoreCase(skillType);
+    }
+
+    private static boolean containsIgnoreCase(String value, String lowerCaseNeedle) {
+        return value != null && value.toLowerCase().contains(lowerCaseNeedle);
     }
 
     private Set<String> realSkillNames() {

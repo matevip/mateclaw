@@ -4,11 +4,18 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
+import vip.mate.agent.context.ChatOrigin;
+import vip.mate.agent.context.TokenEstimator;
+import vip.mate.skill.runtime.SkillCatalogSort;
+import vip.mate.skill.runtime.SkillCatalogSorter;
 import vip.mate.skill.runtime.SkillFileAccessPolicy;
 import vip.mate.skill.runtime.SkillRuntimeService;
 import vip.mate.skill.runtime.model.ResolvedSkill;
+import vip.mate.skill.usage.SkillUsageService;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,6 +34,7 @@ public class SkillFileTool {
 
     private final SkillRuntimeService runtimeService;
     private final SkillFileAccessPolicy accessPolicy;
+    private final SkillUsageService usageService;
 
     @Tool(description = """
         Read a file from a skill's directory (SKILL.md, references/, or scripts/).
@@ -49,7 +57,9 @@ public class SkillFileTool {
 
         @JsonProperty(required = true)
         @JsonPropertyDescription("Relative file path (e.g., 'references/doc.md' or 'scripts/run.py')")
-        String filePath
+        String filePath,
+
+        @Nullable ToolContext ctx
     ) {
         log.info("Reading skill file: skill={}, path={}", skillName, filePath);
 
@@ -62,6 +72,9 @@ public class SkillFileTool {
         // 特殊处理：读取 SKILL.md
         if ("SKILL.md".equals(filePath)) {
             if (skill.getContent() != null && !skill.getContent().isBlank()) {
+                log.info("Skill loaded: skill={}, path=SKILL.md, bytes={}, estimatedTokens={}",
+                        skillName, skill.getContent().length(), TokenEstimator.estimateTokens(skill.getContent()));
+                recordLoaded(skill, "SKILL.md", skill.getContent(), ctx);
                 return skill.getContent();
             }
             return "Error: SKILL.md content not available";
@@ -89,13 +102,25 @@ public class SkillFileTool {
             }
 
             String content = Files.readString(resolvedPath);
-            log.info("Successfully read skill file: {} bytes", content.length());
+            log.info("Skill loaded: skill={}, path={}, bytes={}, estimatedTokens={}",
+                    skillName, filePath, content.length(), TokenEstimator.estimateTokens(content));
+            recordLoaded(skill, filePath, content, ctx);
             return content;
 
         } catch (Exception e) {
             log.error("Failed to read skill file {}/{}: {}", skillName, filePath, e.getMessage());
             return "Error: Failed to read file: " + e.getMessage();
         }
+    }
+
+    private void recordLoaded(ResolvedSkill skill, String filePath, String content, @Nullable ToolContext ctx) {
+        ChatOrigin origin = ChatOrigin.from(ctx);
+        usageService.recordLoaded(
+                skill,
+                origin.agentId(),
+                origin.conversationId(),
+                filePath,
+                TokenEstimator.estimateTokens(content));
     }
 
     @Tool(description = """
@@ -161,10 +186,36 @@ public class SkillFileTool {
 
         Returns: A formatted list of active skills with name, icon, and description.
         """)
-    public String listAvailableSkills() {
+    public String listAvailableSkills(
+        @JsonProperty(required = false)
+        @JsonPropertyDescription("Optional keyword matched against skill name or description")
+        String keyword,
+
+        @JsonProperty(required = false)
+        @JsonPropertyDescription("Optional source filter: all, builtin, dynamic, mcp, acp")
+        String source,
+
+        @JsonProperty(required = false)
+        @JsonPropertyDescription("Optional status filter: all, ready, setup_needed, disabled, blocked")
+        String status,
+
+        @JsonProperty(required = false)
+        @JsonPropertyDescription("Maximum number of skills to return, default 20, max 50")
+        Integer limit
+    ) {
         log.info("Listing available skills");
 
-        List<ResolvedSkill> activeSkills = runtimeService.getActiveSkills();
+        int safeLimit = limit == null || limit <= 0 ? 20 : Math.min(limit, 50);
+        String kw = keyword == null ? "" : keyword.trim().toLowerCase();
+        List<ResolvedSkill> activeSkills = SkillCatalogSorter.sortResolved(
+                runtimeService.getActiveSkills().stream()
+                        .filter(s -> SkillCatalogSorter.sourceMatches(s, source))
+                        .filter(s -> SkillCatalogSorter.runtimeMatches(s, status))
+                        .filter(s -> kw.isEmpty()
+                                || containsIgnoreCase(s.getName(), kw)
+                                || containsIgnoreCase(s.getDescription(), kw))
+                        .toList(),
+                SkillCatalogSort.RECOMMENDED);
 
         if (activeSkills.isEmpty()) {
             return "No skills are currently available.";
@@ -178,25 +229,37 @@ public class SkillFileTool {
         sb.append("To use any of them, call:\n");
         sb.append("  readSkillFile(skillName=\"<name from below>\", filePath=\"SKILL.md\")\n");
         sb.append("then follow what SKILL.md tells you (typically `runSkillScript`).\n\n");
-        sb.append("| Skill name | Description |\n");
-        sb.append("|------------|-------------|\n");
-        for (ResolvedSkill skill : activeSkills) {
+        sb.append("| Skill name | Status | Description |\n");
+        sb.append("|------------|--------|-------------|\n");
+        for (ResolvedSkill skill : activeSkills.stream().limit(safeLimit).toList()) {
             sb.append("| `").append(skill.getName()).append("`");
             if (skill.getIcon() != null && !skill.getIcon().isBlank()) {
                 sb.append(" ").append(skill.getIcon());
             }
-            sb.append(" | ");
+            sb.append(" | ").append(statusToken(skill)).append(" | ");
             if (skill.getDescription() != null && !skill.getDescription().isBlank()) {
                 String desc = skill.getDescription();
-                if (desc.length() > 200) {
-                    desc = desc.substring(0, 200) + "...";
+                if (desc.length() > 120) {
+                    desc = desc.substring(0, 120) + "...";
                 }
                 sb.append(desc.replace("|", "\\|").replace("\n", " "));
             }
             sb.append(" |\n");
         }
-        sb.append("\nTotal: ").append(activeSkills.size()).append(" skill(s).");
+        sb.append("\nShowing: ").append(Math.min(safeLimit, activeSkills.size()))
+                .append(" of ").append(activeSkills.size()).append(" skill(s).");
         return sb.toString();
+    }
+
+    private static boolean containsIgnoreCase(String value, String lowerCaseNeedle) {
+        return value != null && value.toLowerCase().contains(lowerCaseNeedle);
+    }
+
+    private static String statusToken(ResolvedSkill skill) {
+        if (skill.isSecurityBlocked()) return "blocked";
+        if (!skill.isEnabled()) return "disabled";
+        if (!SkillRuntimeService.passesActiveGate(skill)) return "setup-needed";
+        return "ready";
     }
 
     @SuppressWarnings("unchecked")

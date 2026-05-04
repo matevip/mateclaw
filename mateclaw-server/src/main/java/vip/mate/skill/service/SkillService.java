@@ -9,12 +9,15 @@ import org.springframework.stereotype.Service;
 import vip.mate.exception.MateClawException;
 import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.repository.SkillMapper;
+import vip.mate.skill.runtime.SkillCatalogSort;
+import vip.mate.skill.runtime.SkillCatalogSorter;
 import vip.mate.skill.secret.SkillSecretService;
 import vip.mate.skill.workspace.SkillWorkspaceManager;
 import vip.mate.skill.workspace.SkillWorkspaceProperties;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Set;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -78,6 +81,27 @@ public class SkillService {
     public IPage<SkillEntity> pageSkills(int page, int size, String keyword,
                                           String skillType, Boolean enabled,
                                           String scanStatus) {
+        return pageSkills(page, size, keyword, skillType, enabled, scanStatus,
+                null, null, null, Set.of());
+    }
+
+    public IPage<SkillEntity> pageSkills(int page, int size, String keyword,
+                                          String skillType, Boolean enabled,
+                                          String scanStatus,
+                                          String sort,
+                                          String source,
+                                          String runtime) {
+        return pageSkills(page, size, keyword, skillType, enabled, scanStatus,
+                sort, source, runtime, Set.of());
+    }
+
+    public IPage<SkillEntity> pageSkills(int page, int size, String keyword,
+                                          String skillType, Boolean enabled,
+                                          String scanStatus,
+                                          String sort,
+                                          String source,
+                                          String runtime,
+                                          Set<Long> pinnedSkillIds) {
         Page<SkillEntity> pageParam = new Page<>(Math.max(page, 1), Math.max(size, 1));
         LambdaQueryWrapper<SkillEntity> wrapper = new LambdaQueryWrapper<>();
 
@@ -88,8 +112,12 @@ public class SkillService {
                     .or().like(SkillEntity::getDescription, kw)
                     .or().like(SkillEntity::getTags, kw));
         }
-        if (skillType != null && !skillType.isBlank()) {
-            wrapper.eq(SkillEntity::getSkillType, skillType);
+        String effectiveSource = source != null && !source.isBlank() ? source : skillType;
+        if (effectiveSource != null && !effectiveSource.isBlank()
+                && !"all".equalsIgnoreCase(effectiveSource)) {
+            String normalizedSource = effectiveSource.trim().toLowerCase();
+            if ("custom".equals(normalizedSource)) normalizedSource = "dynamic";
+            wrapper.eq(SkillEntity::getSkillType, normalizedSource);
         }
         if (enabled != null) {
             wrapper.eq(SkillEntity::getEnabled, enabled);
@@ -98,14 +126,34 @@ public class SkillService {
             wrapper.eq(SkillEntity::getSecurityScanStatus, scanStatus.trim().toUpperCase());
         }
 
-        // Builtin first ('builtin' < 'dynamic' < 'mcp' alphabetically), then by
-        // name for a stable order. Sorting on skill_type instead of the
-        // `builtin` boolean because SkillInstaller leaves the boolean NULL on
-        // user-installed rows; sorting on name instead of create_time because
-        // the 20 seeded builtins share a near-identical create_time and looked
-        // random within the group (issue #48).
-        wrapper.orderByAsc(SkillEntity::getSkillType)
-               .orderByAsc(SkillEntity::getName);
+        SkillCatalogSort catalogSort = SkillCatalogSort.parse(sort);
+        if (runtime != null && !runtime.isBlank() && !"all".equalsIgnoreCase(runtime)
+                || catalogSort == SkillCatalogSort.RECOMMENDED
+                || catalogSort == SkillCatalogSort.STATUS
+                || catalogSort == SkillCatalogSort.TYPE) {
+            List<SkillEntity> filtered = skillMapper.selectList(wrapper).stream()
+                    .filter(s -> SkillCatalogSorter.runtimeMatches(s, runtime))
+                    .toList();
+            List<SkillEntity> sorted = SkillCatalogSorter.sortEntities(filtered, catalogSort, pinnedSkillIds);
+            long total = sorted.size();
+            int safePage = Math.max(page, 1);
+            int safeSize = Math.max(size, 1);
+            int from = Math.min((safePage - 1) * safeSize, sorted.size());
+            int to = Math.min(from + safeSize, sorted.size());
+            pageParam.setRecords(sorted.subList(from, to));
+            pageParam.setTotal(total);
+            return pageParam;
+        }
+
+        if (catalogSort == SkillCatalogSort.NAME) {
+            wrapper.orderByAsc(SkillEntity::getName);
+        } else if (catalogSort == SkillCatalogSort.UPDATED) {
+            wrapper.orderByDesc(SkillEntity::getUpdateTime)
+                    .orderByAsc(SkillEntity::getName);
+        } else {
+            wrapper.orderByAsc(SkillEntity::getSkillType)
+                    .orderByAsc(SkillEntity::getName);
+        }
 
         return skillMapper.selectPage(pageParam, wrapper);
     }

@@ -13,6 +13,7 @@ import vip.mate.skill.mcp.McpSkillBridge;
 import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.runtime.model.ResolvedSkill;
 import vip.mate.skill.service.SkillService;
+import vip.mate.skill.usage.SkillUsageService;
 
 import vip.mate.skill.workspace.SkillWorkspaceEvent;
 
@@ -21,6 +22,7 @@ import jakarta.annotation.PreDestroy;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import java.time.Duration;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executors;
@@ -59,18 +61,21 @@ public class SkillRuntimeService {
      * Same {@code @Lazy} treatment as the MCP bridge.
      */
     private final AcpSkillBridge acpSkillBridge;
+    private final SkillUsageService usageService;
 
     @Autowired
     public SkillRuntimeService(SkillService skillService,
                                SkillPackageResolver packageResolver,
                                @Lazy SkillLessonsService lessonsService,
                                @Lazy McpSkillBridge mcpSkillBridge,
-                               @Lazy AcpSkillBridge acpSkillBridge) {
+                               @Lazy AcpSkillBridge acpSkillBridge,
+                               @Lazy SkillUsageService usageService) {
         this.skillService = skillService;
         this.packageResolver = packageResolver;
         this.lessonsService = lessonsService;
         this.mcpSkillBridge = mcpSkillBridge;
         this.acpSkillBridge = acpSkillBridge;
+        this.usageService = usageService;
     }
 
     // 缓存已解析的 active skills（5分钟过期）
@@ -327,6 +332,26 @@ public class SkillRuntimeService {
      *                      非 null 时仅包含指定 ID 的 skill。
      */
     public String buildSkillPromptEnhancement(Set<Long> boundSkillIds) {
+        return buildSkillPromptEnhancement(boundSkillIds, null, null, null);
+    }
+
+    /**
+     * 构建技能目录提示片段。
+     *
+     * @param boundSkillIds Agent 绑定的 skill ID 集合。null 表示使用全局默认（无绑定）。
+     * @param effectiveToolNames 当前 agent 可见的工具名集合。null 表示不按 agent 绑定限制过滤。
+     * @param maxInputTokens 当前模型最大输入窗口，用于控制目录大小。
+     */
+    public String buildSkillPromptEnhancement(Set<Long> boundSkillIds,
+                                              Set<String> effectiveToolNames,
+                                              Integer maxInputTokens) {
+        return buildSkillPromptEnhancement(boundSkillIds, effectiveToolNames, maxInputTokens, null);
+    }
+
+    public String buildSkillPromptEnhancement(Set<Long> boundSkillIds,
+                                              Set<String> effectiveToolNames,
+                                              Integer maxInputTokens,
+                                              Long agentId) {
         List<ResolvedSkill> activeSkills;
         if (boundSkillIds != null) {
             // Per-agent 过滤：从全局 enabled skills 中按 ID 过滤。RFC-090
@@ -356,35 +381,52 @@ public class SkillRuntimeService {
             return "";
         }
 
-        // Compact preamble — was ~1 KB of warnings before. The two failure
-        // modes that drove the older wording (#46: LLM treats skill name
-        // as a tool; #49: LLM invokes runSkillScript on a docs-only skill)
-        // are now addressed in two cheaper spots:
-        //   - readSkillFile/runSkillScript tools have explicit "Tool not
-        //     found" errors that nudge the model to retry the right way.
-        //   - SKILL.md itself, once loaded via readSkillFile, tells the
-        //     model whether to invoke a script or just follow the prose.
-        // 49 skills × ~20 chars/row saved by dropping the Shape column +
-        // ~600 chars saved by trimming the preamble = ~1.5 KB / ~400
-        // tokens lighter on every chat request.
+        List<ResolvedSkill> visibleSkills = activeSkills.stream()
+                .filter(s -> isVisibleWithTools(s, effectiveToolNames))
+                .collect(java.util.stream.Collectors.toList());
+        if (visibleSkills.isEmpty()) return "";
+
+        Set<Long> boundIds = boundSkillIds == null ? Set.of() : boundSkillIds;
+        int maxEntries = promptCatalogEntryLimit(maxInputTokens);
+        int descLimit = promptDescriptionLimit(maxInputTokens);
+        Set<String> recentNames = usageService.recentLoadedSkillNames(agentId, 8);
+        Set<String> frequentNames = usageService.frequentlyLoadedSkillNames(8);
+        List<ResolvedSkill> sorted = SkillCatalogSorter.sortResolved(visibleSkills, SkillCatalogSort.RECOMMENDED)
+                .stream()
+                .sorted(java.util.Comparator
+                        .comparingInt((ResolvedSkill s) -> recentNames.contains(s.getName()) ? 0 : 1)
+                        .thenComparingInt(s -> frequentNames.contains(s.getName()) ? 0 : 1)
+                        .thenComparing(SkillCatalogSorter.resolvedComparator(SkillCatalogSort.RECOMMENDED)))
+                .toList();
+        List<ResolvedSkill> pinned = sorted.stream()
+                .filter(s -> s.getId() != null && boundIds.contains(s.getId()))
+                .toList();
+        LinkedHashSet<ResolvedSkill> selected = new LinkedHashSet<>();
+        selected.addAll(pinned);
+        for (ResolvedSkill skill : sorted) {
+            if (selected.size() >= Math.max(maxEntries, pinned.size())) break;
+            selected.add(skill);
+        }
+
         StringBuilder sb = new StringBuilder();
         sb.append("\n\n## Skills\n");
-        sb.append("Before answering, scan the skills below. If a skill matches your task, ");
-        sb.append("load it via `readSkillFile(skillName=<name>, filePath=\"SKILL.md\")` and follow its instructions. ");
+        sb.append("This is a compact catalog. If a listed skill matches the task, ");
+        sb.append("first call `readSkillFile(skillName=<name>, filePath=\"SKILL.md\")` and follow its instructions. ");
+        sb.append("If none of these skills match, call `listAvailableSkills()` to inspect the broader catalog. ");
         sb.append("Skills are documentation packages — calling a skill name as a tool will fail. ");
         sb.append("Skills with a `scripts/` directory expose `runSkillScript`; SKILL.md will name the script when needed.\n\n");
-        sb.append("| Skill | Description |\n");
-        sb.append("|-------|-------------|\n");
-        for (ResolvedSkill skill : activeSkills) {
+        sb.append("| Skill | Status | Description |\n");
+        sb.append("|-------|--------|-------------|\n");
+        for (ResolvedSkill skill : selected) {
             sb.append("| `").append(skill.getName()).append("`");
             if (skill.getIcon() != null && !skill.getIcon().isBlank()) {
                 sb.append(" ").append(skill.getIcon());
             }
-            sb.append(" | ");
+            sb.append(" | ").append(statusToken(skill)).append(" | ");
             if (skill.getDescription() != null && !skill.getDescription().isBlank()) {
                 String desc = skill.getDescription();
-                if (desc.length() > 200) {
-                    desc = desc.substring(0, 200) + "...";
+                if (desc.length() > descLimit) {
+                    desc = desc.substring(0, descLimit) + "...";
                 }
                 // Escape pipe and newline so a multi-line description doesn't
                 // break the table layout.
@@ -392,13 +434,47 @@ public class SkillRuntimeService {
             }
             sb.append(" |\n");
         }
+        if (selected.size() < visibleSkills.size()) {
+            sb.append("\nShowing ").append(selected.size()).append(" of ")
+                    .append(visibleSkills.size())
+                    .append(" available skills. Use `listAvailableSkills()` for the full catalog.\n");
+        }
 
-        // RFC-090 §11.4.3 + §10.2 Q6 — append per-skill LESSONS.md after
-        // the catalog so the LLM sees "Available Skills" first, then any
-        // accumulated lessons attached to each skill that has opted in.
-        appendLessonsBlock(sb, activeSkills);
+        List<ResolvedSkill> lessonSkills = sorted.stream()
+                .filter(s -> (s.getId() != null && boundIds.contains(s.getId())) || recentNames.contains(s.getName()))
+                .toList();
+        appendLessonsBlock(sb, lessonSkills);
 
         return sb.toString();
+    }
+
+    private static boolean isVisibleWithTools(ResolvedSkill skill, Set<String> effectiveToolNames) {
+        if (effectiveToolNames == null) return true;
+        Set<String> tools = skill.getEffectiveAllowedTools();
+        return tools == null || tools.isEmpty() || effectiveToolNames.containsAll(tools);
+    }
+
+    private static int promptCatalogEntryLimit(Integer maxInputTokens) {
+        int max = maxInputTokens != null && maxInputTokens > 0 ? maxInputTokens : 8192;
+        if (max <= 8192) return 8;
+        if (max <= 16384) return 12;
+        if (max <= 32768) return 20;
+        return 32;
+    }
+
+    private static int promptDescriptionLimit(Integer maxInputTokens) {
+        int max = maxInputTokens != null && maxInputTokens > 0 ? maxInputTokens : 8192;
+        if (max <= 8192) return 80;
+        if (max <= 16384) return 100;
+        if (max <= 32768) return 140;
+        return 160;
+    }
+
+    private static String statusToken(ResolvedSkill skill) {
+        if (skill.isSecurityBlocked()) return "blocked";
+        if (!skill.isEnabled()) return "disabled";
+        if (!passesActiveGate(skill)) return "setup-needed";
+        return "ready";
     }
 
     /**

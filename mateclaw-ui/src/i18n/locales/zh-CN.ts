@@ -2221,6 +2221,13 @@ export default {
       disabled: '已禁用',
       scanFailed: '扫描失败',
     },
+    sort: {
+      recommended: '推荐排序',
+      name: '按名称',
+      status: '按状态',
+      source: '按来源',
+      updated: '最近更新',
+    },
     security: {
       scanned: '已扫描',
       scanFailed: '扫描失败',

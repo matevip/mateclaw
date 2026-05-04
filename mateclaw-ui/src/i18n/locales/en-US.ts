@@ -2217,6 +2217,13 @@ export default {
       disabled: 'Disabled',
       scanFailed: 'Scan failed',
     },
+    sort: {
+      recommended: 'Recommended',
+      name: 'Name',
+      status: 'Status',
+      source: 'Source',
+      updated: 'Recently updated',
+    },
     security: {
       scanned: 'Scanned',
       scanFailed: 'Scan failed',

@@ -1246,7 +1246,9 @@ async function selectConversation(conv: Conversation) {
 }
 
 function newConversation() {
-  resetStreamingState()
+  // Creating a new chat is just local navigation. Keep any previous backend
+  // run alive so the user can return and reconnect to it later.
+  resetForNewConversation()
   currentConversationId.value = `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   messages.value = []
 }

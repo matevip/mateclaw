@@ -250,7 +250,8 @@ public class AgentGraphBuilder {
                     entity.getId(), rawMaxIter, maxIter, BaseAgent.MAX_ITERATIONS_HARD_CEILING);
         }
 
-        String enhancedPrompt = buildEnhancedPrompt(entity, builtinSearchEnabled);
+        String enhancedPrompt = buildEnhancedPrompt(entity, builtinSearchEnabled,
+                boundTools, runtimeModel.getMaxInputTokens());
 
         // 当前仅支持 DashScope 和 OpenAI-compatible，其他协议直接拒绝
         if (!supportsStateGraph(protocol)) {
@@ -901,7 +902,8 @@ public class AgentGraphBuilder {
 
     // ==================== Prompt 构建 ====================
 
-    private String buildEnhancedPrompt(AgentEntity entity, boolean builtinSearchEnabled) {
+    private String buildEnhancedPrompt(AgentEntity entity, boolean builtinSearchEnabled,
+                                       Set<String> boundTools, Integer maxInputTokens) {
         // 通过 MemoryManager 从所有 MemoryProvider 组装系统提示词（快照冻结）
         String memoryPrompt = memoryManager.buildSystemPromptBlock(entity.getId());
         String basePrompt = (memoryPrompt != null && !memoryPrompt.isBlank())
@@ -910,7 +912,8 @@ public class AgentGraphBuilder {
 
         // 使用 skill runtime 构建技能增强（per-agent 绑定过滤）
         Set<Long> boundSkillIds = agentBindingService.getBoundSkillIds(entity.getId());
-        String skillEnhancement = skillRuntimeService.buildSkillPromptEnhancement(boundSkillIds);
+        String skillEnhancement = skillRuntimeService.buildSkillPromptEnhancement(
+                boundSkillIds, boundTools, maxInputTokens, entity.getId());
 
         // 工具调用指导
         String toolGuidance = """

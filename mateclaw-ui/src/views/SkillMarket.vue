@@ -62,6 +62,13 @@
             <option value="disabled">{{ t('skills.filter.disabled') }}</option>
             <option value="scan_failed">{{ t('skills.filter.scanFailed') }}</option>
           </select>
+          <select v-model="query.sort" class="skill-status-filter" @change="onFilterChange">
+            <option value="recommended">{{ t('skills.sort.recommended') }}</option>
+            <option value="name">{{ t('skills.sort.name') }}</option>
+            <option value="status">{{ t('skills.sort.status') }}</option>
+            <option value="type">{{ t('skills.sort.source') }}</option>
+            <option value="updated">{{ t('skills.sort.updated') }}</option>
+          </select>
         </div>
 
         <!-- Skill grid — RFC-090 §4.2 (Phase 1 slim).
@@ -159,7 +166,7 @@
             v-model:page="query.page"
             v-model:size="query.size"
             :total="total"
-            :sizes="[10, 20, 50]"
+            :sizes="[20, 50]"
             @change="onPagerChange"
           />
         </div>
@@ -657,14 +664,13 @@ const creating = ref(false)
 const refreshing = ref(false)
 const showImportDialog = ref(false)
 
-/** Paginated query state — RFC-042 §2.1 + §2.3.5 */
 const query = reactive({
   page: 1,
-  size: 10,
+  size: 20,
   keyword: '',
   skillType: 'all' as string,
-  /** '' = all | 'enabled' | 'disabled' | 'scan_failed' (RFC-042 §2.3.5 unified status filter) */
   statusFilter: '' as string,
+  sort: 'recommended' as string,
 })
 
 /** Per-skill UI state for the RFC-042 §2.3 findings panel. */
@@ -914,11 +920,12 @@ function onPagerChange() {
   loadSkills()
 }
 
-async function loadSkills() {
+async function loadSkills(allowPageClamp = true) {
   try {
     const params: Record<string, unknown> = { page: query.page, size: query.size }
     if (query.keyword) params.keyword = query.keyword.trim()
     if (query.skillType && query.skillType !== 'all') params.skillType = query.skillType
+    if (query.sort) params.sort = query.sort
     // Map the single status filter onto the backend's two independent params:
     // enabled (bool) and scanStatus (PASSED/FAILED). scan_failed implies any enabled state.
     if (query.statusFilter === 'enabled') params.enabled = true
@@ -928,7 +935,6 @@ async function loadSkills() {
     const res: any = await skillApi.page(params)
     const data = res.data || {}
     const records: Skill[] = Array.isArray(data.records) ? data.records : []
-    skills.value = records
     // Trust the backend total when it's positive. Only fall back to an inferred
     // floor when the backend reports 0 (broken pagination interceptor) — using
     // Math.max unconditionally produced an off-by-one whenever total was an
@@ -936,6 +942,12 @@ async function loadSkills() {
     // successor; issue #48).
     const reportedTotal = Number(data.total) || 0
     if (reportedTotal > 0) {
+      const pageCount = Math.max(1, Math.ceil(reportedTotal / query.size))
+      if (allowPageClamp && query.page > pageCount) {
+        query.page = pageCount
+        await loadSkills(false)
+        return
+      }
       total.value = reportedTotal
     } else if (records.length > 0) {
       total.value = records.length >= query.size
@@ -944,8 +956,14 @@ async function loadSkills() {
       // eslint-disable-next-line no-console
       console.warn('[SkillMarket] backend returned records but total=0; rebuild server JAR to pick up the DbType fix')
     } else {
+      if (allowPageClamp && query.page > 1) {
+        query.page = 1
+        await loadSkills(false)
+        return
+      }
       total.value = 0
     }
+    skills.value = records
   } catch (e) {
     skills.value = []
     total.value = 0
@@ -1517,7 +1535,7 @@ function getSkillTypeLabel(type: string) {
 .cat-count { background: var(--mc-bg-sunken); color: var(--mc-text-secondary); padding: 1px 6px; border-radius: 10px; font-size: 11px; }
 .cat-tab.active .cat-count { background: rgba(217, 119, 87, 0.2); color: var(--mc-primary); }
 
-/* RFC-042 §2.1 — search + status filter bar (frosted glass) */
+/* Search and filter bar. */
 .skill-filter-bar {
   display: flex;
   gap: 10px;
@@ -1564,7 +1582,7 @@ html.dark .skill-status-filter:focus {
 
 .skill-pagination { margin-top: 18px; display: flex; justify-content: center; }
 
-/* RFC-042 §2.3 — security scan findings panel (frosted, non-EP) */
+/* Security scan findings panel. */
 .scan-badge-button {
   border: none;
   cursor: pointer;

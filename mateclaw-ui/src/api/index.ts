@@ -144,14 +144,18 @@ export const conversationApi = {
 
 // ==================== Skill ====================
 export const skillApi = {
-  /** RFC-042 §2.1 — paginated skill listing with search/type/enabled/scanStatus filters */
+  /** Paginated skill listing with search, source, status, and sort filters. */
   page: (params: {
     page?: number
     size?: number
     keyword?: string
     skillType?: string
+    source?: string
+    sort?: string
+    runtime?: string
+    agentId?: string | number
     enabled?: boolean
-    /** 'PASSED' / 'FAILED' — filters by security_scan_status (RFC-042 §2.3.5) */
+    /** 'PASSED' / 'FAILED' — filters by security_scan_status. */
     scanStatus?: string
   } = {}) => http.get('/skills', { params }),
   /** Tab count aggregate — returns { all, builtin, mcp, dynamic } */
