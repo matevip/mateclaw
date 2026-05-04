@@ -269,6 +269,7 @@ public class McpClientManager {
         // Args
         if (server.getArgsJson() != null && !server.getArgsJson().isBlank()) {
             List<String> args = JSONUtil.toList(server.getArgsJson(), String.class);
+            args = args.stream().map(McpClientManager::expandEnvVars).toList();
             builder.args(args);
         }
 
@@ -376,9 +377,10 @@ public class McpClientManager {
     }
 
     /**
-     * 展开环境变量引用，如 ${ENV_VAR} 或 $ENV_VAR
+     * 展开系统属性和环境变量引用，如 ${user.home}、${ENV_VAR} 或 $ENV_VAR
      * <p>
-     * 先处理 ${VAR}（精确匹配），再用正则处理 $VAR（word boundary），
+     * 先处理 ${VAR}（精确匹配），优先系统属性，再回退环境变量；
+     * 再用正则处理 $VAR（word boundary），
      * 避免 $PATH 误替换 $PATH_HOME 的问题。
      */
     private static String expandEnvVars(String value) {
@@ -386,7 +388,12 @@ public class McpClientManager {
             return value;
         }
         String result = value;
-        // Phase 1: 精确匹配 ${VAR} 模式（不会误替换）
+        // Phase 1: 精确匹配 ${VAR} 模式（不会误替换），支持 Java 系统属性如 ${user.home}
+        //JVM 里的系统属性
+        for (String key : System.getProperties().stringPropertyNames()) {
+            result = result.replace("${" + key + "}", System.getProperty(key));
+        }
+        //操作系统环境变量
         for (Map.Entry<String, String> env : System.getenv().entrySet()) {
             result = result.replace("${" + env.getKey() + "}", env.getValue());
         }
