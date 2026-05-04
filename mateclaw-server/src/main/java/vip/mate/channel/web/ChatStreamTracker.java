@@ -1603,6 +1603,18 @@ public class ChatStreamTracker {
     public boolean forceRecycle(String conversationId) {
         RunState state = runs.get(conversationId);
         if (state == null) return false;
+        // Persist any partial assistant content first — dispose() only severs
+        // the downstream subscription, the agent's worker thread keeps running
+        // and may not yield for minutes. Without this, the conversation row
+        // shows only the user message until the late doOnComplete fires.
+        Runnable callback = state.emergencySaveCallback;
+        if (callback != null) {
+            try {
+                callback.run();
+            } catch (Exception e) {
+                log.warn("forceRecycle: emergency save failed for {}: {}", conversationId, e.getMessage());
+            }
+        }
         try {
             state.stopRequested.set(true);
             state.interruptType = InterruptType.USER_STOP;

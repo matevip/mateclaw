@@ -46,7 +46,16 @@ public class DelegateAgentTool {
 
     private static final int MAX_DELEGATION_DEPTH = 3;
     private static final int MAX_RESULT_LENGTH = 4000;
-    private static final int MAX_PARALLEL_CHILDREN = 3;
+    /**
+     * Cap on children dispatched in a single delegateParallel call. Set to 8
+     * because real multi-role evaluations commonly cover 5-8 perspectives
+     * (architecture / backend / frontend / security / cost / ops / contrarian /
+     * progressive-alternative); a lower cap forces the parent to split into
+     * batches, and once an older batch's tool result gets compacted by
+     * ConversationWindowManager the parent can no longer reconstruct what each
+     * child said and starts re-dispatching the same roles in a loop.
+     */
+    private static final int MAX_PARALLEL_CHILDREN = 8;
 
     /**
      * RFC-03 Lane C2 — caps for the parent-context prefix when
@@ -425,6 +434,14 @@ public class DelegateAgentTool {
                     results.add(ChildResult.ofError(idx, agentName, ex.getMessage()));
                 }
             } else {
+                // Signal the child's graph to bail out at its next checkpoint.
+                // CompletableFuture.cancel alone only marks the future as
+                // cancelled; without requestStop the underlying ReAct/Plan-Execute
+                // loop keeps invoking LLMs and tools (observed: 8-minute orphan
+                // child still writing files long after the parent gave up).
+                if (p != null && p.childConvId != null) {
+                    streamTracker.requestStop(p.childConvId);
+                }
                 f.cancel(true);
                 // Use ofTimeout so outcome="timeout" is explicit and distinct from "error".
                 results.add(ChildResult.ofTimeout(idx, agentName, PARALLEL_TIMEOUT_SECONDS));

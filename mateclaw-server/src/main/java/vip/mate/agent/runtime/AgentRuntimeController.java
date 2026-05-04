@@ -12,6 +12,7 @@ import vip.mate.audit.service.AuditEventService;
 import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.common.result.R;
 import vip.mate.exception.MateClawException;
+import vip.mate.workspace.conversation.ConversationService;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,6 +36,7 @@ public class AgentRuntimeController {
     private final ChatStreamTracker streamTracker;
     private final SubagentRegistry subagentRegistry;
     private final AuditEventService auditEventService;
+    private final ConversationService conversationService;
 
     @Operation(summary = "Snapshot of every in-flight agent turn")
     @GetMapping("/snapshot")
@@ -59,6 +61,18 @@ public class AgentRuntimeController {
                                           Authentication auth) {
         requireAdmin(auth);
         boolean ok = streamTracker.forceRecycle(conversationId);
+        if (ok) {
+            // Flip stream_status off 'running' so the sidebar drops the
+            // 生成中 badge immediately. The downstream doOnCancel /
+            // doOnComplete still fires later (when the agent yields) and may
+            // re-set this to 'idle' — same value, no-op.
+            try {
+                conversationService.updateStreamStatus(conversationId, "idle");
+            } catch (Exception e) {
+                log.warn("recycle: failed to reset stream_status for {}: {}",
+                        conversationId, e.getMessage());
+            }
+        }
         recordAudit(auth, "agent-runtime.recycle", conversationId, Map.of("result", ok));
         return R.ok(Map.of("recycled", ok));
     }
@@ -89,7 +103,15 @@ public class AgentRuntimeController {
                 .toList();
         int recycled = 0;
         for (String cid : ids) {
-            if (streamTracker.forceRecycle(cid)) recycled++;
+            if (streamTracker.forceRecycle(cid)) {
+                recycled++;
+                try {
+                    conversationService.updateStreamStatus(cid, "idle");
+                } catch (Exception e) {
+                    log.warn("sweep: failed to reset stream_status for {}: {}",
+                            cid, e.getMessage());
+                }
+            }
         }
         recordAudit(auth, "agent-runtime.sweep", "all",
                 Map.of("targets", ids, "recycled", recycled));
