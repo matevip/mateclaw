@@ -87,6 +87,8 @@ const sizeClass = computed(() => {
  * inner svg so the wrapper's flex centering works. */
 .skill-icon__svg {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   height: 100%;
 }
