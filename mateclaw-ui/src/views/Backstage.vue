@@ -80,36 +80,31 @@
               :class="cardClass(run)"
               @click="openDetail(run)"
             >
-              <!-- Top: avatar + name + breathing dot -->
+              <!-- Top: avatar (with status ring) + name -->
               <div class="agent-card-top">
-                <div class="agent-avatar" :style="avatarBgStyle(run)">
-                  <SkillIcon
-                    v-if="run.agentIcon"
-                    :value="run.agentIcon"
-                    :size="34"
-                    fallback="🤖"
-                  />
-                  <span v-else class="agent-avatar-letter">{{ avatarLetter(run) }}</span>
+                <div class="agent-avatar-wrap" :class="ringClass(run)" :title="dotTitle(run)">
+                  <div class="agent-avatar" :style="avatarBgStyle(run)">
+                    <SkillIcon
+                      v-if="run.agentIcon"
+                      :value="run.agentIcon"
+                      :size="34"
+                      fallback="🤖"
+                    />
+                    <span v-else class="agent-avatar-letter">{{ avatarLetter(run) }}</span>
+                  </div>
                 </div>
                 <div class="agent-id">
                   <div class="agent-name">{{ run.agentName || t('backstage.unknownAgent') }}</div>
                   <div class="agent-owner" v-if="run.username">@{{ run.username }}</div>
-                </div>
-                <div class="breathing-dot-wrap" :title="dotTitle(run)">
-                  <span class="breathing-dot" :class="dotClass(run)"></span>
                 </div>
               </div>
 
               <!-- Single human sentence -->
               <div class="agent-saying">{{ humanSentence(run) }}</div>
 
-              <!-- Meta + soft progress, only when meaningful -->
+              <!-- Meta: just the time + orphan hint (id moved to detail) -->
               <div class="agent-meta-row">
                 <span class="meta-time">{{ formatAge(run.ageMs) }}</span>
-                <span class="meta-id" :title="run.conversationId">#{{ shortId(run.conversationId) }}</span>
-                <span v-if="run.subagentCount > 0" class="meta-pill">
-                  {{ t('backstage.subagentsBadge', { n: run.subagentCount }) }}
-                </span>
                 <span v-if="run.orphan && !run.stuckReason" class="meta-pill meta-pill-orphan" :title="t('backstage.orphanHint')">
                   {{ t('backstage.orphan') }}
                 </span>
@@ -118,19 +113,36 @@
                 <div class="bar-fill" :style="progressFillStyle(run)"></div>
               </div>
 
-              <!-- Foot: action hierarchy -->
+              <!-- Foot: subagent stack (left) + action hierarchy (right) -->
               <div class="agent-card-foot">
-                <button
-                  class="card-action card-action-soft"
-                  @click.stop="confirmStop(run)"
-                  :title="t('backstage.actions.stopHint')"
-                >{{ t('backstage.actions.stop') }}</button>
-                <button
-                  v-if="run.stuckReason"
-                  class="card-action card-action-strong"
-                  @click.stop="confirmRecycle(run)"
-                  :title="t('backstage.actions.endHint')"
-                >{{ t('backstage.actions.endIt') }}</button>
+                <div class="subagent-stack" v-if="childrenOf(run).length > 0">
+                  <div
+                    v-for="sub in childrenOf(run).slice(0, 3)"
+                    :key="sub.subagentId"
+                    class="subagent-chip"
+                    :style="avatarBgStyle(sub)"
+                    :title="sub.agentName || sub.subagentId"
+                  >
+                    <SkillIcon v-if="sub.agentIcon" :value="sub.agentIcon" :size="14" fallback="🤖" />
+                    <span v-else class="sub-chip-letter">{{ avatarLetter(sub) }}</span>
+                  </div>
+                  <div v-if="childrenOf(run).length > 3" class="subagent-chip subagent-overflow">
+                    +{{ childrenOf(run).length - 3 }}
+                  </div>
+                </div>
+                <div class="card-foot-actions">
+                  <button
+                    class="card-action card-action-soft"
+                    @click.stop="confirmStop(run)"
+                    :title="t('backstage.actions.stopHint')"
+                  >{{ t('backstage.actions.stop') }}</button>
+                  <button
+                    v-if="run.stuckReason"
+                    class="card-action card-action-strong"
+                    @click.stop="confirmRecycle(run)"
+                    :title="t('backstage.actions.endHint')"
+                  >{{ t('backstage.actions.endIt') }}</button>
+                </div>
               </div>
             </article>
           </div>
@@ -138,80 +150,17 @@
       </div>
     </div>
 
-    <!-- Detail drawer -->
-    <el-drawer
-      v-model="drawerOpen"
-      :show-close="true"
-      :with-header="false"
-      direction="rtl"
-      size="440px"
-    >
-      <div v-if="detail" class="detail-pane">
-        <header class="detail-header">
-          <div class="agent-avatar detail-avatar" :style="avatarBgStyle(detail)">
-            <SkillIcon
-              v-if="detail.agentIcon"
-              :value="detail.agentIcon"
-              :size="42"
-              fallback="🤖"
-            />
-            <span v-else class="agent-avatar-letter">{{ avatarLetter(detail) }}</span>
-          </div>
-          <div class="detail-title-block">
-            <div class="detail-title">{{ detail.agentName || t('backstage.unknownAgent') }}</div>
-            <div class="detail-subtitle" v-if="detail.username">@{{ detail.username }}</div>
-          </div>
-          <span class="breathing-dot detail-dot" :class="dotClass(detail)" :title="dotTitle(detail)"></span>
-        </header>
-
-        <p class="detail-saying">{{ humanSentence(detail) }}</p>
-
-        <div v-if="detail.stuckReason" class="detail-callout">
-          {{ stuckCallout(detail) }}
-        </div>
-
-        <dl class="detail-grid">
-          <div class="detail-row">
-            <dt>{{ t('backstage.detail.runningFor') }}</dt>
-            <dd>{{ formatAge(detail.ageMs) }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt>{{ t('backstage.detail.lastHeard') }}</dt>
-            <dd>{{ formatAge(detail.msSinceLastEvent) }} {{ t('backstage.detail.ago') }}</dd>
-          </div>
-          <div class="detail-row">
-            <dt>{{ t('backstage.detail.audience') }}</dt>
-            <dd>
-              <span v-if="detail.subscriberCount === 0" class="detail-warn">
-                {{ t('backstage.detail.noOneListening') }}
-              </span>
-              <span v-else>{{ t('backstage.detail.peopleListening', { n: detail.subscriberCount }) }}</span>
-            </dd>
-          </div>
-        </dl>
-
-        <div v-if="childrenOf(detail).length > 0" class="detail-section">
-          <div class="detail-section-title">{{ t('backstage.detail.helpers') }}</div>
-          <div v-for="sub in childrenOf(detail)" :key="sub.subagentId" class="subagent-row">
-            <div class="subagent-icon" :style="avatarBgStyle(sub)">
-              <SkillIcon v-if="sub.agentIcon" :value="sub.agentIcon" :size="20" fallback="🤖" />
-              <span v-else class="agent-avatar-letter sub-letter">{{ avatarLetter(sub) }}</span>
-            </div>
-            <div class="subagent-body">
-              <div class="subagent-name">{{ sub.agentName || sub.subagentId }}</div>
-              <div class="subagent-meta">{{ sub.lastTool || sub.currentPhase || sub.status }} · {{ formatAge(sub.ageMs) }}</div>
-            </div>
-            <button class="subagent-stop" @click="confirmInterruptSub(sub)">{{ t('backstage.actions.stop') }}</button>
-          </div>
-        </div>
-
-        <div class="detail-actions">
-          <button class="btn-soft" @click="confirmStop(detail)">{{ t('backstage.actions.stop') }}</button>
-          <button class="btn-strong" @click="confirmRecycle(detail)">{{ t('backstage.actions.endIt') }}</button>
-        </div>
-      </div>
-    </el-drawer>
   </div>
+
+  <BackstageFocusPanel
+    :open="drawerOpen"
+    :run="detail"
+    :subagents="detail ? childrenOf(detail) : []"
+    @close="closeDetail"
+    @stop="confirmStop"
+    @recycle="confirmRecycle"
+    @interrupt-sub="confirmInterruptSub"
+  />
 </template>
 
 <script setup lang="ts">
@@ -219,9 +168,19 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SkillIcon from '@/components/common/SkillIcon.vue'
+import BackstageFocusPanel from '@/components/backstage/BackstageFocusPanel.vue'
+import { useBackstageAgent } from '@/composables/useBackstageAgent'
 import { backstageApi, type BackstageSnapshot, type BackstageRunCard, type BackstageSubagentCard } from '@/api'
 
 const { t } = useI18n()
+const {
+  avatarLetter,
+  avatarBgStyle,
+  ringClass,
+  dotTitle,
+  humanSentence,
+  formatAge,
+} = useBackstageAgent()
 
 type FilterKey = 'all' | 'working' | 'attention' | 'quiet'
 
@@ -307,16 +266,6 @@ const visibleRuns = computed<BackstageRunCard[]>(() => {
   }
 })
 
-/**
- * Last 8 chars of a conversation id, rendered as `#a1b2c3d4` — gives each
- * card a stable serial without leaking the full UUID. Falls back gracefully
- * for short ids.
- */
-function shortId(id: string | null | undefined): string {
-  if (!id) return '——'
-  return id.length <= 8 ? id : id.slice(-8)
-}
-
 // If the filter the user picked no longer matches any rows (e.g., the stuck
 // run resolved itself between refreshes), drop back to All so the page
 // doesn't go inexplicably empty.
@@ -326,66 +275,12 @@ watch(filterOptions, opts => {
   }
 })
 
-function avatarLetter(run: BackstageRunCard | BackstageSubagentCard): string {
-  const name = run.agentName || (run as any).username || (run as any).subagentId || '?'
-  return name.charAt(0).toUpperCase()
-}
-
-/**
- * Soft, low-saturation gradient seeded from agent name. Even when an icon
- * is present we use this as the avatar surface — Apple's wallpaper-behind-
- * icon trick, not a billboard.
- */
-function avatarBgStyle(run: BackstageRunCard | BackstageSubagentCard) {
-  const seed = run.agentName || (run as any).conversationId || (run as any).subagentId || 'x'
-  let h = 0
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0
-  const hue = Math.abs(h) % 360
-  return {
-    background: `linear-gradient(140deg, hsl(${hue}, 55%, 92%), hsl(${(hue + 30) % 360}, 50%, 86%))`,
-    color: `hsl(${hue}, 45%, 28%)`,
-  }
-}
-
 function cardClass(run: BackstageRunCard) {
   return {
     'is-stuck': !!run.stuckReason,
     'is-orphan': run.orphan && !run.stuckReason,
     'is-healthy': !run.stuckReason && !run.orphan,
   }
-}
-
-function dotClass(run: BackstageRunCard | BackstageSubagentCard) {
-  const r = run as BackstageRunCard
-  if (r.stuckReason) return 'dot-stuck'
-  if (r.orphan) return 'dot-orphan'
-  return 'dot-healthy'
-}
-
-function dotTitle(run: BackstageRunCard | BackstageSubagentCard): string {
-  const r = run as BackstageRunCard
-  if (r.stuckReason) return t('backstage.dotTitle.stuck')
-  if (r.orphan) return t('backstage.dotTitle.orphan')
-  return t('backstage.dotTitle.healthy')
-}
-
-function humanSentence(run: BackstageRunCard): string {
-  if (run.stuckReason === 'tool_silent') return t('backstage.saying.toolSilent', { tool: run.runningToolName || t('backstage.aTool') })
-  if (run.stuckReason === 'idle_silent') return t('backstage.saying.idleSilent')
-  if (run.stuckReason === 'hard_cap') return t('backstage.saying.hardCap')
-  if (run.currentPhase === 'awaiting_approval') return t('backstage.saying.awaitingApproval')
-  if (run.runningToolName) return t('backstage.saying.usingTool', { tool: run.runningToolName })
-  if (run.currentPhase === 'executing_tool') return t('backstage.saying.usingSomething')
-  if (run.currentPhase === 'summarizing') return t('backstage.saying.wrappingUp')
-  if (run.currentPhase === 'planning') return t('backstage.saying.planning')
-  if (!run.firstTokenReceived) return t('backstage.saying.thinking')
-  return t('backstage.saying.replying')
-}
-
-function stuckCallout(run: BackstageRunCard): string {
-  if (run.stuckReason === 'tool_silent') return t('backstage.callout.toolSilent', { tool: run.runningToolName || t('backstage.aTool'), time: formatAge(run.msSinceLastEvent) })
-  if (run.stuckReason === 'idle_silent') return t('backstage.callout.idleSilent', { time: formatAge(run.msSinceLastEvent) })
-  return t('backstage.callout.hardCap', { time: formatAge(run.ageMs) })
 }
 
 /**
@@ -403,23 +298,25 @@ function progressFillStyle(run: BackstageRunCard) {
   return { width: `${Math.max(4, pct)}%` }
 }
 
-function formatAge(ms: number): string {
-  if (ms < 1500) return t('backstage.time.justNow')
-  const sec = Math.floor(ms / 1000)
-  if (sec < 60) return t('backstage.time.seconds', { n: sec })
-  const min = Math.floor(sec / 60)
-  if (min < 60) return t('backstage.time.minutes', { n: min, s: sec % 60 })
-  const hr = Math.floor(min / 60)
-  return t('backstage.time.hours', { n: hr, m: min % 60 })
-}
-
 function childrenOf(run: BackstageRunCard): BackstageSubagentCard[] {
   return snapshot.value?.subagents.filter(s => s.parentConversationId === run.conversationId) ?? []
 }
 
 function openDetail(run: BackstageRunCard) {
+  // Clicking the same card while the panel is open closes it — toggle.
+  // Otherwise swap content and (re)open. The focus panel handles its own
+  // enter/leave animations, so all we manage here is the open boolean and
+  // which run is bound.
+  if (drawerOpen.value && detail.value?.conversationId === run.conversationId) {
+    drawerOpen.value = false
+    return
+  }
   detail.value = run
   drawerOpen.value = true
+}
+
+function closeDetail() {
+  drawerOpen.value = false
 }
 
 async function refresh() {
@@ -773,12 +670,106 @@ html.dark .agent-card.is-stuck {
   cursor: default;
 }
 
-/* ===== Top row: avatar + name + dot ===== */
+/* ===== Top row: avatar (with status ring) + name ===== */
 .agent-card-top {
   display: flex;
   align-items: center;
   gap: 14px;
   margin-bottom: 16px;
+}
+
+/*
+ * Status ring lives on a wrap because the inner avatar must keep
+ * `overflow: hidden` (to clip its icon). The ring renders via ::before
+ * on the wrap, free to extend beyond the avatar's box.
+ */
+.agent-avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  /* Reserve room around the avatar so the ring breath doesn't get clipped
+     by the parent flex item bounds. */
+  padding: 4px;
+  margin: -4px;
+}
+
+.agent-avatar-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 19px; /* avatar 16 + 3 outset */
+  border: 2px solid transparent;
+  pointer-events: none;
+  z-index: 0;
+  /* Both transform (scale) and opacity get animated; will-change hints the
+     compositor so we don't repaint the whole card on each frame. */
+  will-change: transform, opacity;
+}
+
+.agent-avatar-wrap.ring-healthy::before {
+  border-color: hsl(155, 55%, 50%);
+  animation: ring-breathe 3s ease-in-out infinite;
+}
+
+.agent-avatar-wrap.ring-stuck::before {
+  border-color: hsl(20, 80%, 55%);
+  border-width: 2px;
+  animation: ring-breathe-slow 6s ease-in-out infinite;
+}
+
+.agent-avatar-wrap.ring-orphan::before {
+  border-color: hsla(265, 50%, 60%, 0.6);
+  animation: ring-breathe-faint 8s ease-in-out infinite;
+}
+
+/*
+ * Thinking: the agent is alive but hasn't streamed yet. A spinner-style
+ * arc — top + right border tinted, the rest transparent — slowly rotates.
+ * Communicates "working on something" without committing to a colour
+ * outcome. Once the first token lands, ringClass flips to ring-healthy.
+ */
+.agent-avatar-wrap.ring-thinking::before {
+  border-color: transparent;
+  border-top-color: hsl(155, 55%, 55%);
+  border-right-color: hsla(155, 55%, 55%, 0.4);
+  animation: ring-spin 1.6s linear infinite;
+}
+
+/* Dark-mode tuning — rings need slightly higher lightness to sit on warm dark surfaces */
+html.dark .agent-avatar-wrap.ring-healthy::before {
+  border-color: hsl(155, 55%, 60%);
+}
+
+html.dark .agent-avatar-wrap.ring-stuck::before {
+  border-color: hsl(20, 75%, 62%);
+}
+
+html.dark .agent-avatar-wrap.ring-orphan::before {
+  border-color: hsla(265, 55%, 70%, 0.7);
+}
+
+html.dark .agent-avatar-wrap.ring-thinking::before {
+  border-top-color: hsl(155, 55%, 65%);
+  border-right-color: hsla(155, 55%, 65%, 0.4);
+}
+
+@keyframes ring-breathe {
+  0%, 100% { opacity: 0.85; transform: scale(1); }
+  50%      { opacity: 0.35; transform: scale(1.06); }
+}
+
+@keyframes ring-breathe-slow {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(1.07); }
+}
+
+@keyframes ring-breathe-faint {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%      { opacity: 0.3; transform: scale(1.015); }
+}
+
+@keyframes ring-spin {
+  to { transform: rotate(360deg); }
 }
 
 .agent-avatar {
@@ -853,76 +844,14 @@ html.dark .agent-avatar {
   letter-spacing: 0.01em;
 }
 
-/* ===== Breathing dot ===== */
-.breathing-dot-wrap {
-  width: 14px;
-  height: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.breathing-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  display: block;
-  position: relative;
-}
-
-.breathing-dot.dot-healthy {
-  background: hsl(155, 55%, 50%);
-  animation: breathe-healthy 3s ease-in-out infinite;
-}
-
-.breathing-dot.dot-healthy::before {
-  content: '';
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  background: hsla(155, 55%, 50%, 0.3);
-  animation: breathe-pulse 3s ease-in-out infinite;
-}
-
-.breathing-dot.dot-stuck {
-  background: hsl(20, 80%, 55%);
-  animation: breathe-slow 4.5s ease-in-out infinite;
-}
-
-.breathing-dot.dot-stuck::before {
-  content: '';
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  background: hsla(20, 80%, 55%, 0.32);
-  animation: breathe-pulse-slow 4.5s ease-in-out infinite;
-}
-
-.breathing-dot.dot-orphan {
-  background: hsl(265, 55%, 62%);
-  animation: breathe-healthy 3.5s ease-in-out infinite;
-  opacity: 0.8;
-}
-
+/*
+ * The empty-state orb still wants its slow breath. Keep this single keyframe
+ * around even though the per-card breathing dots are gone — it's used by
+ * `.empty-orb` below.
+ */
 @keyframes breathe-healthy {
   0%, 100% { opacity: 1;    transform: scale(1); }
   50%      { opacity: 0.7;  transform: scale(0.85); }
-}
-
-@keyframes breathe-slow {
-  0%, 100% { opacity: 1;    transform: scale(1); }
-  50%      { opacity: 0.5;  transform: scale(0.78); }
-}
-
-@keyframes breathe-pulse {
-  0%, 100% { opacity: 0; transform: scale(0.85); }
-  50%      { opacity: 1; transform: scale(1.5); }
-}
-
-@keyframes breathe-pulse-slow {
-  0%, 100% { opacity: 0; transform: scale(0.8); }
-  50%      { opacity: 1; transform: scale(1.7); }
 }
 
 /* ===== Saying ===== */
@@ -959,25 +888,6 @@ html.dark .agent-card.is-stuck .agent-saying {
   letter-spacing: 0.01em;
 }
 
-.meta-id {
-  font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
-  font-size: 10.5px;
-  letter-spacing: 0.02em;
-  color: var(--mc-text-tertiary);
-  padding: 1px 7px;
-  border-radius: 4px;
-  background: var(--mc-bg-muted);
-  border: 1px solid var(--mc-border-light);
-  opacity: 0.85;
-  cursor: default;
-}
-
-html.dark .meta-id {
-  /* Slightly lift contrast on the warm-dark surface */
-  background: rgba(255, 255, 255, 0.04);
-  border-color: var(--mc-border-light);
-}
-
 .meta-pill {
   padding: 2px 9px;
   border-radius: 999px;
@@ -1012,12 +922,86 @@ html.dark .meta-id {
   background: linear-gradient(90deg, hsl(28, 80%, 60%), hsl(20, 80%, 55%));
 }
 
-/* ===== Foot ===== */
+/* ===== Foot: subagent stack (left) + actions (right) ===== */
 .agent-card-foot {
   display: flex;
   gap: 8px;
-  justify-content: flex-end;
+  align-items: center;
   margin-top: 4px;
+}
+
+.card-foot-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+/*
+ * Subagent stack — overlapping circular avatars, like Linear's assignee
+ * column. Up to 3 visible; the rest collapse into a "+N" chip.
+ * Replaces the old "{n} 个帮手" pill: subagents are good news, they
+ * deserve faces, not a count.
+ */
+.subagent-stack {
+  display: inline-flex;
+  align-items: center;
+}
+
+.subagent-chip {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  border: 2px solid var(--mc-bg-elevated);
+  margin-left: -7px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+  cursor: default;
+}
+
+.subagent-chip:first-child {
+  margin-left: 0;
+}
+
+.subagent-chip :deep(.skill-icon) {
+  width: 100% !important;
+  height: 100% !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.subagent-chip :deep(.skill-icon__glyph) {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.sub-chip-letter {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.subagent-overflow {
+  background: var(--mc-bg-muted) !important;
+  color: var(--mc-text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+html.dark .subagent-chip {
+  border-color: var(--mc-bg-elevated);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+html.dark .subagent-overflow {
+  background: rgba(255, 255, 255, 0.06) !important;
 }
 
 .card-action {
@@ -1081,229 +1065,4 @@ html.dark .card-action-strong {
   color: var(--mc-text-tertiary);
 }
 
-/* ===== Detail drawer ===== */
-.detail-pane {
-  padding: 28px 28px 24px;
-}
-
-.detail-header {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-bottom: 20px;
-}
-
-.detail-avatar {
-  width: 56px;
-  height: 56px;
-  border-radius: 18px;
-}
-
-.detail-avatar :deep(.skill-icon__glyph) {
-  font-size: 32px;
-}
-
-.detail-avatar .agent-avatar-letter {
-  font-size: 22px;
-}
-
-.detail-title-block {
-  flex: 1;
-  min-width: 0;
-}
-
-.detail-title {
-  font-size: 19px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--mc-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.2;
-}
-
-.detail-subtitle {
-  font-size: 12.5px;
-  color: var(--mc-text-tertiary);
-  margin-top: 2px;
-}
-
-.detail-dot {
-  flex-shrink: 0;
-}
-
-.detail-saying {
-  font-size: 15px;
-  line-height: 1.6;
-  color: var(--mc-text-primary);
-  margin: 0 0 18px;
-  letter-spacing: -0.005em;
-}
-
-.detail-warn {
-  color: hsl(265, 50%, 50%);
-}
-
-.detail-callout {
-  margin-bottom: 22px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  background: hsla(20, 100%, 96%, 0.9);
-  color: hsl(20, 70%, 35%);
-  font-size: 13px;
-  line-height: 1.55;
-  border: 1px solid hsla(20, 80%, 55%, 0.22);
-}
-
-html.dark .detail-callout {
-  background: hsla(20, 35%, 18%, 0.7);
-  color: hsl(28, 80%, 76%);
-}
-
-.detail-grid {
-  margin: 0 0 24px;
-  border-top: 1px solid var(--mc-border-light);
-}
-
-.detail-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  padding: 13px 0;
-  border-bottom: 1px solid var(--mc-border-light);
-  margin: 0;
-}
-
-.detail-row dt {
-  font-size: 12px;
-  color: var(--mc-text-tertiary);
-  margin: 0;
-  letter-spacing: 0.01em;
-}
-
-.detail-row dd {
-  font-size: 13.5px;
-  color: var(--mc-text-primary);
-  margin: 0;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.detail-section {
-  margin-top: 8px;
-}
-
-.detail-section-title {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  color: var(--mc-text-tertiary);
-  text-transform: uppercase;
-  margin-bottom: 10px;
-  font-weight: 600;
-}
-
-.subagent-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: var(--mc-bg-muted);
-  margin-bottom: 6px;
-}
-
-.subagent-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  font-size: 14px;
-  overflow: hidden;
-}
-
-.subagent-icon :deep(.skill-icon__glyph) {
-  font-size: 18px;
-}
-
-.sub-letter {
-  font-size: 13px;
-}
-
-.subagent-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.subagent-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--mc-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.subagent-meta {
-  font-size: 11px;
-  color: var(--mc-text-tertiary);
-  margin-top: 1px;
-}
-
-.subagent-stop {
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--mc-border-light);
-  background: rgba(255, 255, 255, 0.6);
-  font-size: 11px;
-  cursor: pointer;
-  color: var(--mc-text-secondary);
-}
-
-.subagent-stop:hover {
-  background: var(--mc-surface-overlay);
-}
-
-.detail-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-  margin-top: 28px;
-}
-
-.btn-soft,
-.btn-strong {
-  padding: 9px 20px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  border: none;
-}
-
-.btn-soft {
-  background: var(--mc-bg-muted);
-  border: 1px solid var(--mc-border-light);
-  color: var(--mc-text-secondary);
-}
-
-.btn-soft:hover {
-  background: var(--mc-surface-overlay);
-  color: var(--mc-text-primary);
-}
-
-.btn-strong {
-  background: linear-gradient(135deg, hsl(20, 80%, 56%), hsl(15, 80%, 50%));
-  color: white;
-  box-shadow: 0 4px 14px -4px hsla(20, 80%, 50%, 0.45);
-}
-
-.btn-strong:hover {
-  box-shadow: 0 6px 20px -4px hsla(20, 80%, 50%, 0.55);
-  transform: translateY(-1px);
-}
 </style>

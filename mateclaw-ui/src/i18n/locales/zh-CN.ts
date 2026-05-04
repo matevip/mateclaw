@@ -1553,6 +1553,7 @@ export default {
       noOneListening: '当前没有人在看这个对话。',
       peopleListening: '{n} 人在看',
       helpers: '帮手',
+      session: '会话',
     },
     actions: {
       live: '实时',
@@ -1564,6 +1565,7 @@ export default {
       stopHint: '让它在下个检查点停下来。',
       endIt: '强制结束',
       endHint: '立即强制停止。',
+      close: '关闭',
     },
     confirm: {
       stopTitle: '让这个智能体停下吗？',

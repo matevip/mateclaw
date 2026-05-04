@@ -373,6 +373,7 @@ export default {
       noOneListening: 'No one watching the chat right now.',
       peopleListening: '{n} listening',
       helpers: 'Helpers',
+      session: 'Session',
     },
     actions: {
       live: 'Live',
@@ -384,6 +385,7 @@ export default {
       stopHint: 'Ask it to wind down at the next checkpoint.',
       endIt: 'End it',
       endHint: 'Force it to stop now.',
+      close: 'Close',
     },
     confirm: {
       stopTitle: 'Stop this agent?',
