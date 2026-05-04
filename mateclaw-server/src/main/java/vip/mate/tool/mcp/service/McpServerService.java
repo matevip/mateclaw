@@ -2,6 +2,7 @@ package vip.mate.tool.mcp.service;
 
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -313,15 +314,16 @@ public class McpServerService {
 
     private void updateStatus(Long id, String status, String error, int toolCount) {
         try {
-            McpServerEntity update = new McpServerEntity();
-            update.setId(id);
-            update.setLastStatus(status);
-            update.setLastError(error);
-            update.setToolCount(toolCount);
+            LambdaUpdateWrapper<McpServerEntity> wrapper = new LambdaUpdateWrapper<>();
+            wrapper.eq(McpServerEntity::getId, id);
+            wrapper.set(McpServerEntity::getLastStatus, status);
+            wrapper.set(McpServerEntity::getLastError, error);
+            wrapper.set(McpServerEntity::getToolCount, toolCount);
             if ("connected".equals(status)) {
-                update.setLastConnectedTime(LocalDateTime.now());
+                wrapper.set(McpServerEntity::getLastConnectedTime, LocalDateTime.now());
             }
-            mcpServerMapper.updateById(update);
+            wrapper.set(McpServerEntity::getUpdateTime, LocalDateTime.now());
+            mcpServerMapper.update(null, wrapper);
         } catch (Exception e) {
             log.warn("Failed to update MCP server status: {}", e.getMessage());
         }
