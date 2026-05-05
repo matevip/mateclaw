@@ -269,7 +269,6 @@ public class McpClientManager {
         // Args
         if (server.getArgsJson() != null && !server.getArgsJson().isBlank()) {
             List<String> args = JSONUtil.toList(server.getArgsJson(), String.class);
-            args = args.stream().map(McpClientManager::expandEnvVars).toList();
             builder.args(args);
         }
 
@@ -377,22 +376,17 @@ public class McpClientManager {
     }
 
     /**
-     * 展开系统属性和环境变量引用，如 ${user.home}、${ENV_VAR} 或 $ENV_VAR
+     * 展开环境变量引用，如 ${ENV_VAR} 或 $ENV_VAR
      * <p>
-     * 先处理 ${VAR}（精确匹配，JVM 系统属性优先于环境变量，
-     * 这样 ${user.home} 等跨平台占位符在 Windows 上也能解析），
-     * 再用正则处理 $VAR（word boundary），避免 $PATH 误替换 $PATH_HOME 的问题。
+     * 先处理 ${VAR}（精确匹配），再用正则处理 $VAR（word boundary），
+     * 避免 $PATH 误替换 $PATH_HOME 的问题。
      */
     private static String expandEnvVars(String value) {
         if (value == null || !value.contains("$")) {
             return value;
         }
         String result = value;
-        // Phase 1a: ${VAR} 优先匹配 JVM system property（如 ${user.home}、${java.io.tmpdir}）
-        for (String key : System.getProperties().stringPropertyNames()) {
-            result = result.replace("${" + key + "}", System.getProperty(key));
-        }
-        // Phase 1b: ${VAR} 回退匹配 OS 环境变量
+        // Phase 1: 精确匹配 ${VAR} 模式（不会误替换）
         for (Map.Entry<String, String> env : System.getenv().entrySet()) {
             result = result.replace("${" + env.getKey() + "}", env.getValue());
         }
