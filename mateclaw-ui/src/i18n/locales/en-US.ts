@@ -599,6 +599,16 @@ export default {
       oauthHint: 'Sign in with your OpenAI account to use ChatGPT Plus/Pro member quota (not API credits).',
       oauthLoginSuccess: 'OpenAI OAuth login successful',
       oauthRevokeSuccess: 'OpenAI OAuth disconnected',
+      // Device Authorization Grant (used for remote deployments where the browser
+      // cannot reach localhost:1455 for the PKCE callback).
+      oauthDeviceTitle: 'Sign in to ChatGPT (Device Code)',
+      oauthDeviceStep1: '1. Open this link in any browser or on your phone:',
+      oauthDeviceStep2: '2. Enter this verification code:',
+      oauthDeviceStep3: 'This page will connect automatically once you finish ({seconds}s remaining)',
+      oauthDeviceExpired: 'The device code expired. Please try again.',
+      copy: 'Copy',
+      copied: 'Copied',
+      copyFailed: 'Clipboard refused — please select and copy manually',
       // RFC-062: Claude Code OAuth (subscription piggyback)
       claudeCodeOauthDetect: 'Detect Claude Code Login',
       claudeCodeOauthHint: 'Reuses your local Claude Code Pro/Max subscription. Sign in via the Claude Code app first, then click "Detect" to pick up the credentials.',

@@ -6,6 +6,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
+import vip.mate.llm.oauth.OpenAIDeviceCodeService;
+import vip.mate.llm.oauth.OpenAIDeviceCodeService.DeviceCodePollResult;
+import vip.mate.llm.oauth.OpenAIDeviceCodeService.DeviceCodeStartResult;
 import vip.mate.llm.oauth.OpenAIOAuthService;
 import vip.mate.llm.oauth.OpenAIOAuthService.OAuthAuthorizeResult;
 import vip.mate.llm.oauth.OpenAIOAuthService.OAuthStatusResult;
@@ -17,6 +20,7 @@ import vip.mate.llm.oauth.OpenAIOAuthService.OAuthStatusResult;
 public class OAuthController {
 
     private final OpenAIOAuthService oauthService;
+    private final OpenAIDeviceCodeService deviceCodeService;
 
     @Operation(summary = "获取 OAuth 授权 URL（自动选 LOCAL / MANUAL_PASTE 模式）")
     @GetMapping("/authorize")
@@ -45,6 +49,28 @@ public class OAuthController {
 
     /** Request body for {@link #callbackPaste(PasteRequest)}. */
     public record PasteRequest(String callbackUrl) {}
+
+    @Operation(summary = "Device flow: start — request user_code")
+    @PostMapping("/device/start")
+    public R<DeviceCodeStartResult> deviceStart() {
+        return R.ok(deviceCodeService.start());
+    }
+
+    @Operation(summary = "Device flow: poll for completion")
+    @PostMapping("/device/poll")
+    public R<DeviceCodePollResult> devicePoll(@RequestBody DeviceRequest request) {
+        return R.ok(deviceCodeService.poll(request.deviceAuthId()));
+    }
+
+    @Operation(summary = "Device flow: cancel a pending session")
+    @PostMapping("/device/cancel")
+    public R<Void> deviceCancel(@RequestBody DeviceRequest request) {
+        deviceCodeService.cancel(request.deviceAuthId());
+        return R.ok();
+    }
+
+    /** Request body for {@link #devicePoll} / {@link #deviceCancel}. */
+    public record DeviceRequest(String deviceAuthId) {}
 
     @Operation(summary = "手动刷新 Token")
     @PostMapping("/refresh")

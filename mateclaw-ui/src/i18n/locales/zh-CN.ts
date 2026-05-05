@@ -485,6 +485,16 @@ export default {
       oauthHint: '通过 OAuth 登录 OpenAI 账号，使用 ChatGPT Plus/Pro 会员额度（非 API 额度）。',
       oauthLoginSuccess: 'OpenAI OAuth 登录成功',
       oauthRevokeSuccess: '已断开 OpenAI OAuth 连接',
+      // Device Authorization Grant (used for remote deployments where the browser
+      // cannot reach localhost:1455 for the PKCE callback).
+      oauthDeviceTitle: '使用设备授权登录 ChatGPT',
+      oauthDeviceStep1: '1. 在任意浏览器或手机打开下面的链接：',
+      oauthDeviceStep2: '2. 输入下方验证码完成授权：',
+      oauthDeviceStep3: '完成后此页面将自动连接（{seconds} 秒内有效）',
+      oauthDeviceExpired: '设备授权码已过期，请重试',
+      copy: '复制',
+      copied: '已复制',
+      copyFailed: '浏览器拒绝复制，请手动选取',
       // RFC-062：Claude Code OAuth（订阅复用）
       claudeCodeOauthDetect: '检测 Claude Code 登录态',
       claudeCodeOauthHint: '复用本地 Claude Code Pro/Max 订阅。请先在 Claude Code 客户端中登录，再点击"检测"读取凭据。',

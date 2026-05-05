@@ -472,6 +472,15 @@ export const oauthApi = {
   status: () => http.get('/oauth/openai/status'),
   refresh: () => http.post('/oauth/openai/refresh'),
   revoke: () => http.delete('/oauth/openai/revoke'),
+  callbackPaste: (callbackUrl: string) =>
+    http.post('/oauth/openai/callback-paste', { callbackUrl }),
+  // Device Authorization Grant — used when MateClaw runs on a remote host so the
+  // browser cannot reach localhost:1455 for the PKCE callback.
+  deviceStart: () => http.post('/oauth/openai/device/start'),
+  devicePoll: (deviceAuthId: string) =>
+    http.post('/oauth/openai/device/poll', { deviceAuthId }),
+  deviceCancel: (deviceAuthId: string) =>
+    http.post('/oauth/openai/device/cancel', { deviceAuthId }),
 }
 
 // RFC-062: Claude Code OAuth piggybacks on the user's local Claude Code
