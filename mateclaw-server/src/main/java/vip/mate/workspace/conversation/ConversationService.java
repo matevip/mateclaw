@@ -308,6 +308,30 @@ public class ConversationService {
     }
 
     /**
+     * Persist an assistant placeholder marker only when the last message is a
+     * user turn (i.e., the assistant never got to reply). Used by the admin
+     * force-recycle path so a torn-down turn leaves a visible "已被用户中止"
+     * marker instead of an empty conversation. Idempotent: if the previous
+     * emergency-save path already wrote an assistant row, this is a no-op.
+     *
+     * @return the saved message, or {@code null} if the marker was not needed
+     */
+    @Transactional
+    public MessageEntity saveStopMarkerIfDangling(String conversationId, String markerText, String status) {
+        List<MessageEntity> recent = messageMapper.selectList(
+                new LambdaQueryWrapper<MessageEntity>()
+                        .eq(MessageEntity::getConversationId, conversationId)
+                        .orderByDesc(MessageEntity::getCreateTime)
+                        .orderByDesc(MessageEntity::getId)
+                        .last("LIMIT 1"));
+        if (recent.isEmpty()) return null;
+        MessageEntity last = recent.get(0);
+        if (!"user".equals(last.getRole())) return null;
+        return saveMessage(conversationId, "assistant", markerText, null,
+                status != null ? status : "stopped");
+    }
+
+    /**
      * 获取会话最后一条消息内容（用于 rate limit 防护等场景）
      */
     public String getLastMessage(String conversationId) {

@@ -233,6 +233,22 @@ public class ChatStreamTracker {
 
     private final ConcurrentHashMap<String, RunState> runs = new ConcurrentHashMap<>();
 
+    /**
+     * Conversations whose run was force-recycled by an admin. Maps to the
+     * recycle timestamp so a scheduled cleanup can age entries out (TTL
+     * matches {@link #DONE_RETENTION_MS} — long enough that any in-flight
+     * doOnComplete / doOnError firing after the dispose still finds the
+     * marker, short enough not to leak across sessions).
+     * <p>
+     * Read by the SSE doOn* handlers in ChatController to skip a duplicate
+     * saveMessage when the recycle path already wrote the "[已被用户中止]"
+     * placeholder. Without this, the agent's late-yielding doOnComplete
+     * inserts a second assistant row carrying whatever the agent produced
+     * after the user pressed stop — exactly the behavior the user does
+     * <em>not</em> want when force-recycling.
+     */
+    private final ConcurrentHashMap<String, Long> recycledConversations = new ConcurrentHashMap<>();
+
     /** 事件 relay：子会话事件转发到父会话（用于 Agent 委派进度可见性） */
     private final ConcurrentHashMap<String, List<java.util.function.BiConsumer<String, String>>> eventRelays = new ConcurrentHashMap<>();
 
@@ -451,6 +467,15 @@ public class ChatStreamTracker {
                 log.info("[ChatStreamTracker] Reset stale stopRequested on register: {}", conversationId);
             }
         }
+        // Clear the force-recycle marker on new registration — the recycle
+        // tombstone is meant to suppress the late doOnComplete of the
+        // *recycled* run only, not future turns on the same conversation. If
+        // the user re-prompts ("继续", "重试", a new question, etc.) inside
+        // the 5-min TTL, this turn must be allowed to save its assistant
+        // message normally.
+        if (recycledConversations.remove(conversationId) != null) {
+            log.info("[ChatStreamTracker] Cleared recycle marker on new register: {}", conversationId);
+        }
         startHeartbeat(conversationId);
         log.debug("Stream registered: {}", conversationId);
     }
@@ -504,6 +529,23 @@ public class ChatStreamTracker {
     public boolean isStopRequested(String conversationId) {
         RunState state = runs.get(conversationId);
         return state != null && state.stopRequested.get();
+    }
+
+    /**
+     * Whether this conversation was force-recycled by an admin within the
+     * recycle marker's TTL ({@link #DONE_RETENTION_MS}). The SSE doOn*
+     * handlers consult this to skip a duplicate saveMessage when the recycle
+     * path already wrote the placeholder. Survives {@code runs.remove(...)},
+     * unlike {@link #isStopRequested(String)}.
+     */
+    public boolean isRecycled(String conversationId) {
+        Long ts = recycledConversations.get(conversationId);
+        if (ts == null) return false;
+        if (System.currentTimeMillis() - ts > DONE_RETENTION_MS) {
+            recycledConversations.remove(conversationId);
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -1454,6 +1496,11 @@ public class ChatStreamTracker {
             log.info("[SSE] Cleanup completed: evicted {} stale RunState entries, {} remaining",
                     evicted, runs.size());
         }
+
+        // Age out the recycled-marker map alongside RunState cleanup. Same
+        // 5-minute retention so a delayed doOnComplete still hits the marker
+        // while we don't keep entries around forever.
+        recycledConversations.entrySet().removeIf(e -> now - e.getValue() > DONE_RETENTION_MS);
     }
 
     /**
@@ -1603,6 +1650,10 @@ public class ChatStreamTracker {
     public boolean forceRecycle(String conversationId) {
         RunState state = runs.get(conversationId);
         if (state == null) return false;
+        // Mark BEFORE dispose so a doOnComplete that fires the same millisecond
+        // (the upstream agent flux had already buffered/completed concurrently
+        // with the dispose call) sees the recycled flag and skips its save.
+        recycledConversations.put(conversationId, System.currentTimeMillis());
         // Persist any partial assistant content first — dispose() only severs
         // the downstream subscription, the agent's worker thread keeps running
         // and may not yield for minutes. Without this, the conversation row

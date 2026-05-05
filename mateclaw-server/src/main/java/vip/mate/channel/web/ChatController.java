@@ -308,7 +308,22 @@ public class ChatController {
                             })
                             .doOnComplete(() -> {
                                 if (!finalized.compareAndSet(false, true)) return;
-                                // RFC-067 §4.6: replay can re-trigger an approval (the approved tool
+                                // Force-recycle short-circuit: see main doOnComplete below.
+                                if (streamTracker.isRecycled(conversationId)) {
+                                    log.info("SSE replay doOnComplete skipped for force-recycled conversation: {}", conversationId);
+                                    try {
+                                        conversationService.updateStreamStatus(conversationId, "idle");
+                                    } catch (Exception e) {
+                                        log.debug("recycled-skip: stream_status reset failed for {}: {}",
+                                                conversationId, e.getMessage());
+                                    }
+                                    ChatStreamTracker.CompletionResult cr = streamTracker.completeAndConsumeIfLast(conversationId);
+                                    if (cr.allDone()) {
+                                        completeEmitterQuietly(emitter, approvalEmitterDone);
+                                    }
+                                    return;
+                                }
+                                // Replay can re-trigger an approval (the approved tool
                                 // call may chain into another guarded tool). Derive status the same
                                 // way as the normal stream so awaiting_approval doesn't get masked
                                 // as completed.
@@ -356,6 +371,22 @@ public class ChatController {
                             })
                             .doOnError(e -> {
                                 if (!finalized.compareAndSet(false, true)) return;
+                                // Force-recycle short-circuit: see main doOnComplete below.
+                                if (streamTracker.isRecycled(conversationId)) {
+                                    log.info("SSE replay doOnError skipped for force-recycled conversation: {}, cause={}",
+                                            conversationId, e.getMessage());
+                                    try {
+                                        conversationService.updateStreamStatus(conversationId, "idle");
+                                    } catch (Exception ex) {
+                                        log.debug("recycled-skip: stream_status reset failed for {}: {}",
+                                                conversationId, ex.getMessage());
+                                    }
+                                    ChatStreamTracker.CompletionResult cr = streamTracker.completeAndConsumeIfLast(conversationId);
+                                    if (cr.allDone()) {
+                                        completeEmitterQuietly(emitter, approvalEmitterDone);
+                                    }
+                                    return;
+                                }
 
                                 boolean isUserStop = e instanceof java.util.concurrent.CancellationException
                                         || (e.getCause() instanceof java.util.concurrent.CancellationException);
@@ -503,6 +534,36 @@ public class ChatController {
                         })
                         .doOnComplete(() -> {
                             if (!finalized.compareAndSet(false, true)) return;
+                            // Force-recycle: the recycle path already wrote a
+                            // "[已被用户中止]" placeholder (or the partial
+                            // content via emergencySave). The agent's flux may
+                            // have completed the same millisecond — skip its
+                            // save + broadcast so we don't append a duplicate
+                            // assistant row below the placeholder. Cleanup
+                            // still runs so queue draining + emitter close
+                            // happen normally.
+                            if (streamTracker.isRecycled(conversationId)) {
+                                log.info("SSE doOnComplete skipped for force-recycled conversation: {}", conversationId);
+                                streamTracker.clearInterruptState(conversationId);
+                                // Defensive: keep DB stream_status consistent with the
+                                // "this turn is over" reality even when we skip the
+                                // save. Force-recycle's controller path already wrote
+                                // 'idle' for the recycled run, so this is normally a
+                                // no-op — but if a register() ever fails to clear the
+                                // marker (e.g. a different turn snuck through), this
+                                // prevents the row leaking at 'running' across refresh.
+                                try {
+                                    conversationService.updateStreamStatus(conversationId, "idle");
+                                } catch (Exception e) {
+                                    log.debug("recycled-skip: stream_status reset failed for {}: {}",
+                                            conversationId, e.getMessage());
+                                }
+                                ChatStreamTracker.CompletionResult cr = streamTracker.completeAndConsumeIfLast(conversationId);
+                                if (cr.allDone()) {
+                                    completeEmitterQuietly(emitter, emitterDone);
+                                }
+                                return;
+                            }
                             // 区分四种完成语义：
                             // 1. 正常完成（stopRequested=false）→ completed
                             // 2. 用户主动停止 → stopped
@@ -609,6 +670,22 @@ public class ChatController {
                             boolean wasFirst = finalized.compareAndSet(false, true);
                             log.info("SSE doOnCancel fired: conversationId={}, wasFirst={}", conversationId, wasFirst);
                             if (!wasFirst) return;
+                            // Force-recycle short-circuit: see doOnComplete above.
+                            if (streamTracker.isRecycled(conversationId)) {
+                                log.info("SSE doOnCancel skipped for force-recycled conversation: {}", conversationId);
+                                streamTracker.clearInterruptState(conversationId);
+                                try {
+                                    conversationService.updateStreamStatus(conversationId, "idle");
+                                } catch (Exception e) {
+                                    log.debug("recycled-skip: stream_status reset failed for {}: {}",
+                                            conversationId, e.getMessage());
+                                }
+                                ChatStreamTracker.CompletionResult cr = streamTracker.completeAndConsumeIfLast(conversationId);
+                                if (cr.allDone()) {
+                                    completeEmitterQuietly(emitter, emitterDone);
+                                }
+                                return;
+                            }
                             // 区分用户主动停止和 interrupt-with-followup
                             ChatStreamTracker.InterruptType interruptType = streamTracker.getInterruptType(conversationId);
                             boolean isInterruptFollowup = interruptType == ChatStreamTracker.InterruptType.USER_INTERRUPT_WITH_FOLLOWUP;
@@ -674,6 +751,23 @@ public class ChatController {
                             boolean wasFirst = finalized.compareAndSet(false, true);
                             if (!wasFirst) {
                                 log.info("SSE doOnError skipped (finalized by doOnCancel): conversationId={}", conversationId);
+                                return;
+                            }
+                            // Force-recycle short-circuit: see doOnComplete above.
+                            if (streamTracker.isRecycled(conversationId)) {
+                                log.info("SSE doOnError skipped for force-recycled conversation: {}, cause={}",
+                                        conversationId, e.getMessage());
+                                streamTracker.clearInterruptState(conversationId);
+                                try {
+                                    conversationService.updateStreamStatus(conversationId, "idle");
+                                } catch (Exception ex) {
+                                    log.debug("recycled-skip: stream_status reset failed for {}: {}",
+                                            conversationId, ex.getMessage());
+                                }
+                                ChatStreamTracker.CompletionResult cr = streamTracker.completeAndConsumeIfLast(conversationId);
+                                if (cr.allDone()) {
+                                    completeEmitterQuietly(emitter, emitterDone);
+                                }
                                 return;
                             }
 
