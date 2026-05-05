@@ -59,6 +59,10 @@ VALUES ('aliyun-codingplan', 'Aliyun Coding Plan', 'sk-sp', 'OpenAIChatModel', '
 ON DUPLICATE KEY UPDATE name=VALUES(name), api_key_prefix=VALUES(api_key_prefix), chat_model=VALUES(chat_model), api_key=VALUES(api_key), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), is_custom=VALUES(is_custom), is_local=VALUES(is_local), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
 
 INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+VALUES ('aliyun-codingplan-intl', 'Aliyun Coding Plan (International)', 'sk-sp', 'OpenAIChatModel', '', 'https://coding-intl.dashscope.aliyuncs.com/v1', '{}', FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name=VALUES(name), api_key_prefix=VALUES(api_key_prefix), chat_model=VALUES(chat_model), api_key=VALUES(api_key), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), is_custom=VALUES(is_custom), is_local=VALUES(is_local), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
+
+INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
 VALUES ('bailian-team', 'Bailian Token Plan', 'sk-', 'OpenAIChatModel', '', 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', '{}', FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name=VALUES(name), api_key_prefix=VALUES(api_key_prefix), chat_model=VALUES(chat_model), api_key=VALUES(api_key), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), is_custom=VALUES(is_custom), is_local=VALUES(is_local), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
 
@@ -134,6 +138,14 @@ INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, 
 VALUES ('volcengine-plan', 'Volcano Engine Coding Plan', '', 'OpenAIChatModel', '', 'https://ark.cn-beijing.volces.com/api/coding/v3', '{}', FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name=VALUES(name), chat_model=VALUES(chat_model), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
 
+INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+VALUES ('zhipu-cn-codingplan', 'Zhipu Coding Plan (BigModel)', '', 'OpenAIChatModel', '', 'https://open.bigmodel.cn/api/coding/paas/v4', '{"completionsPath":"/chat/completions"}', FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name=VALUES(name), chat_model=VALUES(chat_model), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
+
+INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+VALUES ('zhipu-intl-codingplan', 'Zhipu Coding Plan (Z.AI)', '', 'OpenAIChatModel', '', 'https://api.z.ai/api/coding/paas/v4', '{"completionsPath":"/chat/completions"}', FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name=VALUES(name), chat_model=VALUES(chat_model), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
+
 INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, auth_type, create_time, update_time)
 VALUES ('openai-chatgpt', 'OpenAI ChatGPT (OAuth)', '', 'ChatGPTChatModel', '', 'https://chatgpt.com/backend-api', '{}', FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, 'oauth', NOW(), NOW())
 ON DUPLICATE KEY UPDATE name=VALUES(name), chat_model=VALUES(chat_model), base_url=VALUES(base_url), auth_type=VALUES(auth_type), update_time=VALUES(update_time);
@@ -203,6 +215,16 @@ VALUES
 (1000000111, 'Qwen3 Max 2026-01-23', 'aliyun-codingplan', 'qwen3-max-2026-01-23', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000112, 'Qwen3 Coder Next', 'aliyun-codingplan', 'qwen3-coder-next', '', 0.2, 8192, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000113, 'Qwen3 Coder Plus', 'aliyun-codingplan', 'qwen3-coder-plus', '', 0.2, 8192, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000162, 'Qwen3.6 Plus',         'aliyun-codingplan',      'qwen3.6-plus',         'Aliyun Coding Plan — Qwen3.6 Plus flagship',                  0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000241, 'Qwen3.6 Plus',         'aliyun-codingplan-intl', 'qwen3.6-plus',         'Aliyun Coding Plan (Intl) — Qwen3.6 Plus flagship',           0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000242, 'Qwen3.5 Plus',         'aliyun-codingplan-intl', 'qwen3.5-plus',         'Aliyun Coding Plan (Intl) — Qwen3.5 balanced',                0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000243, 'GLM-5',                'aliyun-codingplan-intl', 'glm-5',                'Aliyun Coding Plan (Intl) — GLM-5 hosted on DashScope',       0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000244, 'GLM-4.7',              'aliyun-codingplan-intl', 'glm-4.7',              'Aliyun Coding Plan (Intl) — GLM-4.7 hosted on DashScope',     0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000245, 'MiniMax M2.5',         'aliyun-codingplan-intl', 'MiniMax-M2.5',         'Aliyun Coding Plan (Intl) — MiniMax M2.5 hosted on DashScope', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000246, 'Kimi K2.5',            'aliyun-codingplan-intl', 'kimi-k2.5',            'Aliyun Coding Plan (Intl) — Kimi K2.5 hosted on DashScope',   0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000247, 'Qwen3 Max 2026-01-23', 'aliyun-codingplan-intl', 'qwen3-max-2026-01-23', 'Aliyun Coding Plan (Intl) — Qwen3 Max pinned snapshot',       0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000248, 'Qwen3 Coder Next',     'aliyun-codingplan-intl', 'qwen3-coder-next',     'Aliyun Coding Plan (Intl) — Qwen3 Coder Next, agentic coding', 0.2, 8192, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000249, 'Qwen3 Coder Plus',     'aliyun-codingplan-intl', 'qwen3-coder-plus',     'Aliyun Coding Plan (Intl) — Qwen3 Coder Plus, agentic coding', 0.2, 8192, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000400, 'Qwen 3.6 Plus',      'bailian-team', 'qwen3.6-plus',       'Bailian Token Plan — Qwen flagship reasoning model with vision and text generation', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000401, 'DeepSeek V3.2',      'bailian-team', 'deepseek-v3.2',      'Bailian Token Plan — DeepSeek latest reasoning model',                              0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000402, 'GLM-5',              'bailian-team', 'glm-5',              'Bailian Token Plan — Zhipu GLM-5 text generation model',                            0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
@@ -304,6 +326,14 @@ VALUES
 (1000000221, 'GLM-5V-Turbo', 'zhipu-intl', 'glm-5v-turbo', 'Multimodal vision model (International, recommended)', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000222, 'GLM-5', 'zhipu-intl', 'glm-5', 'Flagship model (International)', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000223, 'GLM-5.1', 'zhipu-intl', 'glm-5.1', 'Latest flagship model (International)', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000230, 'GLM-5 Coding',       'zhipu-cn-codingplan',   'glm-5',       'Zhipu Coding Plan — GLM-5 flagship',                    0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000231, 'GLM-5.1 Coding',     'zhipu-cn-codingplan',   'glm-5.1',     'Zhipu Coding Plan — GLM-5.1 latest flagship',           0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000232, 'GLM-5-Turbo Coding', 'zhipu-cn-codingplan',   'glm-5-turbo', 'Zhipu Coding Plan — GLM-5 fast variant',                0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000233, 'GLM-4.7 Coding',     'zhipu-cn-codingplan',   'glm-4.7',     'Zhipu Coding Plan — GLM-4.7',                           0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000234, 'GLM-5 Coding',       'zhipu-intl-codingplan', 'glm-5',       'Zhipu Coding Plan — GLM-5 flagship (International)',    0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000235, 'GLM-5.1 Coding',     'zhipu-intl-codingplan', 'glm-5.1',     'Zhipu Coding Plan — GLM-5.1 flagship (International)',  0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000236, 'GLM-5-Turbo Coding', 'zhipu-intl-codingplan', 'glm-5-turbo', 'Zhipu Coding Plan — GLM-5 fast (International)',        0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000237, 'GLM-4.7 Coding',     'zhipu-intl-codingplan', 'glm-4.7',     'Zhipu Coding Plan — GLM-4.7 (International)',           0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000310, 'Doubao Seed 1.8', 'volcengine', 'doubao-seed-1-8-251228', 'Doubao flagship multimodal model, text + image, 256K context', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000311, 'Doubao Seed Code Preview', 'volcengine', 'doubao-seed-code-preview-251028', 'Doubao code preview model, text + image, 256K context', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000312, 'Kimi K2.5', 'volcengine', 'kimi-k2-5-260127', 'Kimi K2.5 (hosted on Volcano Ark), text + image, 256K context', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
