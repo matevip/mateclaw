@@ -11,6 +11,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 import vip.mate.exception.MateClawException;
 import vip.mate.llm.model.*;
+import vip.mate.llm.oauth.OpenAIOAuthService;
 
 import java.time.Duration;
 import java.util.*;
@@ -30,6 +31,36 @@ public class ModelDiscoveryService {
     private final ModelProviderService modelProviderService;
     private final ModelConfigService modelConfigService;
     private final ObjectMapper objectMapper;
+    private final OpenAIOAuthService openAIOAuthService;
+
+    /**
+     * The Codex models endpoint that the ChatGPT subscription OAuth path exposes.
+     * Returns a JSON object {@code {"models": [{slug, supported_in_api, visibility,
+     * priority, ...}]}} once authenticated with a Bearer access token.
+     */
+    static final String CHATGPT_CODEX_MODELS_URL =
+            "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0";
+
+    /**
+     * Synthetic forward-compat catalog: when a newer Codex slug is not surfaced
+     * by the live API but a known older sibling is, append the newer slug so
+     * users can opt into models OpenAI is rolling out without waiting for the
+     * metadata to flip. Mirrors the upstream Codex CLI behaviour.
+     */
+    private static final List<Map.Entry<String, List<String>>> CHATGPT_FORWARD_COMPAT =
+            List.of(
+                    Map.entry("gpt-5.5", List.of("gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex")),
+                    Map.entry("gpt-5.4-mini", List.of("gpt-5.3-codex", "gpt-5.2-codex")),
+                    Map.entry("gpt-5.4", List.of("gpt-5.3-codex", "gpt-5.2-codex")),
+                    Map.entry("gpt-5.3-codex", List.of("gpt-5.2-codex"))
+            );
+
+    private RestClient chatgptCodexClient = RestClient.create();
+
+    /** Test seam — let unit tests point this at a {@link org.springframework.test.web.client.MockRestServiceServer}. */
+    void setChatgptCodexClient(RestClient client) {
+        this.chatgptCodexClient = client;
+    }
 
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
 
@@ -364,10 +395,12 @@ public class ModelDiscoveryService {
             case DASHSCOPE_NATIVE -> fetchDashScopeModels(provider);
             case GEMINI_NATIVE -> fetchGeminiModels(provider);
             case ANTHROPIC_MESSAGES -> fetchAnthropicModels(provider);
-            // Claude Code OAuth provider has a fixed model catalog (Anthropic
-            // doesn't expose model discovery on Bearer-auth requests). Models
-            // are seeded via Flyway, not discovered.
-            case OPENAI_CHATGPT, ANTHROPIC_CLAUDE_CODE ->
+            // ChatGPT OAuth has its own discovery endpoint at chatgpt.com/backend-api/codex.
+            case OPENAI_CHATGPT -> fetchChatGPTOAuthModels(provider);
+            // Claude Code OAuth has a fixed model catalog — Anthropic doesn't
+            // expose a discovery endpoint to Bearer-auth requests, so models
+            // are seeded via Flyway.
+            case ANTHROPIC_CLAUDE_CODE ->
                     throw new MateClawException("err.llm.oauth_no_discovery",
                             "OAuth provider 不支持模型发现");
         };
@@ -451,6 +484,112 @@ public class ModelDiscoveryService {
 
         String body = client.get().uri("/v1/models").retrieve().body(String.class);
         return parseAnthropicModelsResponse(body);
+    }
+
+    /**
+     * Fetch the ChatGPT subscription OAuth model catalog. Uses the user's
+     * already-stored OAuth access token (auto-refreshed if it's near expiry)
+     * and hits the same Codex endpoint the upstream client uses. Filters out
+     * models the API marks as not exposed ({@code supported_in_api == false})
+     * or hidden, sorts by priority, then layers in synthetic forward-compat
+     * entries (e.g. surface {@code gpt-5.5} when only older siblings are
+     * returned).
+     */
+    private List<ModelInfoDTO> fetchChatGPTOAuthModels(ModelProviderEntity provider) {
+        String accessToken;
+        try {
+            accessToken = openAIOAuthService.ensureValidAccessToken();
+        } catch (MateClawException e) {
+            // Surface the precise i18n key from OpenAIOAuthService (e.g.
+            // err.llm.oauth_not_connected) so the UI can prompt the user to
+            // sign in. Wrapping would lose that signal.
+            throw e;
+        }
+
+        String body;
+        try {
+            body = chatgptCodexClient.get()
+                    .uri(CHATGPT_CODEX_MODELS_URL)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
+                    .header(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
+                    .retrieve()
+                    .body(String.class);
+        } catch (Exception e) {
+            log.warn("[ModelDiscovery] ChatGPT OAuth models fetch failed: {}", e.getMessage());
+            throw new MateClawException("err.llm.chatgpt_models_fetch_failed",
+                    "拉取 ChatGPT 可用模型失败: " + e.getMessage());
+        }
+
+        return addChatGPTForwardCompatModels(parseChatGPTCodexModelsResponse(body));
+    }
+
+    /**
+     * Parse the {@code {"models": [{slug, supported_in_api, visibility, priority}]}}
+     * response. Drops entries the API hides from the OAuth catalog and orders
+     * the rest by ascending {@code priority} (lower = higher precedence in
+     * the upstream client's UX).
+     */
+    List<ModelInfoDTO> parseChatGPTCodexModelsResponse(String body) {
+        if (body == null || body.isBlank()) return List.of();
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode entries = root.path("models");
+            if (!entries.isArray()) return List.of();
+
+            // Sort by priority ascending while preserving the API-listed slug
+            List<int[]> indices = new ArrayList<>();
+            for (int i = 0; i < entries.size(); i++) {
+                JsonNode item = entries.get(i);
+                if (!item.isObject()) continue;
+                String slug = item.path("slug").asText("").trim();
+                if (slug.isEmpty()) continue;
+                if (item.path("supported_in_api").asBoolean(true) == false) continue;
+                String vis = item.path("visibility").asText("").trim().toLowerCase();
+                if ("hide".equals(vis) || "hidden".equals(vis)) continue;
+                int priority = item.has("priority") && item.get("priority").isNumber()
+                        ? item.get("priority").asInt()
+                        : 10_000;
+                indices.add(new int[]{priority, i});
+            }
+            indices.sort(Comparator.comparingInt((int[] a) -> a[0]).thenComparingInt(a -> a[1]));
+
+            Set<String> seen = new LinkedHashSet<>();
+            List<ModelInfoDTO> out = new ArrayList<>();
+            for (int[] idx : indices) {
+                JsonNode item = entries.get(idx[1]);
+                String slug = item.path("slug").asText("").trim();
+                if (!seen.add(slug)) continue;
+                out.add(new ModelInfoDTO(slug, slug));
+            }
+            return out;
+        } catch (Exception e) {
+            log.warn("[ModelDiscovery] Failed to parse ChatGPT codex models response: {}",
+                    e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Append synthetic forward-compat entries for newer slugs that the API
+     * has not yet surfaced but a known older sibling is present for. Mirrors
+     * the reference client's behaviour so users can opt into {@code gpt-5.5}
+     * during a staged rollout.
+     */
+    static List<ModelInfoDTO> addChatGPTForwardCompatModels(List<ModelInfoDTO> input) {
+        Set<String> seen = new LinkedHashSet<>();
+        List<ModelInfoDTO> out = new ArrayList<>(input.size() + CHATGPT_FORWARD_COMPAT.size());
+        for (ModelInfoDTO m : input) {
+            if (m.getId() != null && seen.add(m.getId())) out.add(m);
+        }
+        for (Map.Entry<String, List<String>> e : CHATGPT_FORWARD_COMPAT) {
+            String synthetic = e.getKey();
+            if (seen.contains(synthetic)) continue;
+            if (e.getValue().stream().anyMatch(seen::contains)) {
+                seen.add(synthetic);
+                out.add(new ModelInfoDTO(synthetic, synthetic));
+            }
+        }
+        return out;
     }
 
     // ==================== 协议分派：单模型测试 ====================
