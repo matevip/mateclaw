@@ -240,14 +240,24 @@ public class AgentGraphBuilder {
             // 内置搜索作为首选，search 工具作为补充/兜底
             log.info("内置搜索已开启 (provider={})，search 工具保留作为补充通道", provider.getProviderId());
         }
-        // Default 100 if DB row leaves max_iterations null; clamp per-agent overrides
-        // to the hard ceiling (BaseAgent.MAX_ITERATIONS_HARD_CEILING) so a misconfigured
-        // row can never push an unbounded loop. Effective range: 1..100.
+        // Default 100 if DB row leaves max_iterations null. Negative or zero is an
+        // explicit opt-in to "no soft cap" — ObservationDispatcher already treats
+        // maxIterations<=0 as "do not enforce", so the agent runs until the LLM
+        // emits a final answer (or returnDirect short-circuits). Positive values
+        // are clamped to the hard ceiling so a misconfigured row can't skip the
+        // safety net unintentionally.
         int rawMaxIter = entity.getMaxIterations() != null ? entity.getMaxIterations() : 100;
-        int maxIter = Math.max(1, Math.min(rawMaxIter, BaseAgent.MAX_ITERATIONS_HARD_CEILING));
-        if (maxIter != rawMaxIter) {
-            log.warn("Agent {} max_iterations={} clamped to {} (1..{})",
-                    entity.getId(), rawMaxIter, maxIter, BaseAgent.MAX_ITERATIONS_HARD_CEILING);
+        int maxIter;
+        if (rawMaxIter <= 0) {
+            maxIter = 0;
+            log.info("Agent {} max_iterations={} → unlimited soft cap (LLM controls termination)",
+                    entity.getId(), rawMaxIter);
+        } else {
+            maxIter = Math.min(rawMaxIter, BaseAgent.MAX_ITERATIONS_HARD_CEILING);
+            if (maxIter != rawMaxIter) {
+                log.warn("Agent {} max_iterations={} clamped to {} (1..{})",
+                        entity.getId(), rawMaxIter, maxIter, BaseAgent.MAX_ITERATIONS_HARD_CEILING);
+            }
         }
 
         String enhancedPrompt = buildEnhancedPrompt(entity, builtinSearchEnabled,
@@ -474,11 +484,35 @@ public class AgentGraphBuilder {
                     .addEdge(PlanStateKeys.DIRECT_ANSWER_NODE, StateGraph.END);
 
             return graph.compile(CompileConfig.builder()
-                    .recursionLimit(maxIterations > 0 ? maxIterations * 3 + 10 : 300)
+                    .recursionLimit(frameworkRecursionLimit())
                     .build());
         } catch (Exception e) {
             throw new MateClawException("err.agent.plan_compile_failed", "Plan-Execute StateGraph 编译失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * Hard ceiling for the underlying graph framework's recursion guard.
+     * <p>
+     * The framework treats "recursion limit reached" as a normal completion —
+     * it emits a {@code done} signal with no exception and no log. That makes
+     * it indistinguishable from a real final answer downstream, and is the
+     * mechanism by which a turn can silently stop mid-execution and persist
+     * only whatever partial content the accumulator happened to hold.
+     * <p>
+     * To avoid that class of bug, the recursion limit must be sized so it can
+     * <em>never</em> trip before the soft cap (ObservationDispatcher →
+     * LimitExceededNode), which is the only path that produces a proper
+     * {@code finish_reason} and human-facing message. Sized for the maximum
+     * effective soft cap (DB hard ceiling + thinking-mode bonus) multiplied
+     * by 4 (each iteration is worst-case reasoning + summarizing + action +
+     * observation) plus a 100-step buffer for phase nodes, approval replays
+     * and tool-result chunking. Decoupled from the per-agent value so a small
+     * {@code max_iterations} can never accidentally re-introduce the silent
+     * killer.
+     */
+    private static int frameworkRecursionLimit() {
+        return (BaseAgent.MAX_ITERATIONS_HARD_CEILING + 5) * 4 + 100;
     }
 
     CompiledGraph buildReActGraph(AgentToolSet toolSet, ChatModel chatModel, int maxIterations, String reasoningEffort) {
@@ -636,7 +670,7 @@ public class AgentGraphBuilder {
                     .addEdge(MateClawStateKeys.FINAL_ANSWER_NODE, StateGraph.END);
 
             return graph.compile(CompileConfig.builder()
-                    .recursionLimit(maxIterations > 0 ? maxIterations * 3 + 10 : 300)
+                    .recursionLimit(frameworkRecursionLimit())
                     .withLifecycleListener(new ReActLifecycleListener())
                     .build());
         } catch (Exception e) {
