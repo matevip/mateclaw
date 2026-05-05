@@ -13,8 +13,6 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 import vip.mate.exception.MateClawException;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -83,12 +81,15 @@ public class OpenAIDeviceCodeService {
 
     /** Step 1: request a user_code and device_auth_id. */
     public DeviceCodeStartResult start() {
-        String body = "client_id=" + enc(CLIENT_ID);
+        // OpenAI's deviceauth endpoints want a JSON body — they reject
+        // application/x-www-form-urlencoded with HTTP 400. Confirmed against
+        // the upstream Codex CLI device code implementation.
+        String body = "{\"client_id\":\"" + CLIENT_ID + "\"}";
         JsonNode resp;
         try {
             String raw = restClient.post()
                     .uri(DEVICE_USERCODE_URL)
-                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                     .header(HttpHeaders.USER_AGENT, userAgent)
                     .body(body)
                     .retrieve()
@@ -147,14 +148,15 @@ public class OpenAIDeviceCodeService {
         }
         sessions.put(deviceAuthId, session.withLastPollAt(now));
 
-        String body = "device_auth_id=" + enc(deviceAuthId)
-                + "&user_code=" + enc(session.userCode());
+        // JSON body, same as /usercode — see comment in start().
+        String body = "{\"device_auth_id\":\"" + jsonEscape(deviceAuthId)
+                + "\",\"user_code\":\"" + jsonEscape(session.userCode()) + "\"}";
 
         String responseBody;
         try {
             responseBody = restClient.post()
                     .uri(DEVICE_TOKEN_URL)
-                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                     .header(HttpHeaders.USER_AGENT, userAgent)
                     .body(body)
                     .retrieve()
@@ -218,6 +220,12 @@ public class OpenAIDeviceCodeService {
     }
 
     private DeviceCodePollResult classifyError(String deviceAuthId, int status, String body) {
+        // OpenAI's deviceauth poll signals "user has not finished yet" via HTTP
+        // 403/404 (unlike the OAuth 2.0 RFC 8628 spec, which uses 400 + an
+        // {error: authorization_pending} body). Treat both shapes as PENDING.
+        if (status == 403 || status == 404) {
+            return DeviceCodePollResult.pending();
+        }
         String error = extractErrorCode(body);
         if ("authorization_pending".equals(error) || "slow_down".equals(error)) {
             return DeviceCodePollResult.pending();
@@ -230,6 +238,26 @@ public class OpenAIDeviceCodeService {
                 status, error, body);
         // Conservative: keep the session alive so the user can retry; expiry will catch it.
         return DeviceCodePollResult.pending();
+    }
+
+    /** Minimal JSON string escape — only client-controlled fields ever flow through here. */
+    private static String jsonEscape(String value) {
+        if (value == null) return "";
+        StringBuilder sb = new StringBuilder(value.length() + 8);
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '"': sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default:
+                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+                    else sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     private String extractErrorCode(String body) {
@@ -246,10 +274,6 @@ public class OpenAIDeviceCodeService {
         if (body.contains("expired_token")) return "expired_token";
         if (body.contains("access_denied")) return "access_denied";
         return null;
-    }
-
-    private static String enc(String value) {
-        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     int activeSessionCount() {
