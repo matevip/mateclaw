@@ -197,6 +197,11 @@ public class ChatGPTOAuthImageProvider implements ImageGenerationProvider {
         ObjectNode root = objectMapper.createObjectNode();
         root.put("model", chatHostModel);
         root.put("store", false);
+        // The /codex/responses endpoint rejects non-streaming requests with
+        // HTTP 400 "Stream must be set to true" — the upstream client only
+        // ever calls it via the streaming path. We already parse SSE in the
+        // response handler.
+        root.put("stream", true);
         root.put("instructions",
                 "You are an image generation assistant. Always call the image_generation tool. "
                         + "Do not produce any text response.");
