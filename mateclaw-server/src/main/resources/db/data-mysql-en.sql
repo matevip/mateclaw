@@ -9,21 +9,21 @@ ON DUPLICATE KEY UPDATE username=VALUES(username), password=VALUES(password), ni
 INSERT INTO mate_agent (id, name, description, agent_type, system_prompt, model_name, max_iterations, enabled, icon, tags, create_time, update_time, deleted)
 VALUES (1000000001, 'MateClaw Assistant', 'Default AI assistant with ReAct mode and tool calling', 'react',
         'You are MateClaw, an intelligent AI assistant. You can help users answer questions, analyze data, and execute tasks. Please respond professionally and in a friendly manner.',
-        NULL, 100, TRUE, '🤖', 'default,assistant', NOW(), NOW(), 0)
+        NULL, 100, TRUE, 'pi:robot-face-happy', 'default,assistant', NOW(), NOW(), 0)
 ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), agent_type=VALUES(agent_type), system_prompt=VALUES(system_prompt), model_name=VALUES(model_name), max_iterations=VALUES(max_iterations), enabled=VALUES(enabled), icon=VALUES(icon), tags=VALUES(tags), update_time=VALUES(update_time), deleted=VALUES(deleted);
 
 -- Default Agent: Task Planner (Plan-Execute mode)
 INSERT INTO mate_agent (id, name, description, agent_type, system_prompt, model_name, max_iterations, enabled, icon, tags, create_time, update_time, deleted)
 VALUES (1000000002, 'Task Planner', 'Task planning assistant for complex multi-step tasks', 'plan_execute',
         'You are a professional task planning and execution assistant. You excel at breaking complex goals into executable steps and completing them systematically.',
-        NULL, 100, TRUE, '📋', 'planning,task', NOW(), NOW(), 0)
+        NULL, 100, TRUE, 'pi:clipboard-note', 'planning,task', NOW(), NOW(), 0)
 ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), agent_type=VALUES(agent_type), system_prompt=VALUES(system_prompt), model_name=VALUES(model_name), max_iterations=VALUES(max_iterations), enabled=VALUES(enabled), icon=VALUES(icon), tags=VALUES(tags), update_time=VALUES(update_time), deleted=VALUES(deleted);
 
 -- StateGraph ReAct Agent (StateGraph architecture)
 INSERT INTO mate_agent (id, name, description, agent_type, system_prompt, model_name, max_iterations, enabled, icon, tags, create_time, update_time, deleted)
 VALUES (1000000003, 'StateGraph ReAct', 'StateGraph-based ReAct Agent with explicit reasoning loops and tool calling', 'react',
         'You are an intelligent assistant based on the StateGraph architecture. You can use tools to help users solve problems. Please respond professionally and in a friendly manner.',
-        NULL, 100, TRUE, '🔄', 'react,stategraph,tools', NOW(), NOW(), 0)
+        NULL, 100, TRUE, 'pi:cpu', 'react,stategraph,tools', NOW(), NOW(), 0)
 ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), agent_type=VALUES(agent_type), system_prompt=VALUES(system_prompt), model_name=VALUES(model_name), max_iterations=VALUES(max_iterations), enabled=VALUES(enabled), icon=VALUES(icon), tags=VALUES(tags), update_time=VALUES(update_time), deleted=VALUES(deleted);
 
 -- ==================== Local Model Providers (displayed first) ====================
@@ -56,6 +56,10 @@ ON DUPLICATE KEY UPDATE name=VALUES(name), api_key_prefix=VALUES(api_key_prefix)
 
 INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
 VALUES ('aliyun-codingplan', 'Aliyun Coding Plan', 'sk-sp', 'OpenAIChatModel', '', 'https://coding.dashscope.aliyuncs.com/v1', '{}', FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name=VALUES(name), api_key_prefix=VALUES(api_key_prefix), chat_model=VALUES(chat_model), api_key=VALUES(api_key), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), is_custom=VALUES(is_custom), is_local=VALUES(is_local), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
+
+INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+VALUES ('aliyun-codingplan-intl', 'Aliyun Coding Plan (International)', 'sk-sp', 'OpenAIChatModel', '', 'https://coding-intl.dashscope.aliyuncs.com/v1', '{}', FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name=VALUES(name), api_key_prefix=VALUES(api_key_prefix), chat_model=VALUES(chat_model), api_key=VALUES(api_key), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), is_custom=VALUES(is_custom), is_local=VALUES(is_local), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
 
 INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
@@ -134,6 +138,14 @@ INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, 
 VALUES ('volcengine-plan', 'Volcano Engine Coding Plan', '', 'OpenAIChatModel', '', 'https://ark.cn-beijing.volces.com/api/coding/v3', '{}', FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name=VALUES(name), chat_model=VALUES(chat_model), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
 
+INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+VALUES ('zhipu-cn-codingplan', 'Zhipu Coding Plan (BigModel)', '', 'OpenAIChatModel', '', 'https://open.bigmodel.cn/api/coding/paas/v4', '{"completionsPath":"/chat/completions"}', FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name=VALUES(name), chat_model=VALUES(chat_model), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
+
+INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+VALUES ('zhipu-intl-codingplan', 'Zhipu Coding Plan (Z.AI)', '', 'OpenAIChatModel', '', 'https://api.z.ai/api/coding/paas/v4', '{"completionsPath":"/chat/completions"}', FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, NOW(), NOW())
+ON DUPLICATE KEY UPDATE name=VALUES(name), chat_model=VALUES(chat_model), base_url=VALUES(base_url), generate_kwargs=VALUES(generate_kwargs), support_model_discovery=VALUES(support_model_discovery), support_connection_check=VALUES(support_connection_check), freeze_url=VALUES(freeze_url), require_api_key=VALUES(require_api_key), update_time=VALUES(update_time);
+
 INSERT INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, auth_type, create_time, update_time)
 VALUES ('openai-chatgpt', 'OpenAI ChatGPT (OAuth)', '', 'ChatGPTChatModel', '', 'https://chatgpt.com/backend-api', '{}', FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, 'oauth', NOW(), NOW())
 ON DUPLICATE KEY UPDATE name=VALUES(name), chat_model=VALUES(chat_model), base_url=VALUES(base_url), auth_type=VALUES(auth_type), update_time=VALUES(update_time);
@@ -186,9 +198,13 @@ VALUES
 (1000000101, 'Qwen3 Max', 'dashscope', 'qwen3-max', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000102, 'Qwen3 235B A22B Thinking', 'dashscope', 'qwen3-235b-a22b-thinking-2507', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000103, 'DeepSeek-V3.2', 'dashscope', 'deepseek-v3.2', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
--- Removed: qwen3.5-plus / qwen3.5-max — unavailable on DashScope native protocol (returns 400 InvalidParameter)
-(1000000172, 'Qwen3 Plus', 'dashscope', 'qwen3-plus', 'Qwen3 balanced model', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+-- Note: dotted Qwen3 versions (qwen3-plus / qwen3.5-plus / qwen3.5-max / qwen3.6-*) only ship on the
+-- OpenAI-compatible endpoint. Calling them through DashScope native (text-generation/generation)
+-- returns 400 InvalidParameter — use the bailian-team OpenAI-compat provider instead.
 (1000000173, 'Qwen Long', 'dashscope', 'qwen-long', 'Long-context model with extended context support', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000174, 'Qwen Plus (latest)',  'dashscope', 'qwen-plus-latest',  'Latest stable snapshot of Qwen Plus — auto-updates as Bailian rolls new releases', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000175, 'Qwen Max (latest)',   'dashscope', 'qwen-max-latest',   'Latest stable snapshot of Qwen Max — strongest reasoning capability',              0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000176, 'Qwen Turbo (latest)', 'dashscope', 'qwen-turbo-latest', 'Latest stable snapshot of Qwen Turbo — low latency, high frequency',               0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000104, 'Qwen3.5-122B-A10B', 'modelscope', 'Qwen/Qwen3.5-122B-A10B', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000105, 'GLM-5', 'modelscope', 'ZhipuAI/GLM-5', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000106, 'Qwen3.5 Plus', 'aliyun-codingplan', 'qwen3.5-plus', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
@@ -199,6 +215,16 @@ VALUES
 (1000000111, 'Qwen3 Max 2026-01-23', 'aliyun-codingplan', 'qwen3-max-2026-01-23', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000112, 'Qwen3 Coder Next', 'aliyun-codingplan', 'qwen3-coder-next', '', 0.2, 8192, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000113, 'Qwen3 Coder Plus', 'aliyun-codingplan', 'qwen3-coder-plus', '', 0.2, 8192, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000162, 'Qwen3.6 Plus',         'aliyun-codingplan',      'qwen3.6-plus',         'Aliyun Coding Plan — Qwen3.6 Plus flagship',                  0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000241, 'Qwen3.6 Plus',         'aliyun-codingplan-intl', 'qwen3.6-plus',         'Aliyun Coding Plan (Intl) — Qwen3.6 Plus flagship',           0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000242, 'Qwen3.5 Plus',         'aliyun-codingplan-intl', 'qwen3.5-plus',         'Aliyun Coding Plan (Intl) — Qwen3.5 balanced',                0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000243, 'GLM-5',                'aliyun-codingplan-intl', 'glm-5',                'Aliyun Coding Plan (Intl) — GLM-5 hosted on DashScope',       0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000244, 'GLM-4.7',              'aliyun-codingplan-intl', 'glm-4.7',              'Aliyun Coding Plan (Intl) — GLM-4.7 hosted on DashScope',     0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000245, 'MiniMax M2.5',         'aliyun-codingplan-intl', 'MiniMax-M2.5',         'Aliyun Coding Plan (Intl) — MiniMax M2.5 hosted on DashScope', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000246, 'Kimi K2.5',            'aliyun-codingplan-intl', 'kimi-k2.5',            'Aliyun Coding Plan (Intl) — Kimi K2.5 hosted on DashScope',   0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000247, 'Qwen3 Max 2026-01-23', 'aliyun-codingplan-intl', 'qwen3-max-2026-01-23', 'Aliyun Coding Plan (Intl) — Qwen3 Max pinned snapshot',       0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000248, 'Qwen3 Coder Next',     'aliyun-codingplan-intl', 'qwen3-coder-next',     'Aliyun Coding Plan (Intl) — Qwen3 Coder Next, agentic coding', 0.2, 8192, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000249, 'Qwen3 Coder Plus',     'aliyun-codingplan-intl', 'qwen3-coder-plus',     'Aliyun Coding Plan (Intl) — Qwen3 Coder Plus, agentic coding', 0.2, 8192, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000400, 'Qwen 3.6 Plus',      'bailian-team', 'qwen3.6-plus',       'Bailian Token Plan — Qwen flagship reasoning model with vision and text generation', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000401, 'DeepSeek V3.2',      'bailian-team', 'deepseek-v3.2',      'Bailian Token Plan — DeepSeek latest reasoning model',                              0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000402, 'GLM-5',              'bailian-team', 'glm-5',              'Bailian Token Plan — Zhipu GLM-5 text generation model',                            0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
@@ -206,6 +232,16 @@ VALUES
 (1000000404, 'Qwen Image 2.0 Pro', 'bailian-team', 'qwen-image-2.0-pro', 'Bailian Token Plan — Qwen image generation flagship model',                         0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000405, 'Wan 2.7 Image',      'bailian-team', 'wan2.7-image',       'Bailian Token Plan — Wan image generation model',                                   0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000406, 'Wan 2.7 Image Pro',  'bailian-team', 'wan2.7-image-pro',   'Bailian Token Plan — Wan image generation flagship model',                          0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000407, 'Qwen 3.5 Plus',            'bailian-team', 'qwen3.5-plus',            'Bailian Token Plan — Qwen3.5 balanced flagship, hybrid thinking, 128K context',  0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000408, 'Qwen 3.5 Flash',           'bailian-team', 'qwen3.5-flash',           'Bailian Token Plan — Qwen3.5 fast variant for high-frequency calls',             0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000409, 'Qwen3 VL Plus',            'bailian-team', 'qwen3-vl-plus',           'Bailian Token Plan — Qwen3 vision-language flagship, image + video',             0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000410, 'Qwen3 VL Flash',           'bailian-team', 'qwen3-vl-flash',          'Bailian Token Plan — Qwen3 vision-language fast variant',                        0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000411, 'Qwen3 Coder Plus',         'bailian-team', 'qwen3-coder-plus',        'Bailian Token Plan — Qwen3 coding flagship, agentic code editing & tools',      0.2, 8192, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000412, 'Qwen 3.6 Plus 2026-04-02', 'bailian-team', 'qwen3.6-plus-2026-04-02', 'Bailian Token Plan — pinned snapshot of Qwen 3.6 Plus released 2026-04-02',     0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000413, 'Qwen 3.6 Max (preview)',   'bailian-team', 'qwen3.6-max-preview',     'Bailian Token Plan — Qwen3.6 Max preview, strongest 3.6 reasoning',              0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000414, 'Qwen 3.6 Flash',           'bailian-team', 'qwen3.6-flash',           'Bailian Token Plan — Qwen3.6 fast variant, hybrid thinking default-on',          0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000415, 'Qwen 3.6 Flash 2026-04-16','bailian-team', 'qwen3.6-flash-2026-04-16','Bailian Token Plan — pinned snapshot of Qwen 3.6 Flash released 2026-04-16',    0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000416, 'Qwen 3.5 Omni Plus',       'bailian-team', 'qwen3.5-omni-plus',       'Bailian Token Plan — Qwen3.5 omni-modal plus, text + vision + audio in/out',    0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000114, 'GPT-5.2', 'openai', 'gpt-5.2', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000115, 'GPT-5', 'openai', 'gpt-5', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000116, 'GPT-5 Mini', 'openai', 'gpt-5-mini', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
@@ -290,6 +326,14 @@ VALUES
 (1000000221, 'GLM-5V-Turbo', 'zhipu-intl', 'glm-5v-turbo', 'Multimodal vision model (International, recommended)', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000222, 'GLM-5', 'zhipu-intl', 'glm-5', 'Flagship model (International)', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000223, 'GLM-5.1', 'zhipu-intl', 'glm-5.1', 'Latest flagship model (International)', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000230, 'GLM-5 Coding',       'zhipu-cn-codingplan',   'glm-5',       'Zhipu Coding Plan — GLM-5 flagship',                    0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000231, 'GLM-5.1 Coding',     'zhipu-cn-codingplan',   'glm-5.1',     'Zhipu Coding Plan — GLM-5.1 latest flagship',           0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000232, 'GLM-5-Turbo Coding', 'zhipu-cn-codingplan',   'glm-5-turbo', 'Zhipu Coding Plan — GLM-5 fast variant',                0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000233, 'GLM-4.7 Coding',     'zhipu-cn-codingplan',   'glm-4.7',     'Zhipu Coding Plan — GLM-4.7',                           0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000234, 'GLM-5 Coding',       'zhipu-intl-codingplan', 'glm-5',       'Zhipu Coding Plan — GLM-5 flagship (International)',    0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000235, 'GLM-5.1 Coding',     'zhipu-intl-codingplan', 'glm-5.1',     'Zhipu Coding Plan — GLM-5.1 flagship (International)',  0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000236, 'GLM-5-Turbo Coding', 'zhipu-intl-codingplan', 'glm-5-turbo', 'Zhipu Coding Plan — GLM-5 fast (International)',        0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000237, 'GLM-4.7 Coding',     'zhipu-intl-codingplan', 'glm-4.7',     'Zhipu Coding Plan — GLM-4.7 (International)',           0.2, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000310, 'Doubao Seed 1.8', 'volcengine', 'doubao-seed-1-8-251228', 'Doubao flagship multimodal model, text + image, 256K context', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000311, 'Doubao Seed Code Preview', 'volcengine', 'doubao-seed-code-preview-251028', 'Doubao code preview model, text + image, 256K context', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000312, 'Kimi K2.5', 'volcengine', 'kimi-k2-5-260127', 'Kimi K2.5 (hosted on Volcano Ark), text + image, 256K context', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
@@ -1244,161 +1288,11 @@ Automatically activate when user message contains:
 Use read_skill_file to access references/ for more background material.' WHERE id = 1000000015;
 
 -- ==================== Channel Seed Data ====================
--- MateClaw supports multiple channels
+-- Only the Web channel is seeded — see data-en.sql for rationale.
 
--- 1. Web Console (enabled by default)
 INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
 VALUES (1000000001, 'Web Console', 'web', 1000000001, '', '{}', TRUE,
         'Default Web console channel with browser SSE streaming', NOW(), NOW(), 0)
-ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), agent_id=VALUES(agent_id), bot_prefix=VALUES(bot_prefix), config_json=VALUES(config_json), enabled=VALUES(enabled), description=VALUES(description), update_time=VALUES(update_time), deleted=VALUES(deleted);
-
--- 2. DingTalk (disabled by default, requires client_id/client_secret)
-INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000002, 'DingTalk Bot', 'dingtalk', 1000000001, '', '{
-  "client_id": "",
-  "client_secret": "",
-  "robot_code": "",
-  "message_type": "markdown",
-  "card_template_id": "",
-  "dm_policy": "open",
-  "group_policy": "open",
-  "allow_from": [],
-  "deny_message": "Sorry, you do not have permission",
-  "require_mention": false,
-  "filter_thinking": true,
-  "filter_tool_messages": true,
-  "message_format": "auto"
-}', FALSE,
-        'DingTalk bot channel. Supports Stream callback and sessionWebhook reply. Create app on DingTalk Open Platform and set Webhook URL to /api/v1/channels/webhook/dingtalk', NOW(), NOW(), 0)
-ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), agent_id=VALUES(agent_id), bot_prefix=VALUES(bot_prefix), config_json=VALUES(config_json), enabled=VALUES(enabled), description=VALUES(description), update_time=VALUES(update_time), deleted=VALUES(deleted);
-
--- 3. Feishu (disabled by default, requires app_id/app_secret)
-INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000003, 'Feishu Bot', 'feishu', 1000000001, '', '{
-  "app_id": "",
-  "app_secret": "",
-  "encrypt_key": "",
-  "verification_token": "",
-  "dm_policy": "open",
-  "group_policy": "open",
-  "allow_from": [],
-  "deny_message": "Sorry, you do not have permission",
-  "require_mention": false,
-  "filter_thinking": true,
-  "filter_tool_messages": true,
-  "message_format": "auto"
-}', FALSE,
-        'Feishu bot channel. Supports event subscription callback. Create app on Feishu Open Platform and set event callback URL to /api/v1/channels/webhook/feishu', NOW(), NOW(), 0)
-ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), agent_id=VALUES(agent_id), bot_prefix=VALUES(bot_prefix), config_json=VALUES(config_json), enabled=VALUES(enabled), description=VALUES(description), update_time=VALUES(update_time), deleted=VALUES(deleted);
-
--- 4. Telegram (disabled by default, requires bot_token)
-INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000004, 'Telegram Bot', 'telegram', 1000000001, '', '{
-  "bot_token": "",
-  "http_proxy": "",
-  "show_typing": true,
-  "dm_policy": "open",
-  "group_policy": "open",
-  "allow_from": [],
-  "deny_message": "Sorry, you do not have permission",
-  "require_mention": false,
-  "filter_thinking": true,
-  "filter_tool_messages": true,
-  "message_format": "auto"
-}', FALSE,
-        'Telegram bot channel. Get Token from @BotFather, set Webhook URL to /api/v1/channels/webhook/telegram', NOW(), NOW(), 0)
-ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), agent_id=VALUES(agent_id), bot_prefix=VALUES(bot_prefix), config_json=VALUES(config_json), enabled=VALUES(enabled), description=VALUES(description), update_time=VALUES(update_time), deleted=VALUES(deleted);
-
--- 5. Discord (disabled by default, requires bot_token)
-INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000005, 'Discord Bot', 'discord', 1000000001, '!mc ', '{
-  "bot_token": "",
-  "http_proxy": "",
-  "dm_policy": "open",
-  "group_policy": "open",
-  "allow_from": [],
-  "deny_message": "Sorry, you do not have permission",
-  "require_mention": false,
-  "filter_thinking": true,
-  "filter_tool_messages": true,
-  "message_format": "auto"
-}', FALSE,
-        'Discord bot channel. Create Bot and get Token from Discord Developer Portal. Use !mc prefix in group chats', NOW(), NOW(), 0)
-ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), agent_id=VALUES(agent_id), bot_prefix=VALUES(bot_prefix), config_json=VALUES(config_json), enabled=VALUES(enabled), description=VALUES(description), update_time=VALUES(update_time), deleted=VALUES(deleted);
-
--- 6. WeCom Bot (disabled by default, requires bot_id/secret)
-INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000006, 'WeCom Bot', 'wecom', 1000000001, '', '{
-  "bot_id": "",
-  "secret": "",
-  "welcome_text": "",
-  "media_download_enabled": true,
-  "media_dir": "data/media",
-  "dm_policy": "open",
-  "group_policy": "open",
-  "allow_from": [],
-  "deny_message": "Sorry, you do not have permission",
-  "require_mention": false,
-  "filter_thinking": true,
-  "filter_tool_messages": true,
-  "message_format": "auto",
-  "max_reconnect_attempts": -1
-}', FALSE,
-        'WeCom smart bot channel (WebSocket long connection). Create a smart bot in WeCom admin console, select API mode with long connection, get bot_id and secret. No public IP needed', NOW(), NOW(), 0)
-ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), agent_id=VALUES(agent_id), bot_prefix=VALUES(bot_prefix), config_json=VALUES(config_json), enabled=VALUES(enabled), description=VALUES(description), update_time=VALUES(update_time), deleted=VALUES(deleted);
-
--- 7. QQ Bot (disabled by default, requires app_id/client_secret)
-INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000007, 'QQ Bot', 'qq', 1000000001, '', '{
-  "app_id": "",
-  "client_secret": "",
-  "markdown_enabled": true,
-  "max_reconnect_attempts": 100,
-  "dm_policy": "open",
-  "group_policy": "open",
-  "allow_from": [],
-  "deny_message": "Sorry, you do not have permission",
-  "require_mention": false,
-  "filter_thinking": true,
-  "filter_tool_messages": true,
-  "message_format": "auto"
-}', FALSE,
-        'QQ bot channel (WebSocket long connection). Create a bot app on QQ Open Platform, get AppID and AppSecret. No public IP needed', NOW(), NOW(), 0)
-ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), agent_id=VALUES(agent_id), bot_prefix=VALUES(bot_prefix), config_json=VALUES(config_json), enabled=VALUES(enabled), description=VALUES(description), update_time=VALUES(update_time), deleted=VALUES(deleted);
-
--- 8. WeChat iLink Bot (disabled by default, requires QR code scan for bot_token)
-INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000008, 'WeChat', 'weixin', 1000000001, '', '{
-  "bot_token": "",
-  "base_url": "https://ilinkai.weixin.qq.com",
-  "media_download_enabled": true,
-  "media_dir": "data/media",
-  "dm_policy": "open",
-  "group_policy": "open",
-  "allow_from": [],
-  "deny_message": "Sorry, you do not have permission",
-  "filter_thinking": true,
-  "filter_tool_messages": true,
-  "message_format": "auto"
-}', FALSE,
-        'WeChat personal account channel (iLink Bot HTTP long polling). Get bot_token by scanning QR code to login, or enter existing token. Based on iLink Bot API, supports text, image, voice (ASR), file, and video messages', NOW(), NOW(), 0)
-ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), agent_id=VALUES(agent_id), bot_prefix=VALUES(bot_prefix), config_json=VALUES(config_json), enabled=VALUES(enabled), description=VALUES(description), update_time=VALUES(update_time), deleted=VALUES(deleted);
-
--- 9. Slack (disabled by default, requires bot_token / app_token)
-INSERT INTO mate_channel (id, name, channel_type, agent_id, bot_prefix, config_json, enabled, description, create_time, update_time, deleted)
-VALUES (1000000009, 'Slack Bot', 'slack', 1000000001, '', '{
-  "bot_token": "",
-  "app_token": "",
-  "signing_secret": "",
-  "dm_policy": "open",
-  "group_policy": "mention",
-  "allow_from": [],
-  "deny_message": "Sorry, you do not have permission",
-  "filter_thinking": true,
-  "filter_tool_messages": true,
-  "message_format": "auto"
-}', FALSE,
-        'Slack channel (Socket Mode). Get Bot Token (xoxb-) and App-Level Token (xapp-) from Slack App settings, enable Socket Mode to start using.', NOW(), NOW(), 0)
 ON DUPLICATE KEY UPDATE name=VALUES(name), channel_type=VALUES(channel_type), agent_id=VALUES(agent_id), bot_prefix=VALUES(bot_prefix), config_json=VALUES(config_json), enabled=VALUES(enabled), description=VALUES(description), update_time=VALUES(update_time), deleted=VALUES(deleted);
 
 -- ==================== Example Cron Jobs ====================

@@ -11,6 +11,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.tool.ToolCallback;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import org.springframework.stereotype.Component;
 import vip.mate.agent.prompt.PromptLoader;
@@ -71,6 +72,21 @@ public class ConversationWindowManager {
     private static final int CONTENT_MAX = 6000;
     private static final int CONTENT_HEAD = 4000;
     private static final int CONTENT_TAIL = 1500;
+    private static final int OLD_TOOL_RESULT_SUMMARY_THRESHOLD = 500;
+
+    /**
+     * Tool names whose results must never be compacted into a one-line
+     * summary. Sub-agent delegations are irreplaceable: the child runs an
+     * independent LLM session that the parent cannot reproduce, so dropping
+     * earlier batches forces the parent to re-dispatch the same children to
+     * recover what was lost. Every other tool (read_file, shell, search,
+     * memory) can be re-invoked cheaply if the parent decides it needs
+     * the data again.
+     */
+    private static final java.util.Set<String> PRUNE_EXEMPT_TOOLS = java.util.Set.of(
+            "delegateToAgent",
+            "delegateParallel"
+    );
 
     // ==================== 冷却机制 ====================
 
@@ -116,9 +132,27 @@ public class ConversationWindowManager {
                                      String currentUserMessage,
                                      Integer maxInputTokens, ChatModel chatModel,
                                      String conversationId, Long agentId) {
+        return fitToWindow(messages, systemPrompt, currentUserMessage,
+                maxInputTokens, chatModel, conversationId, agentId, null);
+    }
+
+    /**
+     * Same as the 7-arg overload but additionally accounts for the tool
+     * definitions sent on every LLM call. Without {@code toolCallbacks},
+     * the budget calculation underestimates the actual request size by the
+     * full size of the tools schema (often several thousand tokens for
+     * agents bound to multiple MCP servers), making compression fire too
+     * late and producing HTTP 400 once the request hits the model.
+     */
+    public List<Message> fitToWindow(List<Message> messages, String systemPrompt,
+                                     String currentUserMessage,
+                                     Integer maxInputTokens, ChatModel chatModel,
+                                     String conversationId, Long agentId,
+                                     java.util.Collection<ToolCallback> toolCallbacks) {
         if (messages == null || messages.isEmpty()) {
             return messages;
         }
+        messages = pruneOldToolResultsForModelInput(messages);
 
         int effectiveMax = (maxInputTokens != null && maxInputTokens > 0)
                 ? maxInputTokens : properties.getDefaultMaxInputTokens();
@@ -127,20 +161,21 @@ public class ConversationWindowManager {
         int systemTokens = TokenEstimator.estimateTokens(systemPrompt);
         int currentMsgTokens = TokenEstimator.estimateTokens(currentUserMessage) + TokenEstimator.PER_MESSAGE_OVERHEAD;
         int historyTokens = TokenEstimator.estimateTokens(messages);
-        int totalTokens = systemTokens + currentMsgTokens + historyTokens;
+        int toolsTokens = TokenEstimator.estimateToolsTokens(toolCallbacks);
+        int totalTokens = systemTokens + currentMsgTokens + historyTokens + toolsTokens;
 
         if (totalTokens <= triggerThreshold) {
             return messages;
         }
 
-        log.info("[ConversationWindow] 超阈值: {} tokens (system={}, current={}, history={}) > {} 触发阈值 (max={}), conv={}",
-                totalTokens, systemTokens, currentMsgTokens, historyTokens,
+        log.info("[ConversationWindow] 超阈值: {} tokens (system={}, current={}, history={}, tools={}) > {} 触发阈值 (max={}), conv={}",
+                totalTokens, systemTokens, currentMsgTokens, historyTokens, toolsTokens,
                 triggerThreshold, effectiveMax, conversationId);
 
         evictExpiredEntries();
 
-        // 可用于历史的 token 预算 = max - system - currentMsg - 安全余量
-        int reservedTokens = systemTokens + currentMsgTokens + (int) (effectiveMax * 0.05);
+        // 可用于历史的 token 预算 = max - system - currentMsg - tools - 安全余量
+        int reservedTokens = systemTokens + currentMsgTokens + toolsTokens + (int) (effectiveMax * 0.05);
         // RFC-025 Change 1: reserve 硬封顶到 effectiveMax 的 50%。
         // 小上下文模型（Ollama 16K、本地 8K）下，systemTokens + currentMsgTokens 很容易
         // 接近或超过 effectiveMax，不封顶会让 historyBudget 变负数导致死循环压缩
@@ -338,6 +373,85 @@ public class ConversationWindowManager {
     }
 
     // ==================== 工具结果处理 ====================
+
+    public List<Message> pruneOldToolResultsForModelInput(List<Message> messages) {
+        int latestToolResponseIndex = -1;
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if (messages.get(i) instanceof ToolResponseMessage) {
+                latestToolResponseIndex = i;
+                break;
+            }
+        }
+        if (latestToolResponseIndex <= 0) {
+            return messages;
+        }
+
+        List<Message> pruned = new ArrayList<>(messages);
+        java.util.Set<String> seenLargeOutputs = new java.util.HashSet<>();
+        int changed = 0;
+        for (int i = pruned.size() - 1; i >= 0; i--) {
+            if (!(pruned.get(i) instanceof ToolResponseMessage trm)) {
+                continue;
+            }
+            boolean keepFull = i == latestToolResponseIndex;
+            List<ToolResponseMessage.ToolResponse> newResponses = new ArrayList<>();
+            boolean messageChanged = false;
+            for (ToolResponseMessage.ToolResponse r : trm.getResponses()) {
+                String data = r.responseData();
+                boolean exempt = r.name() != null && PRUNE_EXEMPT_TOOLS.contains(r.name());
+                if (keepFull || exempt || data == null || data.length() <= OLD_TOOL_RESULT_SUMMARY_THRESHOLD) {
+                    newResponses.add(r);
+                    if (data != null && data.length() > OLD_TOOL_RESULT_SUMMARY_THRESHOLD) {
+                        seenLargeOutputs.add(data);
+                    }
+                    continue;
+                }
+                String replacement;
+                if (seenLargeOutputs.contains(data)) {
+                    replacement = "[" + r.name() + "] duplicate tool output omitted; same content appeared later.";
+                } else {
+                    replacement = summarizeToolResponse(r.name(), data);
+                    seenLargeOutputs.add(data);
+                }
+                newResponses.add(new ToolResponseMessage.ToolResponse(r.id(), r.name(), replacement));
+                messageChanged = true;
+            }
+            if (messageChanged) {
+                pruned.set(i, ToolResponseMessage.builder().responses(newResponses).build());
+                changed++;
+            }
+        }
+        if (changed > 0) {
+            log.info("[ConversationWindow] Pruned {} older tool response message(s) before model request", changed);
+        }
+        return changed > 0 ? pruned : messages;
+    }
+
+    private static String summarizeToolResponse(String toolName, String data) {
+        int chars = data.length();
+        int lines = data.isBlank() ? 0 : data.split("\\R", -1).length;
+        String firstLine = firstNonBlankLine(data);
+        if (firstLine.length() > 160) {
+            firstLine = firstLine.substring(0, 160) + "...";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append('[').append(toolName).append("] previous tool output summarized for model context: ")
+                .append(chars).append(" chars, ").append(lines).append(" lines");
+        if (!firstLine.isBlank()) {
+            sb.append(". First line: ").append(firstLine);
+        }
+        return sb.toString();
+    }
+
+    private static String firstNonBlankLine(String data) {
+        for (String line : data.split("\\R")) {
+            String trimmed = line.trim();
+            if (!trimmed.isBlank()) {
+                return trimmed.replace('|', '/');
+            }
+        }
+        return "";
+    }
 
     /**
      * Phase 1 - Soft trim：对工具结果做 head+tail 裁剪（保留首尾各 200 字符）。

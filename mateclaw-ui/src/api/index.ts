@@ -7,7 +7,7 @@ export const http = axios.create({
   timeout: 30000,
 })
 
-// 请求拦截器：注入 Token + Workspace ID
+// 请求拦截器：注入 Token + Workspace ID + Accept-Language
 http.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) {
@@ -16,6 +16,15 @@ http.interceptors.request.use((config) => {
   const workspaceId = localStorage.getItem('mc-workspace-id')
   if (workspaceId) {
     config.headers['X-Workspace-Id'] = workspaceId
+  }
+  // Forward the user's UI locale so locale-sensitive endpoints (e.g.
+  // template apply) can pick the right display strings. Native browsers
+  // already send Accept-Language, but the user's chosen UI language may
+  // differ from the OS default — explicitly setting it keeps the two
+  // in sync.
+  const locale = localStorage.getItem('mateclaw_locale')
+  if (locale) {
+    config.headers['Accept-Language'] = locale
   }
   return config
 })
@@ -144,14 +153,18 @@ export const conversationApi = {
 
 // ==================== Skill ====================
 export const skillApi = {
-  /** RFC-042 §2.1 — paginated skill listing with search/type/enabled/scanStatus filters */
+  /** Paginated skill listing with search, source, status, and sort filters. */
   page: (params: {
     page?: number
     size?: number
     keyword?: string
     skillType?: string
+    source?: string
+    sort?: string
+    runtime?: string
+    agentId?: string | number
     enabled?: boolean
-    /** 'PASSED' / 'FAILED' — filters by security_scan_status (RFC-042 §2.3.5) */
+    /** 'PASSED' / 'FAILED' — filters by security_scan_status. */
     scanStatus?: string
   } = {}) => http.get('/skills', { params }),
   /** Tab count aggregate — returns { all, builtin, mcp, dynamic } */
@@ -170,6 +183,101 @@ export const skillApi = {
   refreshRuntime: () => http.post('/skills/runtime/refresh'),
   exportWorkspace: (id: string | number) => http.post(`/skills/${id}/export-workspace`),
   getWorkspaceInfo: (id: string | number) => http.get(`/skills/${id}/workspace`),
+  // RFC-090 §7 + §11.4 — pre-flight requirements + LESSONS.md + reverse lookup
+  requirements: (id: string | number) => http.get(`/skills/${id}/requirements`),
+  getLessons: (id: string | number) => http.get(`/skills/${id}/lessons`),
+  clearLessons: (id: string | number) => http.post(`/skills/${id}/lessons/clear`),
+  employees: (id: string | number) => http.get(`/skills/${id}/employees`),
+}
+
+// ==================== Activity Feed (RFC-090 §4.5) ====================
+export const activityApi = {
+  feed: (params: { source?: string; page?: number; size?: number; workspaceId?: number } = {}) =>
+    http.get('/activity/feed', { params }),
+}
+
+// ==================== Backstage (admin runtime view) ====================
+export interface BackstageRunCard {
+  conversationId: string
+  agentId: number | null
+  agentName: string | null
+  agentIcon: string | null
+  username: string | null
+  currentPhase: string | null
+  runningToolName: string | null
+  waitingReason: string | null
+  done: boolean
+  stopRequested: boolean
+  firstTokenReceived: boolean
+  subscriberCount: number
+  queueLen: number
+  ageMs: number
+  msSinceLastEvent: number
+  /** null when healthy; otherwise: 'idle_silent' | 'tool_silent' | 'hard_cap' */
+  stuckReason: string | null
+  orphan: boolean
+  subagentCount: number
+}
+
+export interface BackstageSubagentCard {
+  subagentId: string
+  parentConversationId: string | null
+  childConversationId: string | null
+  agentId: number | null
+  agentName: string | null
+  agentIcon: string | null
+  goal: string | null
+  status: string | null
+  currentPhase: string | null
+  lastTool: string | null
+  toolCount: number
+  ageMs: number
+}
+
+export interface BackstageSummary {
+  running: number
+  stuck: number
+  orphan: number
+  queued: number
+  subagentsActive: number
+}
+
+export interface BackstageSnapshot {
+  summary: BackstageSummary
+  runs: BackstageRunCard[]
+  subagents: BackstageSubagentCard[]
+  timestamp: number
+}
+
+export const backstageApi = {
+  snapshot: () => http.get<{ data: BackstageSnapshot }>('/admin/agent-runtime/snapshot'),
+  stop: (conversationId: string) =>
+    http.post(`/admin/agent-runtime/runs/${encodeURIComponent(conversationId)}/stop`),
+  recycle: (conversationId: string) =>
+    http.post(`/admin/agent-runtime/runs/${encodeURIComponent(conversationId)}/recycle`),
+  interruptSubagent: (subagentId: string) =>
+    http.post(`/admin/agent-runtime/subagents/${encodeURIComponent(subagentId)}/interrupt`),
+  sweep: () => http.post('/admin/agent-runtime/sweep'),
+}
+
+// ==================== ACP Endpoints (RFC-090 Phase 7) ====================
+export const acpApi = {
+  list: () => http.get('/acp/endpoints'),
+  get: (id: number | string) => http.get(`/acp/endpoints/${id}`),
+  create: (data: any) => http.post('/acp/endpoints', data),
+  update: (id: number | string, data: any) => http.put(`/acp/endpoints/${id}`, data),
+  delete: (id: number | string) => http.delete(`/acp/endpoints/${id}`),
+  toggle: (id: number | string, enabled: boolean) =>
+    http.put(`/acp/endpoints/${id}/toggle?enabled=${enabled}`),
+  test: (id: number | string) => http.post(`/acp/endpoints/${id}/test`),
+}
+
+// ==================== Skill Templates (RFC-091) ====================
+export const skillTemplateApi = {
+  list: () => http.get('/skill-templates'),
+  get: (id: string) => http.get(`/skill-templates/${id}`),
+  instantiate: (id: string, values: Record<string, unknown>) =>
+    http.post(`/skill-templates/${id}/instantiate`, values),
 }
 
 // ==================== Skill Install ====================
@@ -232,6 +340,13 @@ export const channelApi = {
   health: (id: string | number) => http.get(`/channels/${id}/health`),
   /** Batch health for all channels in current workspace. */
   healthAll: () => http.get('/channels/health'),
+  /**
+   * Wizard Step 2 — validate a draft config without persisting.
+   * Returns a VerificationResult: { ok, skipped, durationMs, headline,
+   * identity, invalidField, hint }.
+   */
+  preflight: (channelType: string, configJson: string) =>
+    http.post('/channels/preflight', { channelType, configJson }),
   // 微信 iLink Bot QR 码登录
   weixinQrcode: () => http.get('/channels/webhook/weixin/qrcode'),
   weixinQrcodeStatus: (qrcode: string) =>
@@ -280,8 +395,15 @@ export const modelApi = {
   updateProviderConfig: (providerId: string, data: any) =>
     http.put(`/models/${providerId}/config`, data),
   createCustomProvider: (data: any) => http.post('/models/custom-providers', data),
-  deleteCustomProvider: (providerId: string) =>
-    http.delete(`/models/custom-providers/${providerId}`),
+  // Issue #39: fall back to a query-param endpoint when the providerId can't
+  // safely sit in a path segment (slash / space / etc.) — those rows would
+  // otherwise be undeletable because Spring's {providerId} doesn't span "/".
+  deleteCustomProvider: (providerId: string) => {
+    const safe = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(providerId)
+    return safe
+      ? http.delete(`/models/custom-providers/${providerId}`)
+      : http.delete('/models/custom-providers', { params: { providerId } })
+  },
   addProviderModel: (providerId: string, data: any) =>
     http.post(`/models/${providerId}/models`, data),
   removeProviderModel: (providerId: string, modelId: string) =>
@@ -350,6 +472,15 @@ export const oauthApi = {
   status: () => http.get('/oauth/openai/status'),
   refresh: () => http.post('/oauth/openai/refresh'),
   revoke: () => http.delete('/oauth/openai/revoke'),
+  callbackPaste: (callbackUrl: string) =>
+    http.post('/oauth/openai/callback-paste', { callbackUrl }),
+  // Device Authorization Grant — used when MateClaw runs on a remote host so the
+  // browser cannot reach localhost:1455 for the PKCE callback.
+  deviceStart: () => http.post('/oauth/openai/device/start'),
+  devicePoll: (deviceAuthId: string) =>
+    http.post('/oauth/openai/device/poll', { deviceAuthId }),
+  deviceCancel: (deviceAuthId: string) =>
+    http.post('/oauth/openai/device/cancel', { deviceAuthId }),
 }
 
 // RFC-062: Claude Code OAuth piggybacks on the user's local Claude Code
@@ -426,6 +557,8 @@ export const cronJobApi = {
   toggle: (id: string | number, enabled: boolean) =>
     http.put(`/cron-jobs/${id}/toggle`, null, { params: { enabled } }),
   runNow: (id: string | number) => http.post(`/cron-jobs/${id}/run`),
+  activeRuns: (conversationId: string) =>
+    http.get('/cron-jobs/active-runs', { params: { conversationId } }),
 }
 
 // ==================== Wiki Knowledge Base ====================
@@ -578,4 +711,52 @@ export const auditApi = {
     page?: number
     size?: number
   }) => http.get('/audit/events', { params }),
+}
+
+// ==================== Feature Flags ====================
+export interface FeatureFlag {
+  id: number
+  flagKey: string
+  enabled: boolean
+  description?: string
+  whitelistKbIds?: string
+  whitelistUserIds?: string
+  rolloutPercent?: number
+  createTime?: string
+  updateTime?: string
+}
+
+export interface FeatureFlagUpdate {
+  enabled?: boolean
+  description?: string
+  whitelistKbIds?: string
+  whitelistUserIds?: string
+  rolloutPercent?: number
+}
+
+export const featureFlagApi = {
+  list: () => http.get<FeatureFlag[]>('/feature-flags'),
+  update: (flagKey: string, data: FeatureFlagUpdate) =>
+    http.put(`/feature-flags/${flagKey}`, data),
+}
+
+export interface WikiHotCache {
+  id: number
+  kbId: number
+  content: string | null
+  contentHash: string | null
+  lastUpdated: string | null
+  updateReason: string | null
+  rebuildCount: number
+  lastRebuildStartedAt: string | null
+  lastRebuildDurationMs: number | null
+  lastRebuildError: string | null
+  createTime: string
+  updateTime: string
+}
+
+export const hotCacheApi = {
+  get: (kbId: number) => http.get<WikiHotCache | null>(`/wiki/hot-cache/${kbId}`),
+  regenerate: (kbId: number) => http.post(`/wiki/hot-cache/${kbId}/regenerate`),
+  reset: (kbId: number) => http.delete(`/wiki/hot-cache/${kbId}`),
 }

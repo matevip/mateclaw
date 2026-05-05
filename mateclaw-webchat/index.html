@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MateClaw WebChat Demo</title>
+    <style>
+      :root {
+        --mc-font-body: 'Inter', 'Avenir Next', 'SF Pro Display', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        --mc-text-sm: 13px;
+        --mc-text-base: 15px;
+        --mc-radius-md: 12px;
+        --mc-radius-full: 9999px;
+        --mc-primary: #d96d46;
+        --mc-primary-hover: #bb4f27;
+        --mc-bg: #f6f1ea;
+        --mc-bg-elevated: #ffffff;
+        --mc-bg-muted: #f1e8df;
+        --mc-border-light: #ebe3db;
+        --mc-text-primary: #1d1612;
+        --mc-text-secondary: #665245;
+        --mc-text-inverse: #ffffff;
+        --mc-shadow-medium: 0 18px 48px rgba(58, 32, 19, 0.12);
+        --mc-shadow-strong: 0 24px 70px rgba(58, 32, 19, 0.16);
+        --mc-chat-bg: #fafaf8;
+        --mc-chat-header-bg: #ffffff;
+        --mc-assistant-bubble-bg: #ffffff;
+        --mc-assistant-bubble-border: #ddd5cc;
+        --mc-assistant-bubble-color: #1c1410;
+        --mc-user-bubble-bg: #d97757;
+        --mc-user-bubble-color: #ffffff;
+        --mc-input-bg: #fafaf8;
+        --mc-input-border: #ddd5cc;
+        --mc-input-text: #1c1410;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--mc-bg);
+        color: var(--mc-text-primary);
+        font-family: var(--mc-font-body);
+      }
+
+      main {
+        max-width: 760px;
+        padding: 48px 32px;
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: 28px;
+        line-height: 36px;
+      }
+
+      p {
+        margin: 0;
+        color: var(--mc-text-secondary);
+        font-size: 15px;
+        line-height: 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>MateClaw WebChat Demo</h1>
+      <p>点击右下角按钮打开 WebChat。本页面会模拟流式接口，方便本地预览组件交互。</p>
+    </main>
+
+    <script type="module">
+      import { init } from './src/index.ts'
+
+      const originalFetch = window.fetch.bind(window)
+
+      window.fetch = async (input, initOptions) => {
+        const url = typeof input === 'string' ? input : input.url
+        if (url.includes('/api/v1/channels/webchat/stream')) {
+          const body = JSON.parse(String(initOptions?.body || '{}'))
+          const encoder = new TextEncoder()
+
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                const chunks = [
+                  `data: ${JSON.stringify({ text: `收到：${body.message || ''}` })}\n\n`,
+                  `data: ${JSON.stringify({ text: '\\n这是本地 demo 的模拟流式回复。' })}\n\n`,
+                  'event: done\n\n',
+                ]
+
+                chunks.forEach((chunk, index) => {
+                  setTimeout(() => {
+                    controller.enqueue(encoder.encode(chunk))
+                    if (index === chunks.length - 1) controller.close()
+                  }, index * 220)
+                })
+              },
+            }),
+            {
+              status: 200,
+              headers: { 'Content-Type': 'text/event-stream' },
+            },
+          )
+        }
+
+        return originalFetch(input, initOptions)
+      }
+
+      init({
+        apiKey: 'dev-key',
+        server: location.origin,
+        title: 'MateClaw WebChat',
+        primaryColor: 'var(--mc-primary, #D97757)',
+        subtitle: '本地预览',
+        welcomeMessage: '我是 MateClaw WebChat，本页面用于本地开发预览。',
+        quickPrompts: ['分析这个问题', '给我执行建议', '你能做哪些事情？'],
+      })
+    </script>
+  </body>
+</html>

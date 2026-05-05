@@ -23,10 +23,13 @@ public class WikiRawMaterialEntity {
     /** 材料标题 */
     private String title;
 
-    /** 来源类型：text / pdf / docx / url / paste */
+    /** Source type: text / pdf / docx / image / url / paste. */
     private String sourceType;
 
-    /** 原始文件路径（二进制文件） */
+    /** Original Content-Type from the upload (e.g. {@code image/png}); null for text. */
+    private String mimeType;
+
+    /** Original file path on disk (binary uploads only). */
     private String sourcePath;
 
     /** 原始文本内容（文本类型） */

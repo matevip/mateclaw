@@ -5,9 +5,13 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.core.LockConfiguration;
+import net.javacrumbs.shedlock.core.LockProvider;
+import net.javacrumbs.shedlock.core.SimpleLock;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.scheduling.support.CronTrigger;
@@ -21,16 +25,20 @@ import vip.mate.cron.model.CronJobEntity;
 import vip.mate.cron.repository.CronJobMapper;
 import vip.mate.exception.MateClawException;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -48,6 +56,13 @@ public class CronJobService implements ApplicationRunner {
     private final CronJobMapper cronJobMapper;
     private final AgentMapper agentMapper;
     private final ChannelMapper channelMapper;
+    /**
+     * RFC-03 Lane G2: distributed lock for fire-time execution. ShedLock's
+     * JDBC provider is configured in {@link vip.mate.cron.config.ShedLockConfig}
+     * — see also {@link #LOCK_AT_MOST_FOR} / {@link #LOCK_AT_LEAST_FOR}
+     * tuning notes on {@link #register}.
+     */
+    private final LockProvider lockProvider;
     /**
      * RFC-063r §2.7.1: cron-tick execution moved to {@link CronJobRunner}
      * (separate bean) so the three-segment transactional model in
@@ -78,6 +93,36 @@ public class CronJobService implements ApplicationRunner {
      */
     private final ExecutorService cronExecutor = Executors.newThreadPerTaskExecutor(
             Thread.ofVirtual().name("cron-execute-", 0).factory());
+
+    /**
+     * Issue #50: cap concurrent cron run executions so that hundreds of jobs
+     * firing at the same minute boundary cannot exhaust the JDBC pool. Each
+     * run holds 3-4 connections in sequence (three REQUIRES_NEW segments in
+     * {@link CronJobLifecycleService} plus {@link #updateRunTimes}); without
+     * a limit, virtual threads launch unboundedly and starve the channel
+     * monitor / web traffic. Tuned alongside Hikari maximum-pool-size — keep
+     * this value well below the pool size so non-cron paths still get
+     * connections.
+     */
+    private static final int MAX_CONCURRENT_CRON_RUNS = 8;
+    private final Semaphore cronConcurrencyLimiter = new Semaphore(MAX_CONCURRENT_CRON_RUNS);
+
+    /**
+     * RFC-03 Lane G2: ShedLock duration tuning.
+     *
+     * <p>{@code lockAtMostFor} is the safety net for a node that crashes
+     * mid-execution — after this window, any other node may take over the
+     * job's next tick. 30 minutes covers all observed cron run times
+     * (longest LLM-driven jobs in production sit around p99 ≈ 8 min).
+     *
+     * <p>{@code lockAtLeastFor} prevents thundering-herd when a fast job
+     * (e.g. trivial SQL query that completes in <1s) finishes before its
+     * own next tick — without it, the same node could fire twice per tick
+     * if its clock is slightly ahead. 30s gives every other node a chance
+     * to see the lock as held even for instant-finishing jobs.
+     */
+    private static final Duration LOCK_AT_MOST_FOR = Duration.ofMinutes(30);
+    private static final Duration LOCK_AT_LEAST_FOR = Duration.ofSeconds(30);
 
     // ==================== 初始化与销毁 ====================
 
@@ -181,6 +226,18 @@ public class CronJobService implements ApplicationRunner {
         // toSpringCron 校验表达式合法性，结果复用于后续 calcNextRunTime 和 register
         String springCron = toSpringCron(dto.getCronExpression());
 
+        // Issue #50: dedup by (workspace_id, agent_id, name). LLM-driven
+        // creators (CronJobTool) call this on every retry; without this guard
+        // a single instruction can produce N identical rows that all fire on
+        // the same tick. App-level check covers the common case; the unique
+        // index added in V67 protects against races (handled below).
+        CronJobEntity duplicate = findActiveDuplicate(workspaceId, dto.getAgentId(), dto.getName());
+        if (duplicate != null) {
+            log.info("[CronJob] create dedup hit: ws={} agent={} name={} → returning existing id={}",
+                    workspaceId, dto.getAgentId(), dto.getName(), duplicate.getId());
+            return getById(duplicate.getId(), workspaceId);
+        }
+
         CronJobEntity entity = dto.toEntity();
         // RFC-083: workspace stamped server-side from X-Workspace-Id; never
         // trust a client-supplied value (DTO.toEntity intentionally drops it).
@@ -190,7 +247,18 @@ public class CronJobService implements ApplicationRunner {
         if (entity.getEnabled() == null) entity.setEnabled(true);
 
         entity.setNextRunTime(calcNextRunTime(springCron, entity.getTimezone()));
-        cronJobMapper.insert(entity);
+        try {
+            cronJobMapper.insert(entity);
+        } catch (DuplicateKeyException e) {
+            // Race: another concurrent create won. Re-fetch and return that one.
+            CronJobEntity raced = findActiveDuplicate(workspaceId, dto.getAgentId(), dto.getName());
+            if (raced != null) {
+                log.info("[CronJob] create race resolved: ws={} agent={} name={} → existing id={}",
+                        workspaceId, dto.getAgentId(), dto.getName(), raced.getId());
+                return getById(raced.getId(), workspaceId);
+            }
+            throw e;
+        }
 
         if (Boolean.TRUE.equals(entity.getEnabled())) {
             // register() 内部会再次调用 toSpringCron，但表达式已校验过，不会抛异常
@@ -198,6 +266,39 @@ public class CronJobService implements ApplicationRunner {
         }
 
         return getById(entity.getId(), workspaceId);
+    }
+
+    /**
+     * Issue #50: lookup existing active row for the dedup natural key.
+     * No {@code @TableLogic} on this entity — {@code deleted=0} must be
+     * filtered explicitly.
+     */
+    /**
+     * Issue #50 review #6 — excluding-self variant for the update path.
+     * Same lookup as {@link #findActiveDuplicate} but skips the row
+     * currently being edited so a no-op save (same name, same agent)
+     * doesn't false-positive as a duplicate.
+     */
+    private CronJobEntity findActiveDuplicateExcluding(Long workspaceId, Long agentId, String name, Long excludeId) {
+        if (workspaceId == null || agentId == null || name == null) return null;
+        LambdaQueryWrapper<CronJobEntity> q = new LambdaQueryWrapper<CronJobEntity>()
+                .eq(CronJobEntity::getWorkspaceId, workspaceId)
+                .eq(CronJobEntity::getAgentId, agentId)
+                .eq(CronJobEntity::getName, name)
+                .eq(CronJobEntity::getDeleted, 0);
+        if (excludeId != null) q.ne(CronJobEntity::getId, excludeId);
+        return cronJobMapper.selectOne(q);
+    }
+
+    private CronJobEntity findActiveDuplicate(Long workspaceId, Long agentId, String name) {
+        if (workspaceId == null || agentId == null || name == null) return null;
+        return cronJobMapper.selectOne(
+                new LambdaQueryWrapper<CronJobEntity>()
+                        .eq(CronJobEntity::getWorkspaceId, workspaceId)
+                        .eq(CronJobEntity::getAgentId, agentId)
+                        .eq(CronJobEntity::getName, name)
+                        .eq(CronJobEntity::getDeleted, 0)
+                        .last("LIMIT 1"));
     }
 
     public CronJobDTO update(Long id, CronJobDTO dto, Long workspaceId) {
@@ -209,6 +310,22 @@ public class CronJobService implements ApplicationRunner {
         }
         validateDto(dto);
         String springCron = toSpringCron(dto.getCronExpression());
+
+        // Issue #50 review #6: excluding-self duplicate check. Without
+        // this, renaming a job onto an existing (workspace, agent, name)
+        // tuple surfaces as a raw DataIntegrityViolationException from
+        // the V69 unique index instead of a controlled validation
+        // error. Try app-level check first; the catch below is the
+        // race-protection net.
+        Long newAgentId = dto.getAgentId();
+        String newName = dto.getName();
+        if (newName != null && newAgentId != null) {
+            CronJobEntity collision = findActiveDuplicateExcluding(workspaceId, newAgentId, newName, id);
+            if (collision != null) {
+                throw new MateClawException("err.cron.duplicate_name",
+                        "已存在同名定时任务: name=" + newName + ", agentId=" + newAgentId);
+            }
+        }
 
         existing.setName(dto.getName());
         existing.setCronExpression(dto.getCronExpression());
@@ -222,7 +339,16 @@ public class CronJobService implements ApplicationRunner {
         }
         existing.setNextRunTime(calcNextRunTime(springCron, existing.getTimezone()));
 
-        cronJobMapper.updateById(existing);
+        try {
+            cronJobMapper.updateById(existing);
+        } catch (DuplicateKeyException e) {
+            // Race: another concurrent rename grabbed the natural key
+            // between our app-level check and the UPDATE. Translate to
+            // a clean validation error so the controller can 4xx instead
+            // of a 500 leaking the unique-key constraint name.
+            throw new MateClawException("err.cron.duplicate_name",
+                    "已存在同名定时任务: name=" + dto.getName() + ", agentId=" + dto.getAgentId());
+        }
 
         // 加锁保证 cancel + register 的原子性（ReentrantLock 支持同线程重入）
         schedulerLock.lock();
@@ -290,13 +416,7 @@ public class CronJobService implements ApplicationRunner {
         // CronJobLifecycleService work as advertised. "manual" trigger type
         // distinguishes this from scheduler-driven runs in mate_cron_job_run.
         // Run on the virtual-thread cronExecutor — never block the scheduler.
-        cronExecutor.submit(() -> {
-            try {
-                cronJobRunner.executeJob(entity, "manual");
-            } finally {
-                updateRunTimes(entity.getId(), entity.getCronExpression(), entity.getTimezone());
-            }
-        });
+        cronExecutor.submit(() -> runWithBackpressure(entity, "manual"));
     }
 
     // ==================== 调度器管理 ====================
@@ -313,14 +433,12 @@ public class CronJobService implements ApplicationRunner {
             // cronExecutor — the LLM call must NOT run on a scheduler
             // worker (4 concurrent long crons would otherwise saturate the
             // pool and the 5th would miss its tick).
-            ScheduledFuture<?> future = scheduler.schedule(() ->
-                    cronExecutor.submit(() -> {
-                        try {
-                            cronJobRunner.executeJob(job, "scheduled");
-                        } finally {
-                            updateRunTimes(job.getId(), job.getCronExpression(), job.getTimezone());
-                        }
-                    }), trigger);
+            //
+            // RFC-03 Lane G2: tickWithDistributedLock wraps the offload in
+            // a ShedLock acquire/release so a multi-instance deployment
+            // fires each tick exactly once. See javadoc on that method.
+            ScheduledFuture<?> future = scheduler.schedule(
+                    () -> tickWithDistributedLock(job), trigger);
             scheduledTasks.put(job.getId(), future);
             log.info("[CronJob] Registered job {} ({}) ws={}, cron={}, tz={}",
                     job.getId(), job.getName(), job.getWorkspaceId(),
@@ -337,6 +455,48 @@ public class CronJobService implements ApplicationRunner {
         }
     }
 
+    /**
+     * RFC-03 Lane G2 — distributed-lock-guarded tick fire.
+     *
+     * <p>Called on the scheduler thread when {@link CronTrigger} fires.
+     * Tries to acquire a ShedLock entry keyed by {@code "cron-job-{jobId}"};
+     * if another node holds it, returns immediately (silent skip — siblings
+     * always see this for every tick, which is by design). On success,
+     * passes lock ownership into the virtual-thread executor so the work
+     * proceeds on {@link #cronExecutor} and the lock releases only after
+     * {@code runWithBackpressure} completes. {@link #LOCK_AT_MOST_FOR} is
+     * the safety net for a node that crashes mid-execution.
+     *
+     * <p>Package-private so unit tests can drive lock-acquisition outcomes
+     * without booting the full Spring context.
+     */
+    void tickWithDistributedLock(CronJobEntity job) {
+        Long jobId = job.getId();
+        Optional<SimpleLock> maybeLock = lockProvider.lock(new LockConfiguration(
+                Instant.now(),
+                "cron-job-" + jobId,
+                LOCK_AT_MOST_FOR,
+                LOCK_AT_LEAST_FOR));
+        if (maybeLock.isEmpty()) {
+            log.debug("[CronJob] {} skipped — another node holds the tick lock", jobId);
+            return;
+        }
+        SimpleLock lock = maybeLock.get();
+        cronExecutor.submit(() -> {
+            try {
+                runWithBackpressure(job, "scheduled");
+            } finally {
+                try {
+                    lock.unlock();
+                } catch (Exception unlockEx) {
+                    // Lock will expire after LOCK_AT_MOST_FOR anyway; log + continue
+                    // so a transient unlock failure doesn't taint the cron worker.
+                    log.warn("[CronJob] {} lock release failed: {}", jobId, unlockEx.getMessage());
+                }
+            }
+        });
+    }
+
     // ==================== 任务执行 ====================
     //
     // RFC-063r §2.7.1: the executeJob body moved to CronJobRunner so the
@@ -350,6 +510,37 @@ public class CronJobService implements ApplicationRunner {
     // Both register() and runNow() now delegate to cronJobRunner.executeJob;
     // see those methods above. The wrap below ensures next-run rolls forward
     // regardless of run outcome.
+
+    /**
+     * Issue #50: gate every run on {@link #cronConcurrencyLimiter} so that a
+     * minute-boundary stampede of N enabled jobs cannot fan out into N
+     * simultaneous JDBC connection acquisitions. Excess runs queue on the
+     * virtual thread (cheap) instead of competing for the pool.
+     *
+     * <p>The {@code updateRunTimes} write is intentionally inside the
+     * permit's hold so the next-run pointer advances under the same
+     * backpressure budget — otherwise a tail of bookkeeping writes could
+     * still pile up after the executor "finishes".
+     */
+    private void runWithBackpressure(CronJobEntity job, String triggerType) {
+        try {
+            cronConcurrencyLimiter.acquire();
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            log.warn("[CronJob] Interrupted while waiting to run job {} ({})",
+                    job.getId(), triggerType);
+            return;
+        }
+        try {
+            cronJobRunner.executeJob(job, triggerType);
+        } finally {
+            try {
+                updateRunTimes(job.getId(), job.getCronExpression(), job.getTimezone());
+            } finally {
+                cronConcurrencyLimiter.release();
+            }
+        }
+    }
 
     /**
      * 合并更新 lastRunTime 和 nextRunTime，单次 DB 写入替代原来的 4 次 selectById + updateById
@@ -467,7 +658,9 @@ public class CronJobService implements ApplicationRunner {
             throw new MateClawException("err.cron.expression_required", "Cron 表达式不能为空");
         }
         String taskType = dto.getTaskType() != null ? dto.getTaskType() : "text";
-        if ("text".equals(taskType) && (dto.getTriggerMessage() == null || dto.getTriggerMessage().isBlank())) {
+        // 'text' (LLM chat) and 'reminder' (direct push) both rely on triggerMessage.
+        if (("text".equals(taskType) || "reminder".equals(taskType))
+                && (dto.getTriggerMessage() == null || dto.getTriggerMessage().isBlank())) {
             throw new MateClawException("err.cron.trigger_required", "触发消息不能为空");
         }
         if ("agent".equals(taskType) && (dto.getRequestBody() == null || dto.getRequestBody().isBlank())) {

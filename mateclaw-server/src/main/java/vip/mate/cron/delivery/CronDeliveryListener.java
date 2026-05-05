@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import vip.mate.audit.service.AuditEventService;
+import vip.mate.cron.model.DeliveryConfig;
 
 import java.util.List;
 import java.util.Optional;
@@ -40,6 +41,18 @@ public class CronDeliveryListener {
     @Async("cronDeliveryExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onCompleted(CronJobCompletedEvent ev) {
+        // RFC-03 Lane C1: explicit silent mode short-circuits delivery
+        // resolution. Tools already executed, the run row is already
+        // persisted — only the agent's narrative reply is withheld from
+        // the channel. Status row stays NONE (same as "no strategy
+        // matched") so dashboards keep one canonical "not delivered"
+        // bucket.
+        DeliveryConfig dc = ev.job() != null ? ev.job().getDeliveryConfig() : null;
+        if (dc != null && dc.isAgentReplySuppressed()) {
+            log.debug("[CronDelivery] Job {} suppressAgentReply=true; skipping delivery",
+                    ev.job().getId());
+            return;
+        }
         Optional<CronResultDelivery> strategy = deliveries.stream()
                 .filter(d -> d.supports(ev.job()))
                 .findFirst();

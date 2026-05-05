@@ -9,11 +9,15 @@ import org.springframework.stereotype.Service;
 import vip.mate.exception.MateClawException;
 import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.repository.SkillMapper;
+import vip.mate.skill.runtime.SkillCatalogSort;
+import vip.mate.skill.runtime.SkillCatalogSorter;
+import vip.mate.skill.secret.SkillSecretService;
 import vip.mate.skill.workspace.SkillWorkspaceManager;
 import vip.mate.skill.workspace.SkillWorkspaceProperties;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Set;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +44,7 @@ public class SkillService {
     private final SkillMapper skillMapper;
     private final SkillWorkspaceManager workspaceManager;
     private final SkillWorkspaceProperties workspaceProperties;
+    private final SkillSecretService skillSecretService;
     private vip.mate.skill.runtime.SkillRuntimeService runtimeService;
 
     /**
@@ -76,6 +81,27 @@ public class SkillService {
     public IPage<SkillEntity> pageSkills(int page, int size, String keyword,
                                           String skillType, Boolean enabled,
                                           String scanStatus) {
+        return pageSkills(page, size, keyword, skillType, enabled, scanStatus,
+                null, null, null, Set.of());
+    }
+
+    public IPage<SkillEntity> pageSkills(int page, int size, String keyword,
+                                          String skillType, Boolean enabled,
+                                          String scanStatus,
+                                          String sort,
+                                          String source,
+                                          String runtime) {
+        return pageSkills(page, size, keyword, skillType, enabled, scanStatus,
+                sort, source, runtime, Set.of());
+    }
+
+    public IPage<SkillEntity> pageSkills(int page, int size, String keyword,
+                                          String skillType, Boolean enabled,
+                                          String scanStatus,
+                                          String sort,
+                                          String source,
+                                          String runtime,
+                                          Set<Long> pinnedSkillIds) {
         Page<SkillEntity> pageParam = new Page<>(Math.max(page, 1), Math.max(size, 1));
         LambdaQueryWrapper<SkillEntity> wrapper = new LambdaQueryWrapper<>();
 
@@ -86,8 +112,12 @@ public class SkillService {
                     .or().like(SkillEntity::getDescription, kw)
                     .or().like(SkillEntity::getTags, kw));
         }
-        if (skillType != null && !skillType.isBlank()) {
-            wrapper.eq(SkillEntity::getSkillType, skillType);
+        String effectiveSource = source != null && !source.isBlank() ? source : skillType;
+        if (effectiveSource != null && !effectiveSource.isBlank()
+                && !"all".equalsIgnoreCase(effectiveSource)) {
+            String normalizedSource = effectiveSource.trim().toLowerCase();
+            if ("custom".equals(normalizedSource)) normalizedSource = "dynamic";
+            wrapper.eq(SkillEntity::getSkillType, normalizedSource);
         }
         if (enabled != null) {
             wrapper.eq(SkillEntity::getEnabled, enabled);
@@ -96,8 +126,34 @@ public class SkillService {
             wrapper.eq(SkillEntity::getSecurityScanStatus, scanStatus.trim().toUpperCase());
         }
 
-        wrapper.orderByDesc(SkillEntity::getBuiltin)
-               .orderByDesc(SkillEntity::getCreateTime);
+        SkillCatalogSort catalogSort = SkillCatalogSort.parse(sort);
+        if (runtime != null && !runtime.isBlank() && !"all".equalsIgnoreCase(runtime)
+                || catalogSort == SkillCatalogSort.RECOMMENDED
+                || catalogSort == SkillCatalogSort.STATUS
+                || catalogSort == SkillCatalogSort.TYPE) {
+            List<SkillEntity> filtered = skillMapper.selectList(wrapper).stream()
+                    .filter(s -> SkillCatalogSorter.runtimeMatches(s, runtime))
+                    .toList();
+            List<SkillEntity> sorted = SkillCatalogSorter.sortEntities(filtered, catalogSort, pinnedSkillIds);
+            long total = sorted.size();
+            int safePage = Math.max(page, 1);
+            int safeSize = Math.max(size, 1);
+            int from = Math.min((safePage - 1) * safeSize, sorted.size());
+            int to = Math.min(from + safeSize, sorted.size());
+            pageParam.setRecords(sorted.subList(from, to));
+            pageParam.setTotal(total);
+            return pageParam;
+        }
+
+        if (catalogSort == SkillCatalogSort.NAME) {
+            wrapper.orderByAsc(SkillEntity::getName);
+        } else if (catalogSort == SkillCatalogSort.UPDATED) {
+            wrapper.orderByDesc(SkillEntity::getUpdateTime)
+                    .orderByAsc(SkillEntity::getName);
+        } else {
+            wrapper.orderByAsc(SkillEntity::getSkillType)
+                    .orderByAsc(SkillEntity::getName);
+        }
 
         return skillMapper.selectPage(pageParam, wrapper);
     }
@@ -228,22 +284,45 @@ public class SkillService {
 
     /**
      * 更新技能
-     * 内置技能只允许修改 enabled、configJson、description
+     * <p>
+     * 内置技能允许修改的字段集合：
+     * <ul>
+     *   <li>{@code enabled} — 启用开关</li>
+     *   <li>{@code configJson} / {@code skillContent} — 运维 fallback 内容</li>
+     *   <li>{@code description} — 文案微调</li>
+     *   <li><b>展示覆盖</b>：{@code icon}、{@code nameZh}、{@code nameEn}、{@code tags}
+     *       — 这些纯前台显示字段，不影响 builtin 的运行时安全性，让用户能为内置 skill
+     *       挑像素图标 / 改本地化显示名而不必碰源码。
+     *       <br>注：{@code icon} 是 manifest 投影字段，会被 SkillPackageResolver
+     *       根据 SKILL.md frontmatter 同步。配套的解析器修改（仅在 row icon 为空时
+     *       才投影）确保用户覆盖能持久化。
+     *   </li>
+     * </ul>
+     * 仍不允许：name / version / author / skillType / builtin —— 这些是身份字段，
+     * 改动会破坏绑定与解析。
      */
     public SkillEntity updateSkill(SkillEntity skill) {
         SkillEntity existing = getSkill(skill.getId());
 
         if (Boolean.TRUE.equals(existing.getBuiltin())) {
-            // 内置技能：只允许修改有限字段
+            // Functional fields
             existing.setEnabled(skill.getEnabled() != null ? skill.getEnabled() : existing.getEnabled());
             existing.setConfigJson(skill.getConfigJson());
             existing.setDescription(skill.getDescription() != null ? skill.getDescription() : existing.getDescription());
-            // builtin skill 也允许更新 skillContent（用于维护 fallback 内容）
             if (skill.getSkillContent() != null) {
                 existing.setSkillContent(skill.getSkillContent());
             }
+            // Display overrides — pure frontend-facing, no runtime impact.
+            // Treat blank-string as an explicit "clear" (so the picker's
+            // "no icon" path reverts the row icon back to the manifest
+            // projection on the next resolve).
+            if (skill.getIcon() != null) existing.setIcon(skill.getIcon());
+            if (skill.getNameZh() != null) existing.setNameZh(skill.getNameZh());
+            if (skill.getNameEn() != null) existing.setNameEn(skill.getNameEn());
+            if (skill.getTags() != null) existing.setTags(skill.getTags());
+
             skillMapper.updateById(existing);
-            log.info("Updated builtin skill (limited): {}", existing.getName());
+            log.info("Updated builtin skill (display overrides allowed): {}", existing.getName());
 
             // builtin skill 也同步 workspace SKILL.md
             syncSkillContentToWorkspace(existing);
@@ -273,26 +352,90 @@ public class SkillService {
     }
 
     /**
-     * 删除技能
-     * 内置技能不可删除
+     * RFC-090 §14.5 — uninstall path: logical delete (row stays in DB
+     * with {@code deleted=1}) + archive workspace to
+     * {@code .archived/}.
+     *
+     * <p>Recoverable: the user can re-install a skill of the same name
+     * later, since the archived workspace and soft-deleted row stay
+     * out of every standard query but on disk.
+     *
+     * <p>Builtin skills are protected: uninstalling a builtin would
+     * leave the seed re-creating it on next boot, so we surface a
+     * clear error instead of doing partial work.
      */
-    public void deleteSkill(Long id) {
+    public void uninstallSkill(Long id) {
         SkillEntity skill = getSkill(id);
         if (Boolean.TRUE.equals(skill.getBuiltin())) {
-            throw new MateClawException("err.skill.builtin_readonly", "内置技能不可删除: " + skill.getName());
+            throw new MateClawException("err.skill.builtin_readonly",
+                    "内置技能不可卸载: " + skill.getName());
         }
-        skillMapper.deleteById(id);
-        log.info("Deleted skill: {}", skill.getName());
+        skillMapper.deleteById(id); // logical delete (deleted=1)
+        log.info("Uninstalled skill (logical delete + archive): {}", skill.getName());
 
-        // 归档工作区目录
         if ("archive".equals(workspaceProperties.getDeletePolicy())) {
             workspaceManager.archiveWorkspace(skill.getName());
         }
-
-        // 刷新 runtime cache
+        // RFC-090 review #3 — refresh won't deregister wrappers for a
+        // soft-deleted row (it only resolves rows still in
+        // listEnabledSkills), so do it explicitly here.
         if (runtimeService != null) {
+            runtimeService.deregisterSkillWrappers(id);
             runtimeService.refreshActiveSkills();
         }
+    }
+
+    /**
+     * RFC-090 §14.5 — hard-delete path: physical SQL delete + workspace
+     * purge. Admin only. Not recoverable.
+     *
+     * <p>Use this when you need to free the slug for an unrelated skill
+     * or scrub a row that's been corrupted. UI buttons should call
+     * {@link #uninstallSkill} instead unless the user explicitly chose
+     * "permanently delete".
+     */
+    public void hardDeleteSkill(Long id) {
+        SkillEntity skill = getSkill(id);
+        if (Boolean.TRUE.equals(skill.getBuiltin())) {
+            throw new MateClawException("err.skill.builtin_readonly",
+                    "内置技能不可硬删除: " + skill.getName());
+        }
+        skillMapper.hardDeleteById(id); // bypass the logical-delete flag
+        log.info("Hard-deleted skill (physical delete + purge): {}", skill.getName());
+
+        // RFC-091 settings bridge — purge any per-skill secrets so a
+        // future skill reusing this id doesn't inherit stale credentials.
+        try {
+            int purged = skillSecretService.purgeForSkill(id);
+            if (purged > 0) {
+                log.info("Purged {} secret(s) for hard-deleted skill {}", purged, skill.getName());
+            }
+        } catch (Exception e) {
+            log.warn("Failed to purge secrets for skill {}: {}", skill.getName(), e.getMessage());
+        }
+
+        workspaceManager.purgeWorkspace(skill.getName());
+
+        // RFC-090 review #3 — same explicit deregister as uninstall.
+        if (runtimeService != null) {
+            runtimeService.deregisterSkillWrappers(id);
+            runtimeService.refreshActiveSkills();
+        }
+    }
+
+    /**
+     * Legacy alias maintained for callers that still use {@code
+     * deleteSkill}. Routes to the user-friendly uninstall semantics
+     * (logical delete + archive). New code should pick {@link
+     * #uninstallSkill} or {@link #hardDeleteSkill} explicitly.
+     *
+     * @deprecated Use {@link #uninstallSkill} for user-facing UI delete
+     *             (recoverable) or {@link #hardDeleteSkill} for admin
+     *             "permanent" delete.
+     */
+    @Deprecated
+    public void deleteSkill(Long id) {
+        uninstallSkill(id);
     }
 
     /**
@@ -303,6 +446,14 @@ public class SkillService {
         skill.setEnabled(enabled);
         skillMapper.updateById(skill);
         log.info("Skill {} {}", skill.getName(), enabled ? "enabled" : "disabled");
+
+        // RFC-090 review #3 — when disabling, explicitly tear down any
+        // registered wrapper tools (knowledge / acp). Without this the
+        // wrappers stay advertised because the availability supplier
+        // closes over the snapshot ResolvedSkill captured at registration.
+        if (!enabled && runtimeService != null) {
+            runtimeService.deregisterSkillWrappers(id);
+        }
 
         // 刷新 runtime cache
         if (runtimeService != null) {

@@ -154,9 +154,13 @@ import { skillInstallApi } from '@/api/index'
 import type { InstallTask, HubSkillInfo } from '@/types/index'
 
 const props = defineProps<{ visible: boolean }>()
+// RFC-090 §4.4 — when install completes, hand the parent the skill
+// name so it can auto-open the pre-flight dialog if requirements
+// aren't met. Backwards-compat: payload is optional, old listeners
+// that ignore it keep working.
 const emit = defineEmits<{
   (e: 'update:visible', val: boolean): void
-  (e: 'installed'): void
+  (e: 'installed', payload?: { name?: string }): void
 }>()
 
 const { t } = useI18n()
@@ -228,7 +232,10 @@ function startPolling(taskId: string) {
         installing.value = false
         if (status === 'COMPLETED') {
           ElMessage.success(t('skills.import.installed'))
-          emit('installed')
+          // The install task's result envelope carries `{name, enabled, sourceUrl, ...}`.
+          // Hand the slug along so the parent can pop preflight for the
+          // freshly-installed skill if its requirements aren't met.
+          emit('installed', { name: res.data?.result?.name })
         }
       }
     } catch {
@@ -300,7 +307,7 @@ async function uploadZip() {
     })
     ElMessage.success(t('skills.import.uploadSuccess'))
     zipFile.value = null
-    emit('installed')
+    emit('installed', { name: res?.data?.name })
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.msg || e?.message || t('skills.import.uploadFailed'))
   } finally {

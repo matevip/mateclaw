@@ -916,9 +916,17 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
                 case "image" -> {
                     String imageKey = (String) contentObj.get("image_key");
                     if (imageKey != null) {
-                        String localPath = maybeDownloadResource(messageId, imageKey, "image", null);
+                        // Images need bytes for vision: the Feishu CDN URL
+                        // requires tenant_access_token, so a downstream vision
+                        // tool that only sees image_key cannot fetch the
+                        // image. Default-on for images (separate from the
+                        // file/audio/video gate) so vision works out of the
+                        // box; admins can opt out with feishu_image_download_enabled=false.
+                        String localPath = maybeDownloadImage(messageId, imageKey);
                         MessageContentPart part = MessageContentPart.image(imageKey, null);
-                        if (localPath != null) part.setPath(localPath);
+                        if (localPath != null) {
+                            part.setPath(localPath);
+                        }
                         parts.add(part);
                     }
                     yield "[图片]";
@@ -1068,7 +1076,9 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
                     case "img" -> {
                         String imageKey = (String) element.get("image_key");
                         if (imageKey != null) {
-                            String localPath = mediaDownload ? maybeDownloadResource(messageId, imageKey, "image", null) : null;
+                            // Same reasoning as the standalone image case: vision
+                            // pipelines need bytes; image_key alone is opaque.
+                            String localPath = maybeDownloadImage(messageId, imageKey);
                             MessageContentPart imgPart = MessageContentPart.image(imageKey, null);
                             if (localPath != null) imgPart.setPath(localPath);
                             parts.add(imgPart);
@@ -1115,6 +1125,22 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
             return null;
         }
         return downloadResource(messageId, fileKey, type, fileNameHint);
+    }
+
+    /**
+     * Image-specific download: default ON so the vision/STT pipeline
+     * downstream actually has bytes to analyze. Without the local file,
+     * vision providers see only an opaque {@code image_key} and the
+     * Feishu CDN URL needs tenant_access_token to fetch — neither of
+     * which the model can resolve. Admins who want to suppress image
+     * downloads (e.g. tighter privacy, no disk usage) can set
+     * {@code feishu_image_download_enabled=false} on the channel config.
+     */
+    private String maybeDownloadImage(String messageId, String imageKey) {
+        if (!getConfigBoolean("feishu_image_download_enabled", true)) {
+            return null;
+        }
+        return downloadResource(messageId, imageKey, "image", null);
     }
 
     /**
@@ -1184,16 +1210,38 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
 
     // ==================== 消息发送 ====================
 
+    /**
+     * Conservative per-message char ceiling. Feishu's documented limit is on
+     * the encoded JSON body (~150KB), but UTF-8 Chinese is 3 bytes/char and
+     * JSON escape adds further overhead, so a 4000-char chunk is comfortably
+     * under any realistic limit and also gives readable IM chunking instead
+     * of one wall of text. Split at paragraph / line boundaries when possible.
+     */
+    static final int MAX_TEXT_MESSAGE_CHARS = 4000;
+
     @Override
     public void sendMessage(String targetId, String content) {
         if (httpClient == null) {
             log.warn("[feishu] Channel not started, cannot send message");
             return;
         }
+        if (content == null) {
+            return;
+        }
 
         ensureTokenValid();
-        String apiBase = getApiBaseUrl();
+        List<String> chunks = splitTextForFeishu(content, MAX_TEXT_MESSAGE_CHARS);
+        if (chunks.size() > 1) {
+            log.info("[feishu] Splitting message into {} chunks ({} chars total) before send",
+                    chunks.size(), content.length());
+        }
+        for (String chunk : chunks) {
+            sendOneTextChunk(targetId, chunk);
+        }
+    }
 
+    private void sendOneTextChunk(String targetId, String content) {
+        String apiBase = getApiBaseUrl();
         try {
             String jsonBody = objectMapper.writeValueAsString(Map.of(
                     "receive_id", targetId,
@@ -1212,12 +1260,58 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
             if (response.statusCode() != 200) {
                 log.warn("[feishu] Send message failed: status={}, body={}", response.statusCode(), response.body());
             } else {
-                log.debug("[feishu] Message sent to chat_id={}", targetId);
+                log.debug("[feishu] Message sent to chat_id={} ({} chars)", targetId, content.length());
             }
 
         } catch (Exception e) {
             log.error("[feishu] Failed to send message: {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * Split a possibly-oversized message into chunks no larger than
+     * {@code maxChars}, preferring paragraph (\n\n) then line (\n) then
+     * whitespace boundaries. Hard-cuts as a last resort so we never silently
+     * drop content.
+     */
+    static List<String> splitTextForFeishu(String content, int maxChars) {
+        if (content == null || content.isEmpty()) {
+            return List.of();
+        }
+        if (content.length() <= maxChars) {
+            return List.of(content);
+        }
+        List<String> chunks = new ArrayList<>();
+        int idx = 0;
+        int n = content.length();
+        while (idx < n) {
+            int end = Math.min(idx + maxChars, n);
+            if (end < n) {
+                int boundary = -1;
+                int paragraphCut = content.lastIndexOf("\n\n", end);
+                if (paragraphCut > idx + maxChars / 2) {
+                    boundary = paragraphCut + 2;
+                }
+                if (boundary < 0) {
+                    int lineCut = content.lastIndexOf('\n', end);
+                    if (lineCut > idx + maxChars / 2) {
+                        boundary = lineCut + 1;
+                    }
+                }
+                if (boundary < 0) {
+                    int spaceCut = content.lastIndexOf(' ', end);
+                    if (spaceCut > idx + maxChars / 2) {
+                        boundary = spaceCut + 1;
+                    }
+                }
+                if (boundary > idx) {
+                    end = boundary;
+                }
+            }
+            chunks.add(content.substring(idx, end));
+            idx = end;
+        }
+        return chunks;
     }
 
     @Override

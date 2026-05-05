@@ -2,6 +2,7 @@ package vip.mate.tool.mcp.service;
 
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -162,6 +163,30 @@ public class McpServerService {
     }
 
     /**
+     * List the tools the given MCP server has surfaced to the runtime.
+     *
+     * <p>Reads from {@link McpClientManager#getServerTools(Long)} which
+     * already caches the {@code listTools()} response on connect/refresh,
+     * so this is a constant-time lookup with no network roundtrip. The
+     * returned list is empty when the server is disconnected, in error
+     * state, or simply has no tools — never throws on those paths so the
+     * UI can render "no tools yet" rather than an error.
+     *
+     * <p>{@link #getById} is invoked first so a stale id (deleted server)
+     * still returns a 404 from the controller layer rather than silently
+     * "no tools".
+     */
+    public List<vip.mate.tool.mcp.model.McpToolDescriptor> listToolsByServer(Long id) {
+        getById(id); // throws if the server is gone — preserves 404 semantics
+        return mcpClientManager.getServerTools(id).stream()
+                .map(t -> new vip.mate.tool.mcp.model.McpToolDescriptor(
+                        t.name(),
+                        t.description(),
+                        t.inputSchema()))
+                .toList();
+    }
+
+    /**
      * 刷新所有启用的 MCP server
      */
     public void refreshAll() {
@@ -289,15 +314,16 @@ public class McpServerService {
 
     private void updateStatus(Long id, String status, String error, int toolCount) {
         try {
-            McpServerEntity update = new McpServerEntity();
-            update.setId(id);
-            update.setLastStatus(status);
-            update.setLastError(error);
-            update.setToolCount(toolCount);
+            LambdaUpdateWrapper<McpServerEntity> wrapper = new LambdaUpdateWrapper<>();
+            wrapper.eq(McpServerEntity::getId, id);
+            wrapper.set(McpServerEntity::getLastStatus, status);
+            wrapper.set(McpServerEntity::getLastError, error);
+            wrapper.set(McpServerEntity::getToolCount, toolCount);
             if ("connected".equals(status)) {
-                update.setLastConnectedTime(LocalDateTime.now());
+                wrapper.set(McpServerEntity::getLastConnectedTime, LocalDateTime.now());
             }
-            mcpServerMapper.updateById(update);
+            wrapper.set(McpServerEntity::getUpdateTime, LocalDateTime.now());
+            mcpServerMapper.update(null, wrapper);
         } catch (Exception e) {
             log.warn("Failed to update MCP server status: {}", e.getMessage());
         }

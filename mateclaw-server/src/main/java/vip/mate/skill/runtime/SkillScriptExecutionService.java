@@ -10,8 +10,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -31,13 +33,29 @@ public class SkillScriptExecutionService {
             .toLowerCase(Locale.ROOT).contains("win");
 
     /**
-     * 执行脚本
+     * 执行脚本（兼容签名 — 不注入额外 env vars）
      *
      * @param scriptPath 脚本绝对路径（已验证安全）
      * @param args 脚本参数
      * @return 执行结果
      */
     public ScriptResult execute(Path scriptPath, List<String> args) {
+        return execute(scriptPath, args, Collections.emptyMap());
+    }
+
+    /**
+     * 执行脚本，附加 env vars 到子进程环境（RFC-091 settings bridge）。
+     * 用于把 skill 在 mate_skill_secret 里存的解密 secret 注入到脚本运行
+     * 时环境，让 SKILL.md 里 {@code $AIRTABLE_API_KEY} 等引用自然解析。
+     *
+     * <p>{@code envVars} 中的键值会 OVERRIDE 父进程同名环境变量；空值跳过。
+     *
+     * @param scriptPath 脚本绝对路径（已验证安全）
+     * @param args 脚本参数
+     * @param envVars 要注入子进程环境的额外键值对，可为空
+     * @return 执行结果
+     */
+    public ScriptResult execute(Path scriptPath, List<String> args, Map<String, String> envVars) {
         if (!Files.exists(scriptPath) || !Files.isRegularFile(scriptPath)) {
             return ScriptResult.error(-1, "Script not found: " + scriptPath);
         }
@@ -95,6 +113,19 @@ public class SkillScriptExecutionService {
             pb.directory(scriptPath.getParent().toFile());
             pb.redirectOutput(stdoutFile.toFile());
             pb.redirectError(stderrFile.toFile());
+            // RFC-091: inject per-skill secrets / settings as env vars.
+            // pb.environment() inherits the parent process env; putAll
+            // OVERRIDES same-named entries with the supplied values.
+            // Null / blank values are skipped to avoid clearing
+            // legitimate parent env vars.
+            if (envVars != null && !envVars.isEmpty()) {
+                Map<String, String> processEnv = pb.environment();
+                for (Map.Entry<String, String> e : envVars.entrySet()) {
+                    if (e.getKey() == null || e.getKey().isBlank()) continue;
+                    if (e.getValue() == null) continue;
+                    processEnv.put(e.getKey(), e.getValue());
+                }
+            }
 
             Process process = pb.start();
 

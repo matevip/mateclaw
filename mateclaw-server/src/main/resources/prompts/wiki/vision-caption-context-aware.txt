@@ -1,0 +1,11 @@
+Describe this image factually for a knowledge-base index. Surrounding text below tells you what topic the image relates to.
+
+--- Text before image ---
+{before}
+
+--- Text after image ---
+{after}
+
+--- End surrounding text ---
+
+If the image is clearly NOT relevant to the surrounding text, prepend "[OFF-TOPIC] " to your response. Otherwise, describe factually: visible text verbatim, chart axes and values, diagram structure, key visual elements. 2 to 4 sentences. Plain text only — no markdown, no preamble.

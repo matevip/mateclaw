@@ -9,6 +9,8 @@ import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * Wiki context service — builds context for agent conversation injection.
@@ -27,6 +29,18 @@ public class WikiContextService {
     private final WikiProperties properties;
 
     /**
+     * Continuation / acknowledgement tokens. When the user message reduces to
+     * one of these the per-turn retrieval is skipped — these queries carry no
+     * topical signal and the retriever otherwise returns whichever pages
+     * dominate the index, derailing the conversation onto unrelated content.
+     */
+    private static final Set<String> CONTINUATION_TOKENS = Set.of(
+            "继续", "继续吧", "继续做", "继续输出", "继续完成", "请继续",
+            "好的", "好", "嗯", "嗯嗯", "是的", "对", "对的",
+            "ok", "okay", "go on", "next", "continue", "yes", "yeah", "sure", "y"
+    );
+
+    /**
      * Build relevant wiki context for the current user message.
      * <p>
      * RFC-032: Uses HybridRetriever for consistent search quality,
@@ -34,6 +48,16 @@ public class WikiContextService {
      */
     public String buildRelevantContext(Long agentId, String userMessage) {
         if (!properties.isEnabled() || userMessage == null || userMessage.isBlank()) {
+            return "";
+        }
+
+        // Skip retrieval for continuation / acknowledgement turns — observed
+        // in production: a user reply of "继续" produced top-5 hits dominated
+        // by the wiki KB's most-cited pages and rerouted four parallel
+        // multi-agent tasks onto unrelated topics.
+        String trimmed = userMessage.trim();
+        if (trimmed.length() < properties.getRelevantContextMinQueryLength()
+                || CONTINUATION_TOKENS.contains(trimmed.toLowerCase(Locale.ROOT))) {
             return "";
         }
 
@@ -46,6 +70,18 @@ public class WikiContextService {
         List<PageSearchResult> hits = hybridRetriever.search(kbId, userMessage, "hybrid", 5);
         if (hits.isEmpty()) {
             return "";
+        }
+
+        // Drop tail hits that score far below the top hit so a single strong
+        // match isn't accompanied by 4 weakly-related pages.
+        double minRel = properties.getRelevantContextMinRelativeScore();
+        if (minRel > 0 && hits.size() > 1) {
+            double topScore = hits.get(0).score();
+            double floor = topScore * minRel;
+            hits = hits.stream().filter(h -> h.score() >= floor).toList();
+            if (hits.isEmpty()) {
+                return "";
+            }
         }
 
         StringBuilder sb = new StringBuilder("<wiki-relevant>\n");

@@ -28,6 +28,14 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { PhaseEventData, StreamPhase } from '@/types'
 
+/** Pre-token lifecycle stage from useChat. Drives the loading copy in the
+ *  window between "user sent" and "first token landed". */
+interface LifecycleStage {
+  stage: 'connecting' | 'started' | 'context_prepared' | 'llm_request_sent' | 'streaming'
+  detail?: any
+  since: number
+}
+
 interface Props {
   isLoading: boolean
   toolCount?: number
@@ -43,6 +51,8 @@ interface Props {
   runningToolName?: string
   /** 是否有排队消息 */
   hasQueued?: boolean
+  /** Fine-grained pre-token stage. Preferred over `phase` while no token has arrived. */
+  lifecycleStage?: LifecycleStage | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -55,6 +65,7 @@ const props = withDefaults(defineProps<Props>(), {
   phaseInfo: null,
   runningToolName: '',
   hasQueued: false,
+  lifecycleStage: null,
 })
 
 const { t } = useI18n()
@@ -95,7 +106,35 @@ const userPhaseI18nMap: Record<string, string> = {
   stopped: 'chat.streamStopped',
 }
 
+const lifecycleI18nMap: Record<string, string> = {
+  connecting: 'chat.streamConnecting',
+  started: 'chat.streamStarted',
+  context_prepared: 'chat.streamContextPrepared',
+  llm_request_sent: 'chat.streamLlmRequestSent',
+}
+
+/** True iff the pre-token lifecycle is active (no first delta yet). */
+const inPreTokenWindow = computed(() => {
+  const ls = props.lifecycleStage
+  return !!ls && ls.stage !== 'streaming'
+})
+
 const statusText = computed(() => {
+  // Prefer fine-grained pre-token text when no first delta has arrived yet.
+  if (inPreTokenWindow.value && props.lifecycleStage) {
+    const key = lifecycleI18nMap[props.lifecycleStage.stage]
+    if (key) {
+      const base = t(key)
+      // Append "(Xs elapsed)" once the same stage has lingered for >= 5s, so
+      // the user can see something is still happening even if the next stage
+      // is delayed (e.g. a slow context_prepared → llm_request_sent gap).
+      const sec = Math.floor((Date.now() - props.lifecycleStage.since) / 1000)
+      if (sec >= 5 && stageTickSec.value >= 5) {
+        return base + t('chat.streamElapsedSuffix', { sec: stageTickSec.value })
+      }
+      return base
+    }
+  }
   const key = userPhaseI18nMap[userFacingPhase.value]
   if (!key) return ''
   return t(key)
@@ -137,6 +176,12 @@ const phaseTextClass = computed(() => {
 const elapsedSeconds = ref(0)
 const elapsedTime = ref('0s')
 
+/** Seconds elapsed since the current lifecycleStage became active. Used by
+ *  statusText to decide whether to append the "(Xs elapsed)" hint. Tick at
+ *  1 Hz only while the pre-token window is open to keep idle cost minimal. */
+const stageTickSec = ref(0)
+let stageTimer: ReturnType<typeof setInterval> | null = null
+
 
 let timerInterval: ReturnType<typeof setInterval> | null = null
 
@@ -166,10 +211,27 @@ watch(() => props.isLoading, (loading) => {
 }, { immediate: true })
 
 
+// Tick the stage-elapsed counter only while the pre-token window is open.
+// Reset on every stage transition so the "(Xs elapsed)" hint reflects time
+// in the *current* stage, not total time since send.
+watch(() => props.lifecycleStage, (ls) => {
+  if (stageTimer) { clearInterval(stageTimer); stageTimer = null }
+  stageTickSec.value = 0
+  if (ls && ls.stage !== 'streaming') {
+    stageTimer = setInterval(() => {
+      stageTickSec.value = Math.floor((Date.now() - ls.since) / 1000)
+    }, 1000)
+  }
+}, { immediate: true })
+
 onBeforeUnmount(() => {
   if (timerInterval) {
     clearInterval(timerInterval)
     timerInterval = null
+  }
+  if (stageTimer) {
+    clearInterval(stageTimer)
+    stageTimer = null
   }
 })
 </script>

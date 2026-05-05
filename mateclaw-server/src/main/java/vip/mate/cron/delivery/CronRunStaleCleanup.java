@@ -3,6 +3,7 @@ package vip.mate.cron.delivery;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import vip.mate.dashboard.model.CronJobRunEntity;
@@ -39,7 +40,17 @@ public class CronRunStaleCleanup {
     private static final Duration DELIVERY_STALE = Duration.ofMinutes(15);
     private static final Duration RUN_STALE = Duration.ofMinutes(30);
 
+    /**
+     * RFC-03 Lane G2: in a multi-instance deployment, the sweep is purely
+     * idempotent (UPDATE with predicates) so duplicates would be harmless,
+     * but locking still saves N-1 nodes the DB roundtrips and keeps the
+     * dashboard counters honest. {@code lockAtMostFor} comfortably exceeds
+     * the worst-case sweep latency we have seen (≪1s).
+     */
     @Scheduled(fixedDelay = 5 * 60 * 1000L, initialDelay = 60 * 1000L)
+    @SchedulerLock(name = "cronRunStaleCleanup",
+                   lockAtMostFor = "PT2M",
+                   lockAtLeastFor = "PT30S")
     public void sweep() {
         LocalDateTime now = LocalDateTime.now();
 

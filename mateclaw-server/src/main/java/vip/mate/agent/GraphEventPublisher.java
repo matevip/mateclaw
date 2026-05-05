@@ -37,6 +37,15 @@ public final class GraphEventPublisher {
     public static final String EVENT_TOOL_DIRECT_RESULT = "tool_direct_result";
 
     /**
+     * Terminal {@link vip.mate.agent.graph.state.FinishReason} for the turn,
+     * emitted at FinalAnswerNode so channel-side accumulators can persist it
+     * into message metadata. Downstream filters (e.g. memory promotion gate)
+     * branch on this structured value instead of doing brittle text matching
+     * on the assistant content.
+     */
+    public static final String EVENT_FINISH_REASON = "finish_reason";
+
+    /**
      * 事件记录
      */
     public record GraphEvent(String type, Map<String, Object> data, long timestamp) {}
@@ -81,10 +90,15 @@ public final class GraphEventPublisher {
 
     public static GraphEvent toolComplete(String toolCallId, String toolName, String result, boolean success) {
         long ts = System.currentTimeMillis();
+        // Carry the full tool result; transport-layer chunking lives in
+        // ChatStreamTracker.broadcastChunked, which splits oversize payloads
+        // into ordered tool_result_chunk events when they exceed the 8 KB
+        // single-event budget. The previous unconditional 500-char truncation
+        // here destroyed data that the front-end could otherwise render in full.
         return new GraphEvent(EVENT_TOOL_COMPLETE, Map.of(
                 "toolCallId", toolCallId != null ? toolCallId : "",
                 "toolName", toolName,
-                "result", result != null ? truncateResult(result) : "",
+                "result", result != null ? result : "",
                 "success", success,
                 "timestamp", ts
         ), ts);
@@ -110,9 +124,11 @@ public final class GraphEventPublisher {
 
     public static GraphEvent stepCompleted(int index, String result) {
         long ts = System.currentTimeMillis();
+        // Full step result; broadcastChunked splits at the transport layer
+        // when the payload exceeds the per-event size budget.
         return new GraphEvent(EVENT_STEP_COMPLETED, Map.of(
                 "index", index,
-                "result", result != null ? truncateResult(result) : "",
+                "result", result != null ? result : "",
                 "timestamp", ts
         ), ts);
     }
@@ -123,7 +139,7 @@ public final class GraphEventPublisher {
         return new GraphEvent(EVENT_TOOL_APPROVAL_REQUESTED, Map.of(
                 "pendingId", pendingId,
                 "toolName", toolName != null ? toolName : "",
-                "arguments", arguments != null ? truncateResult(arguments) : "",
+                "arguments", arguments != null ? arguments : "",
                 "reason", reason != null ? reason : "",
                 "timestamp", ts
         ), ts);
@@ -140,7 +156,7 @@ public final class GraphEventPublisher {
         java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
         data.put("pendingId", pendingId);
         data.put("toolName", toolName != null ? toolName : "");
-        data.put("arguments", arguments != null ? truncateForBroadcast(arguments) : "");
+        data.put("arguments", arguments != null ? arguments : "");
         data.put("reason", reason != null ? reason : "");
         data.put("summary", summary);
         data.put("maxSeverity", maxSeverity);
@@ -182,6 +198,25 @@ public final class GraphEventPublisher {
         return new GraphEvent(EVENT_PERF_SUMMARY, Map.copyOf(data), ts);
     }
 
+    /**
+     * Terminal {@code finish_reason} event. Emitted from FinalAnswerNode so it
+     * rides through the same PENDING_EVENTS → StreamDelta pipeline that
+     * channel-side accumulators consume — a sibling SSE-only broadcast would
+     * bypass {@code ChatController.StreamAccumulator.accept(...)} and fail to
+     * persist the reason into message metadata.
+     *
+     * @param reason {@link vip.mate.agent.graph.state.FinishReason#getValue()}
+     *               (e.g. {@code "incomplete"}, {@code "stopped"},
+     *               {@code "evidence_insufficient"}, {@code "normal"}).
+     */
+    public static GraphEvent finishReason(String reason) {
+        long ts = System.currentTimeMillis();
+        return new GraphEvent(EVENT_FINISH_REASON, Map.of(
+                "reason", reason != null ? reason : "",
+                "timestamp", ts
+        ), ts);
+    }
+
     // ===== 提取方法 =====
 
     /**
@@ -196,14 +231,90 @@ public final class GraphEventPublisher {
                 .orElse(List.of());
     }
 
+    /**
+     * Pass-through; preserved for source/binary compatibility with older callers.
+     * Truncation at the SSE transport layer is now handled by {@code
+     * ChatStreamTracker.broadcastChunked} which splits oversize payloads into
+     * ordered chunk events instead of dropping bytes. Logs a one-time
+     * deprecation hint when invoked.
+     *
+     * @deprecated callers should pass full payloads and let the transport layer
+     *     decide whether to chunk.
+     */
+    @Deprecated
     private static String truncateResult(String result) {
-        return result.length() > 500 ? result.substring(0, 500) + "..." : result;
+        warnTruncateDeprecation();
+        return result;
     }
 
     /**
-     * 截断字符串用于直推广播（公共方法，供 Node 直接构造广播数据时使用）
+     * Pass-through, kept for source compatibility with code that built broadcast
+     * payloads directly. Same deprecation reason as {@link #truncateResult}.
+     *
+     * @deprecated callers should pass full payloads.
      */
+    @Deprecated
     public static String truncateForBroadcast(String text) {
-        return truncateResult(text);
+        warnTruncateDeprecation();
+        return text;
+    }
+
+    private static final java.util.concurrent.atomic.AtomicBoolean TRUNCATE_WARNED =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    private static void warnTruncateDeprecation() {
+        if (TRUNCATE_WARNED.compareAndSet(false, true)) {
+            org.slf4j.LoggerFactory.getLogger(GraphEventPublisher.class)
+                    .warn("GraphEventPublisher.truncateResult/truncateForBroadcast are deprecated " +
+                            "no-op pass-throughs; payloads are no longer truncated here. " +
+                            "Move callers to send the full string and rely on " +
+                            "ChatStreamTracker.broadcastChunked for transport-level chunking.");
+        }
+    }
+
+    // ===== Iteration lifecycle events =====
+
+    public static final String EVENT_ITERATION_START = "iteration_start";
+    public static final String EVENT_ITERATION_END   = "iteration_end";
+
+    /**
+     * Marks the entry of an iteration boundary so consumers can group later
+     * tool / content / thinking events under a single logical step. The
+     * {@code scope} field distinguishes the parent agent ("parent") from a
+     * delegated sub-agent ("subagent"); when scope is "subagent" the
+     * {@code subagentId} payload field is populated by the producer.
+     */
+    public static GraphEvent iterationStart(int index, String reason, String scope, String subagentId) {
+        long ts = System.currentTimeMillis();
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("index", index);
+        data.put("reason", reason != null ? reason : "");
+        data.put("scope", scope != null ? scope : "parent");
+        if (subagentId != null && !subagentId.isEmpty()) {
+            data.put("subagentId", subagentId);
+        }
+        data.put("timestamp", ts);
+        return new GraphEvent(EVENT_ITERATION_START, Map.copyOf(data), ts);
+    }
+
+    /**
+     * Closes the matching {@link #iterationStart} boundary. {@code contentChars}
+     * and {@code thinkingChars} let consumers render a compact "this turn
+     * produced X content / Y thinking" header without re-aggregating the
+     * underlying delta events.
+     */
+    public static GraphEvent iterationEnd(int index, String scope, String subagentId,
+                                          int contentChars, int thinkingChars) {
+        long ts = System.currentTimeMillis();
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("index", index);
+        data.put("scope", scope != null ? scope : "parent");
+        if (subagentId != null && !subagentId.isEmpty()) {
+            data.put("subagentId", subagentId);
+        }
+        data.put("contentChars", contentChars);
+        data.put("thinkingChars", thinkingChars);
+        data.put("timestamp", ts);
+        return new GraphEvent(EVENT_ITERATION_END, Map.copyOf(data), ts);
     }
 }

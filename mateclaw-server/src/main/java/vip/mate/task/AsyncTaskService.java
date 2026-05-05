@@ -34,9 +34,12 @@ public class AsyncTaskService implements ApplicationRunner {
     private final AsyncTaskMapper asyncTaskMapper;
     private final ChatStreamTracker streamTracker;
 
-    /** 轮询线程池（小池，2 线程足够） */
+    /** Polling thread pool. Bumped from 2 to 8 in P0 — image+video+future generative
+     *  tasks all share this pool, and per-task work (poll HTTP + DB write + file
+     *  download in completion callbacks) is non-trivial; 2 threads saturate
+     *  immediately under any concurrent load. */
     private final ScheduledExecutorService pollExecutor =
-            Executors.newScheduledThreadPool(2, r -> {
+            Executors.newScheduledThreadPool(8, r -> {
                 Thread t = new Thread(r, "async-task-poll");
                 t.setDaemon(true);
                 return t;
@@ -267,12 +270,26 @@ public class AsyncTaskService implements ApplicationRunner {
 
     public void broadcastTaskEvent(AsyncTaskEntity task, String eventName,
                                      boolean success, String videoUrl, String imageUrl, String errorMessage) {
+        Map<String, Object> extra = new HashMap<>();
+        if (videoUrl != null) extra.put("videoUrl", videoUrl);
+        if (imageUrl != null) extra.put("imageUrl", imageUrl);
+        broadcastTaskEventWithData(task, eventName, success, extra, errorMessage);
+    }
+
+    /**
+     * Generic task-event broadcaster. Use this for any media kind where the URL
+     * field name varies (audioUrl, modelUrl, ...) — pass it via {@code extraData}.
+     * Named distinctly from {@link #broadcastTaskEvent} to avoid overload
+     * ambiguity when callers pass {@code null} for the 4th argument.
+     */
+    public void broadcastTaskEventWithData(AsyncTaskEntity task, String eventName,
+                                             boolean success, Map<String, Object> extraData,
+                                             String errorMessage) {
         Map<String, Object> data = new HashMap<>();
         data.put("taskId", task.getTaskId());
         data.put("taskType", task.getTaskType());
         data.put("success", success);
-        if (videoUrl != null) data.put("videoUrl", videoUrl);
-        if (imageUrl != null) data.put("imageUrl", imageUrl);
+        if (extraData != null) data.putAll(extraData);
         if (errorMessage != null) data.put("errorMessage", errorMessage);
         streamTracker.broadcastObject(task.getConversationId(), eventName, data);
     }

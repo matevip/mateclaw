@@ -30,6 +30,21 @@ public class ModelProviderService {
     /** Provider id whose OAuth token lives on local disk (Keychain / ~/.claude/.credentials.json) instead of the database. */
     private static final String CLAUDE_CODE_PROVIDER_ID = "anthropic-claude-code";
 
+    /**
+     * Issue #39: provider id is used as a single path segment in
+     * {@code /custom-providers/{providerId}}, {@code /{providerId}/config},
+     * {@code /{providerId}/enable}, etc. Spring's PathPatternParser does not
+     * match across {@code /}, so any unsafe character makes <em>every</em>
+     * such endpoint fall through to the static-resource handler and become
+     * undeletable. Reject on the create path.
+     *
+     * <p>Keep this in sync with {@code PROVIDER_ID_PATTERN} in
+     * {@code mateclaw-ui/src/views/Settings/Models/composables/useProviderForm.ts}
+     * and the routing fallback in {@code mateclaw-ui/src/api/index.ts}.</p>
+     */
+    static final java.util.regex.Pattern PROVIDER_ID_PATTERN =
+            java.util.regex.Pattern.compile("^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$");
+
     private final ModelProviderMapper modelProviderMapper;
     private final ModelConfigService modelConfigService;
     private final ApplicationEventPublisher eventPublisher;
@@ -128,6 +143,12 @@ public class ModelProviderService {
     public ProviderInfoDTO createCustomProvider(CreateCustomProviderRequest request) {
         if (!StringUtils.hasText(request.getId()) || !StringUtils.hasText(request.getName())) {
             throw new MateClawException("err.llm.provider_fields_required", "Provider id 和名称不能为空");
+        }
+        // Issue #39: even though the UI now validates, defend the API directly —
+        // see PROVIDER_ID_PATTERN above for why this matters.
+        if (!PROVIDER_ID_PATTERN.matcher(request.getId()).matches()) {
+            throw new MateClawException("err.llm.provider_id_invalid",
+                    "Provider id 仅允许字母/数字及 . _ -（不允许斜杠或空格），首字符必须是字母或数字，长度 1-64: " + request.getId());
         }
         if (modelProviderMapper.selectById(request.getId()) != null) {
             throw new MateClawException("err.llm.provider_exists", "Provider 已存在: " + request.getId());

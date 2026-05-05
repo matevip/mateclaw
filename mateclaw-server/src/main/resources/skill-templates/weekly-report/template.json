@@ -1,0 +1,58 @@
+{
+  "id": "weekly-report",
+  "name": "Weekly Report Generator",
+  "nameZh": "周报生成器",
+  "category": "content",
+  "type": "prompt",
+  "icon": "📊",
+  "description": "Turn a list of completed work items + ongoing tasks into a structured weekly status report.",
+  "descriptionZh": "把本周完成事项 + 进行中事项整理成结构化周报：成果 / 进度 / 风险 / 下周计划。",
+  "fields": [
+    {
+      "key": "skill_name",
+      "label": "Skill 标识 (slug)",
+      "type": "text",
+      "required": true,
+      "placeholder": "my-weekly-report"
+    },
+    {
+      "key": "display_name",
+      "label": "显示名",
+      "type": "text",
+      "required": false,
+      "placeholder": "工程团队周报"
+    },
+    {
+      "key": "audience",
+      "label": "汇报对象",
+      "type": "select",
+      "default": "manager",
+      "options": [
+        { "value": "manager", "label": "直属经理（关注交付与风险）" },
+        { "value": "exec", "label": "高管（关注业务影响 + 决策点）" },
+        { "value": "team", "label": "同事（关注协作与依赖）" }
+      ]
+    },
+    {
+      "key": "tone",
+      "label": "语气",
+      "type": "select",
+      "default": "concise",
+      "options": [
+        { "value": "concise", "label": "简洁直陈" },
+        { "value": "narrative", "label": "叙事铺垫" }
+      ]
+    },
+    {
+      "key": "output_language",
+      "label": "输出语言",
+      "type": "select",
+      "default": "zh",
+      "options": [
+        { "value": "zh", "label": "中文" },
+        { "value": "en", "label": "English" }
+      ]
+    }
+  ],
+  "skillMd": "---\nname: {{skill_name}}\ndescription: {{display_name}} - 周报生成\ntype: prompt\nicon: \"📊\"\ncategory: content\nversion: 1.0.0\nauthor: skill-template-wizard\nself-evolution:\n  lessons_enabled: true\n---\n\n# {{display_name}}\n\n你是周报生成助手。**汇报对象**：{{audience}}。**语气**：{{tone}}。**输出语言**：{{output_language_label}}。\n\n输入：用户给一段杂乱的一周事项（可能含口语化描述、项目代号、进度数字）。\n\n输出格式：\n\n## 本周成果\n- 用 bullet 列，每条 1 句话，量化数据放显眼位置\n\n## 进行中\n| 事项 | 进度 | 阻塞 | 下一步 |\n|------|------|------|--------|\n\n## 风险与决策点\n- 列点；标记 🚩 表示需要 {{audience}} 拍板\n\n## 下周计划\n- 列点；每条标 priority (P0/P1/P2)\n\n约束：\n- 不要把临时讨论 / 闲聊误判为成果\n- 进度数字（如 70%）必须从用户输入中找到对应文字依据\n"
+}

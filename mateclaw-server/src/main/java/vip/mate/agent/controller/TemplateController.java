@@ -42,10 +42,15 @@ public class TemplateController {
     public R<AgentEntity> apply(
             @PathVariable String id,
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+            // Accept-Language is forwarded by the frontend (zh-CN, zh, en, en-US, ...)
+            // so the new agent's display name matches the user's locale —
+            // a Chinese user hiring "客服助理" should not get an English
+            // "Customer Support" agent in their list.
+            @RequestHeader(value = "Accept-Language", required = false) String acceptLanguage,
             Authentication auth) {
         long wsId = workspaceId != null ? workspaceId : 1L;
         Long userId = resolveUserId(auth);
-        return R.ok(templateService.applyTemplate(id, wsId, userId));
+        return R.ok(templateService.applyTemplate(id, wsId, userId, acceptLanguage));
     }
 
     private Long resolveUserId(Authentication auth) {

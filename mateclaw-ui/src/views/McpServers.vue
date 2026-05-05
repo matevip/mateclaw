@@ -275,7 +275,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { mcpApi } from '@/api/index'
 
 const { t } = useI18n()
@@ -413,13 +414,12 @@ async function saveServer() {
 }
 
 async function deleteServer(server: McpServer) {
-  try {
-    await ElMessageBox.confirm(
-      t('mcp.messages.deleteConfirm', { name: server.name }),
-      t('common.delete'),
-      { type: 'warning' }
-    )
-  } catch { return }
+  const ok = await mcConfirm({
+    title: t('common.delete'),
+    message: t('mcp.messages.deleteConfirm', { name: server.name }),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await mcpApi.delete(server.id)
     ElMessage.success(t('mcp.messages.deleteSuccess'))

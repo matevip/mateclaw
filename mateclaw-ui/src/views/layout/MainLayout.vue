@@ -46,12 +46,17 @@
               :key="item.path"
               :to="item.path"
               class="nav-item"
-              :class="{ active: isNavItemActive(item) }"
-              :title="effectiveCollapsed ? item.label : ''"
+              :class="{ active: isNavItemActive(item), 'has-attention': item.path === '/backstage' && backstageAlertActive }"
+              :title="effectiveCollapsed ? (item.tooltip || item.label) : (item.tooltip || '')"
               @click="onNavClick"
             >
               <span class="nav-icon" v-html="item.icon"></span>
               <span v-if="!effectiveCollapsed" class="nav-label">{{ item.label }}</span>
+              <span
+                v-if="item.path === '/backstage' && backstageAlertActive"
+                class="nav-attention-dot"
+                :title="t('backstage.attention')"
+              ></span>
             </router-link>
           </div>
         </template>
@@ -168,7 +173,7 @@ import { useI18n } from 'vue-i18n'
 import { useThemeStore } from '@/stores/useThemeStore'
 import { version as appVersion } from '../../../package.json'
 import type { ThemeMode } from '@/stores/useThemeStore'
-import { http, settingsApi, setupApi } from '@/api/index'
+import { http, settingsApi, setupApi, backstageApi } from '@/api/index'
 import OnboardingWizard from '@/views/Onboarding/OnboardingWizard.vue'
 import DoctorDrawer from '@/views/Doctor/DoctorDrawer.vue'
 import WorkspaceSwitcher from '@/components/workspace/WorkspaceSwitcher.vue'
@@ -202,6 +207,25 @@ async function fetchHealthStatus() {
     healthStatus.value = data?.overall || 'healthy'
   } catch {
     healthStatus.value = 'unknown'
+  }
+}
+
+// Live attention signal for the Backstage sidebar entry. Admins only —
+// non-admin users never poll the runtime endpoint and never see the dot.
+const backstageStuckCount = ref(0)
+let backstagePollTimer: ReturnType<typeof setInterval> | null = null
+
+const isAdminRole = computed(() => (localStorage.getItem('role') || 'user') === 'admin')
+const backstageAlertActive = computed(() => isAdminRole.value && backstageStuckCount.value > 0)
+
+async function refreshBackstageBadge() {
+  if (!isAdminRole.value) return
+  try {
+    const res: any = await backstageApi.snapshot()
+    const data = res?.data ?? res
+    backstageStuckCount.value = data?.summary?.stuck ?? 0
+  } catch {
+    // Silent: stale value is preferable to a flapping indicator.
   }
 }
 
@@ -250,11 +274,18 @@ onMounted(async () => {
 
   // Fetch initial health status for sidebar indicator
   fetchHealthStatus()
+
+  // Backstage attention dot — poll every 15s for admins.
+  if (isAdminRole.value) {
+    refreshBackstageBadge()
+    backstagePollTimer = setInterval(refreshBackstageBadge, 15_000)
+  }
 })
 
 onBeforeUnmount(() => {
   mobileQuery?.removeEventListener('change', handleMobileChange)
   mediumQuery?.removeEventListener('change', handleMediumChange)
+  if (backstagePollTimer) clearInterval(backstagePollTimer)
 })
 
 function onNavClick() {
@@ -312,6 +343,12 @@ const navGroups = computed(() => [
         label: t('nav.agents'),
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>`,
       },
+      ...(isAdminRole.value ? [{
+        path: '/backstage',
+        label: t('nav.backstage'),
+        tooltip: t('nav.backstageTooltip'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>`,
+      }] : []),
       {
         path: '/wiki',
         label: t('nav.wiki'),
@@ -339,14 +376,15 @@ const navGroups = computed(() => [
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`,
       },
       {
-        path: '/tools',
-        label: t('nav.tools'),
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
-      },
-      {
         path: '/plugins',
         label: t('nav.plugins'),
         icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 3h-8v4h8V3z"/></svg>`,
+      },
+      // RFC-090 Phase 4: Activity 提升到顶层
+      {
+        path: '/activity',
+        label: t('nav.activity'),
+        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
       },
     ],
   },
@@ -629,6 +667,44 @@ watch(() => workspaceStore.currentWorkspaceId, () => {
 
 .nav-icon { display: flex; align-items: center; flex-shrink: 0; }
 .nav-label { overflow: hidden; text-overflow: ellipsis; }
+
+/* Backstage attention dot — appears only when stuck > 0 for an admin. */
+.nav-attention-dot {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: hsl(20, 80%, 55%);
+  transform: translateY(-50%);
+  box-shadow: 0 0 0 0 hsla(20, 80%, 55%, 0.6);
+  animation: nav-attention-pulse 2.4s ease-in-out infinite;
+}
+
+.nav-item.has-attention {
+  color: hsl(20, 75%, 50%);
+}
+
+@keyframes nav-attention-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 hsla(20, 80%, 55%, 0.55); transform: translateY(-50%) scale(1); }
+  50%      { box-shadow: 0 0 0 6px hsla(20, 80%, 55%, 0);    transform: translateY(-50%) scale(1.15); }
+}
+
+.sidebar.collapsed .nav-attention-dot {
+  right: 8px;
+  top: 8px;
+  transform: none;
+}
+
+.sidebar.collapsed .nav-attention-dot {
+  animation-name: nav-attention-pulse-collapsed;
+}
+
+@keyframes nav-attention-pulse-collapsed {
+  0%, 100% { box-shadow: 0 0 0 0 hsla(20, 80%, 55%, 0.55); transform: scale(1); }
+  50%      { box-shadow: 0 0 0 5px hsla(20, 80%, 55%, 0);    transform: scale(1.2); }
+}
 
 /* 底部 */
 .sidebar-footer {

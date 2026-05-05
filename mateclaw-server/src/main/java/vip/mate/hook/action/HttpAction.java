@@ -7,7 +7,11 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import vip.mate.hook.event.MateHookEvent;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.HexFormat;
 import java.util.List;
 
 /**
@@ -27,21 +31,43 @@ import java.util.List;
 @Slf4j
 public final class HttpAction implements HookAction {
 
+    /** RFC-03 Lane H1 default header name; configurable per hook so receivers
+     *  with existing conventions (X-Hub-Signature-256, etc.) can be served
+     *  without code changes. */
+    public static final String DEFAULT_SIGNATURE_HEADER = "X-MateClaw-Signature";
+
     private final RestClient restClient;
     private final String method;          // GET | POST
     private final URI url;
     private final String bodyTemplate;    // 可含 {{event.xxx}} 占位
     private final List<String> trustedDomains;
     private final long timeoutMs;
+    /** RFC-03 Lane H1 — when set, the rendered body is signed with HMAC-SHA-256
+     *  and the resulting hex digest is placed in the header named by
+     *  {@link #signatureHeader}, prefixed with {@code "sha256="}. Receivers
+     *  validate by re-computing the same digest from the raw body and a
+     *  shared secret. Null / blank disables signing (the previous behavior). */
+    private final String hmacSecret;
+    private final String signatureHeader;
 
+    /** Legacy constructor — preserved for callers that don't sign. */
     public HttpAction(RestClient restClient, String method, URI url, String bodyTemplate,
                       List<String> trustedDomains, long timeoutMs) {
+        this(restClient, method, url, bodyTemplate, trustedDomains, timeoutMs, null, null);
+    }
+
+    public HttpAction(RestClient restClient, String method, URI url, String bodyTemplate,
+                      List<String> trustedDomains, long timeoutMs,
+                      String hmacSecret, String signatureHeader) {
         this.restClient = restClient;
         this.method = (method == null) ? "POST" : method.toUpperCase();
         this.url = url;
         this.bodyTemplate = bodyTemplate;
         this.trustedDomains = List.copyOf(trustedDomains == null ? List.of() : trustedDomains);
         this.timeoutMs = Math.max(100L, timeoutMs);
+        this.hmacSecret = (hmacSecret == null || hmacSecret.isBlank()) ? null : hmacSecret;
+        this.signatureHeader = (signatureHeader == null || signatureHeader.isBlank())
+                ? DEFAULT_SIGNATURE_HEADER : signatureHeader;
     }
 
     @Override
@@ -69,12 +95,24 @@ public final class HttpAction implements HookAction {
         long start = System.nanoTime();
         try {
             String body = renderBody(event, ctx);
+            String renderedBody = body == null ? "" : body;
+            // RFC-03 Lane H1 — sign the rendered body if a secret is configured.
+            // Computed once on the agreed-upon byte representation; receivers
+            // validate by re-computing on raw bytes before any JSON parsing.
+            String signature = (hmacSecret == null) ? null : hmacSign(renderedBody);
             HttpStatusCode status = switch (method) {
-                case "GET" -> restClient.get().uri(url).retrieve().toBodilessEntity().getStatusCode();
-                case "POST" -> restClient.post().uri(url)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(body == null ? "" : body)
-                        .retrieve().toBodilessEntity().getStatusCode();
+                case "GET" -> {
+                    var spec = restClient.get().uri(url);
+                    if (signature != null) spec.header(signatureHeader, signature);
+                    yield spec.retrieve().toBodilessEntity().getStatusCode();
+                }
+                case "POST" -> {
+                    var spec = restClient.post().uri(url)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(renderedBody);
+                    if (signature != null) spec.header(signatureHeader, signature);
+                    yield spec.retrieve().toBodilessEntity().getStatusCode();
+                }
                 default -> throw new IllegalStateException("unreachable");
             };
             long ms = (System.nanoTime() - start) / 1_000_000L;
@@ -83,6 +121,26 @@ public final class HttpAction implements HookAction {
         } catch (RestClientException e) {
             long ms = (System.nanoTime() - start) / 1_000_000L;
             return HookResult.failed(e.getMessage(), ms);
+        }
+    }
+
+    /**
+     * RFC-03 Lane H1 — compute {@code "sha256=<hex>"} where {@code hex} is the
+     * lowercase HMAC-SHA-256 of {@code body} keyed by {@link #hmacSecret}.
+     * Format matches the GitHub / Stripe webhook convention so receivers can
+     * reuse off-the-shelf validators. Package-private for unit tests.
+     */
+    String hmacSign(String body) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(hmacSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            byte[] digest = mac.doFinal(body.getBytes(StandardCharsets.UTF_8));
+            return "sha256=" + HexFormat.of().formatHex(digest);
+        } catch (Exception e) {
+            // HmacSHA256 is mandatory in every JDK; failure here is unrecoverable
+            // and points at JVM corruption — rethrow as runtime so the action
+            // factory's validate() can surface a clear error before scheduling.
+            throw new IllegalStateException("HMAC-SHA-256 unavailable on this JVM", e);
         }
     }
 

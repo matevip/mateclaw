@@ -1,9 +1,11 @@
 package vip.mate.skill.installer;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
@@ -15,13 +17,19 @@ import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.repository.SkillMapper;
 import vip.mate.skill.runtime.SkillFrontmatterParser;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 
 /**
  * Builtin skill seed service — RFC-044 §4.2.
@@ -58,9 +66,18 @@ public class BuiltinSkillSeedService implements ApplicationRunner {
     private static final String DEFAULT_VERSION = "1.0.0";
     private static final String SKILL_TYPE_BUILTIN = "builtin";
 
+    /** Snapshot version — bump on any schema change inside the JSON. */
+    private static final int SNAPSHOT_VERSION = 1;
+
     private final SkillMapper skillMapper;
     private final SkillFrontmatterParser frontmatterParser;
     private final ObjectMapper objectMapper;
+
+    /** Workspace root, used as the parent of the snapshot file. Mirrors
+     *  {@code SkillWorkspaceProperties#root} so we don't drag the whole
+     *  properties bean in for one path lookup. */
+    @Value("${mateclaw.skill.workspace.root:#{systemProperties['user.home'] + '/.mateclaw/skills'}}")
+    private String workspaceRoot;
 
     @Override
     public void run(ApplicationArguments args) {
@@ -80,6 +97,22 @@ public class BuiltinSkillSeedService implements ApplicationRunner {
         } catch (Exception e) {
             log.warn("[SkillSeed] Failed to scan {}: {}", SKILL_GLOB, e.getMessage());
             return new SyncStats(0, 0, 0, 0);
+        }
+
+        // Fast path — if every SKILL.md's (size, mtime) matches the snapshot
+        // from the previous successful run AND the DB still holds the same
+        // number of builtin rows, nothing on disk changed since last seed
+        // and we can skip the parse / select / update loop entirely.
+        // Hermes-style trick: stat-only check, no content read.
+        Map<String, long[]> currentManifest = buildResourceManifest(resources);
+        SeedSnapshot snapshot = loadSnapshot();
+        if (snapshot != null
+                && snapshot.version == SNAPSHOT_VERSION
+                && manifestEquals(snapshot.manifest, currentManifest)
+                && countBuiltinRows() == snapshot.rowCount) {
+            log.info("[SkillSeed] Manifest unchanged ({} skills); skipping per-row resolve",
+                    currentManifest.size());
+            return new SyncStats(0, 0, currentManifest.size(), 0);
         }
 
         int inserted = 0, updated = 0, unchanged = 0, skipped = 0;
@@ -117,7 +150,150 @@ public class BuiltinSkillSeedService implements ApplicationRunner {
         }
         log.info("[SkillSeed] Builtin skills: {} inserted, {} updated, {} unchanged, {} skipped",
                 inserted, updated, unchanged, skipped);
+        // Persist the manifest so the next startup can take the fast path
+        // when nothing changed. Failure to write is non-fatal — worst case
+        // the next startup re-runs the full loop.
+        writeSnapshot(new SeedSnapshot(SNAPSHOT_VERSION, currentManifest, countBuiltinRows()));
         return new SyncStats(inserted, updated, unchanged, skipped);
+    }
+
+    // ==================== Snapshot helpers ====================
+
+    /** Snapshot persisted at {workspace_root}/.builtin-seed-snapshot.json. */
+    private record SeedSnapshot(int version, Map<String, long[]> manifest, long rowCount) {}
+
+    private Path snapshotPath() {
+        return Paths.get(workspaceRoot).resolve(".builtin-seed-snapshot.json");
+    }
+
+    /**
+     * Build a stable manifest of {@code uri → [size, mtime]} for the
+     * shipped SKILL.md set. {@link TreeMap} keeps the iteration order
+     * deterministic so byte-equality of two manifests means the same
+     * thing across runs.
+     *
+     * <p>{@link Resource#contentLength()} works in both exploded-classpath
+     * dev mode and inside a JAR. {@link URLConnection#getLastModified()}
+     * returns the JAR's mtime when the resource lives inside one — that
+     * still gives us a useful invalidation signal: rebuilding the JAR
+     * shifts every entry's mtime in lockstep, busting the snapshot.
+     */
+    private Map<String, long[]> buildResourceManifest(Resource[] resources) {
+        Map<String, long[]> out = new TreeMap<>();
+        for (Resource res : resources) {
+            try {
+                String key = res.getURI().toString();
+                long size = res.contentLength();
+                long mtime;
+                try {
+                    URLConnection conn = res.getURL().openConnection();
+                    mtime = conn.getLastModified();
+                } catch (IOException ignored) {
+                    mtime = 0L; // unknown — still hash-stable across runs
+                }
+                out.put(key, new long[]{size, mtime});
+            } catch (IOException e) {
+                // Skip resources we can't stat — they'll be picked up by the
+                // slow path which reads them anyway.
+                log.debug("Failed to stat resource {}: {}", res.getDescription(), e.getMessage());
+            }
+        }
+        return out;
+    }
+
+    /** Element-wise compare of two manifests (TreeMap ordering not assumed). */
+    private static boolean manifestEquals(Map<String, long[]> a, Map<String, long[]> b) {
+        if (a == null || b == null) return a == b;
+        if (a.size() != b.size()) return false;
+        for (Map.Entry<String, long[]> e : a.entrySet()) {
+            long[] other = b.get(e.getKey());
+            if (other == null) return false;
+            long[] mine = e.getValue();
+            if (mine.length != other.length) return false;
+            for (int i = 0; i < mine.length; i++) {
+                if (mine[i] != other[i]) return false;
+            }
+        }
+        return true;
+    }
+
+    private long countBuiltinRows() {
+        try {
+            Long n = skillMapper.selectCount(
+                    new LambdaQueryWrapper<SkillEntity>()
+                            .eq(SkillEntity::getSkillType, SKILL_TYPE_BUILTIN)
+                            .eq(SkillEntity::getDeleted, 0));
+            return n != null ? n : 0L;
+        } catch (Exception e) {
+            log.debug("Failed to count builtin skills: {}", e.getMessage());
+            return -1L; // mismatch sentinel — forces full re-scan
+        }
+    }
+
+    private SeedSnapshot loadSnapshot() {
+        Path path = snapshotPath();
+        if (!Files.isRegularFile(path)) return null;
+        try {
+            String json = Files.readString(path, StandardCharsets.UTF_8);
+            Map<String, Object> root = objectMapper.readValue(
+                    json, new TypeReference<>() {});
+            int version = toLong(root.get("version"), 0L).intValue();
+            long rowCount = toLong(root.get("rowCount"), 0L);
+            // Manifest entries arrive as List<Object> — each element may be a
+            // JSON number (Integer/Long) OR a quoted string. The mateclaw
+            // global ObjectMapper serializes long values as strings to avoid
+            // JS precision loss (mtime is 13-digit ms-since-epoch). Coerce
+            // both shapes back to long here.
+            Map<String, List<Object>> rawManifest = objectMapper.convertValue(
+                    root.getOrDefault("manifest", Map.of()),
+                    new TypeReference<>() {});
+            Map<String, long[]> manifest = new TreeMap<>();
+            for (Map.Entry<String, List<Object>> e : rawManifest.entrySet()) {
+                List<Object> arr = e.getValue();
+                if (arr == null || arr.size() < 2) continue;
+                manifest.put(e.getKey(), new long[]{
+                        toLong(arr.get(0), 0L),
+                        toLong(arr.get(1), 0L),
+                });
+            }
+            return new SeedSnapshot(version, manifest, rowCount);
+        } catch (Exception e) {
+            log.debug("Could not read seed snapshot {}: {}", path, e.getMessage());
+            return null;
+        }
+    }
+
+    /** Coerce JSON-decoded value to long. Handles both numeric (Integer /
+     *  Long / Double) and string-encoded-long forms — the latter is what
+     *  mateclaw's ObjectMapper emits for long fields by default. */
+    private static Long toLong(Object value, Long fallback) {
+        if (value == null) return fallback;
+        if (value instanceof Number n) return n.longValue();
+        try {
+            return Long.parseLong(value.toString().trim());
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    private void writeSnapshot(SeedSnapshot snapshot) {
+        Path path = snapshotPath();
+        try {
+            Files.createDirectories(path.getParent());
+            // Serialize the long[] entries as plain List<Long> for portable JSON.
+            Map<String, List<Long>> serializableManifest = new LinkedHashMap<>();
+            for (Map.Entry<String, long[]> e : snapshot.manifest().entrySet()) {
+                long[] v = e.getValue();
+                serializableManifest.put(e.getKey(), List.of(v[0], v[1]));
+            }
+            Map<String, Object> root = new LinkedHashMap<>();
+            root.put("version", snapshot.version());
+            root.put("rowCount", snapshot.rowCount());
+            root.put("manifest", serializableManifest);
+            Files.writeString(path, objectMapper.writeValueAsString(root), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.debug("Could not write seed snapshot {}: {}", path, e.getMessage());
+        }
     }
 
     private String readContent(Resource resource) throws Exception {

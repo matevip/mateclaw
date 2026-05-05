@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import vip.mate.llm.model.DiscoverResult;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.model.ModelInfoDTO;
+import vip.mate.llm.model.ModelProviderEntity;
 import vip.mate.llm.model.TestResult;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.llm.service.ModelDiscoveryService;
@@ -23,9 +24,12 @@ import java.util.stream.Collectors;
 /**
  * Startup runner: auto-detect running Ollama instance and register discovered models.
  * <p>
- * On application startup, pings the Ollama endpoint (default http://127.0.0.1:11434).
- * If Ollama is online, discovers all pulled models and auto-enables matching pre-configured models.
- * If offline, silently skips (debug log only).
+ * On application startup, first checks whether the Ollama provider is enabled in
+ * {@code mate_model_provider} — if not, skips immediately without any network
+ * traffic. When enabled, pings the Ollama endpoint (default
+ * http://127.0.0.1:11434); if online, discovers all pulled models and
+ * auto-enables matching pre-configured models. If offline, silently skips
+ * (debug log only).
  *
  * @author MateClaw Team
  */
@@ -65,7 +69,22 @@ public class OllamaAutoDiscoveryRunner implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         try {
-            // Test connection first
+            // Skip the network probe entirely when the user hasn't enabled the
+            // Ollama provider — there's no point pinging localhost:11434 every
+            // boot for a provider that isn't part of the active model config.
+            ModelProviderEntity provider;
+            try {
+                provider = modelProviderService.getProviderConfig(OLLAMA_PROVIDER_ID);
+            } catch (Exception e) {
+                log.debug("Ollama provider row missing, skipping auto-discovery");
+                return;
+            }
+            if (!Boolean.TRUE.equals(provider.getEnabled())) {
+                log.debug("Ollama provider disabled, skipping auto-discovery");
+                return;
+            }
+
+            // Test connection
             TestResult result = modelDiscoveryService.testConnection(OLLAMA_PROVIDER_ID);
             if (!result.isSuccess()) {
                 log.debug("Ollama not running, skipping auto-discovery: {}", result.getErrorMessage());

@@ -11,13 +11,16 @@ const props = defineProps<{
   segment: MessageSegment
 }>()
 
+// Expand while streaming so the user can watch the model think in real time;
+// auto-collapse the moment streaming ends so the assistant's final answer
+// stays the focal point without a long reasoning block above it. The user
+// can click the header to re-expand at any time.
 const expanded = ref(props.segment.status === 'running')
 const { renderMarkdown } = useMarkdownRenderer()
 
 const renderedThinking = computed(() => renderMarkdown(props.segment.thinkingText || ''))
 const isRunning = computed(() => props.segment.status === 'running')
 
-// running 结束后自动折叠
 watch(() => props.segment.status, (val) => {
   if (val === 'completed') expanded.value = false
 })

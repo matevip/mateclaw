@@ -107,7 +107,8 @@ public class ChatController {
             // without sticky session)". They look identical from attach()'s
             // boolean return, but the user-facing remediation is different.
             boolean existsLocally = streamTracker.streamExistsOnThisNode(conversationId);
-            boolean attached = streamTracker.attach(conversationId, emitter);
+            long lastEventId = request.getLastEventId() == null ? 0L : request.getLastEventId();
+            boolean attached = streamTracker.attach(conversationId, emitter, lastEventId);
             if (!attached) {
                 try {
                     if (existsLocally) {
@@ -225,6 +226,8 @@ public class ChatController {
             final String decision = isApprovalCommand ? "approved" : "denied";
 
             streamTracker.register(conversationId);
+            Long approvalAgentId = parseLongOrNull(pending.getAgentId());
+            streamTracker.bindRunMeta(conversationId, approvalAgentId, username);
             registerEmitterCallbacks(emitter, conversationId);
             streamTracker.attach(conversationId, emitter);
             AtomicBoolean approvalEmitterDone = new AtomicBoolean(false);
@@ -248,7 +251,8 @@ public class ChatController {
                         broadcastEvent(conversationId, "content_delta", Map.of("delta", denyMsg));
                         broadcastEvent(conversationId, "message_complete", Map.of("status", "completed"));
                         broadcastEvent(conversationId, "done", buildDonePayload(
-                                conversationId, "completed", savedAssistant, 0, 0, true,
+                                conversationId, "completed", savedAssistant, 0, 0,
+                                isAssistantPersisted(savedAssistant),
                                 conversationService.getMessageCount(conversationId)));
                         // deny 是正常 turn 终结，用户可能在 awaiting_approval 阶段排了消息
                         ChatStreamTracker.CompletionResult denyCr = streamTracker.completeAndConsumeIfLast(conversationId);
@@ -305,7 +309,22 @@ public class ChatController {
                             })
                             .doOnComplete(() -> {
                                 if (!finalized.compareAndSet(false, true)) return;
-                                // RFC-067 §4.6: replay can re-trigger an approval (the approved tool
+                                // Force-recycle short-circuit: see main doOnComplete below.
+                                if (streamTracker.isRecycled(conversationId)) {
+                                    log.info("SSE replay doOnComplete skipped for force-recycled conversation: {}", conversationId);
+                                    try {
+                                        conversationService.updateStreamStatus(conversationId, "idle");
+                                    } catch (Exception e) {
+                                        log.debug("recycled-skip: stream_status reset failed for {}: {}",
+                                                conversationId, e.getMessage());
+                                    }
+                                    ChatStreamTracker.CompletionResult cr = streamTracker.completeAndConsumeIfLast(conversationId);
+                                    if (cr.allDone()) {
+                                        completeEmitterQuietly(emitter, approvalEmitterDone);
+                                    }
+                                    return;
+                                }
+                                // Replay can re-trigger an approval (the approved tool
                                 // call may chain into another guarded tool). Derive status the same
                                 // way as the normal stream so awaiting_approval doesn't get masked
                                 // as completed.
@@ -328,6 +347,13 @@ public class ChatController {
                                                 accumulator.getRuntimeModelName(),
                                                 accumulator.getRuntimeProviderId(),
                                                 accumulator.toMetadataJson());  // includes toolCalls metadata
+                                    } else if (replayWasStopped) {
+                                        boolean replayIsFollowup = replayInterrupt == ChatStreamTracker.InterruptType.USER_INTERRUPT_WITH_FOLLOWUP;
+                                        savedAssistant = conversationService.saveMessage(conversationId, "assistant",
+                                                replayIsFollowup ? "[已中断]" : "[已停止生成]", null, persistStatus);
+                                    } else {
+                                        savedAssistant = saveEmptyAssistantPlaceholder(
+                                                conversationId, persistStatus, accumulator, "SSE replay doOnComplete");
                                     }
                                     broadcastEvent(conversationId, "message_complete", Map.of(
                                             "status", persistStatus,
@@ -336,7 +362,8 @@ public class ChatController {
                                     ));
                                     int msgCount = conversationService.getMessageCount(conversationId);
                                     broadcastEvent(conversationId, "done", buildDonePayload(
-                                            conversationId, persistStatus, savedAssistant, 0, 0, true, msgCount));
+                                            conversationId, persistStatus, savedAssistant, 0, 0,
+                                            isAssistantPersisted(savedAssistant), msgCount));
                                 } catch (Exception e) {
                                     log.warn("SSE replay complete error: {}", e.getMessage());
                                 } finally {
@@ -353,6 +380,22 @@ public class ChatController {
                             })
                             .doOnError(e -> {
                                 if (!finalized.compareAndSet(false, true)) return;
+                                // Force-recycle short-circuit: see main doOnComplete below.
+                                if (streamTracker.isRecycled(conversationId)) {
+                                    log.info("SSE replay doOnError skipped for force-recycled conversation: {}, cause={}",
+                                            conversationId, e.getMessage());
+                                    try {
+                                        conversationService.updateStreamStatus(conversationId, "idle");
+                                    } catch (Exception ex) {
+                                        log.debug("recycled-skip: stream_status reset failed for {}: {}",
+                                                conversationId, ex.getMessage());
+                                    }
+                                    ChatStreamTracker.CompletionResult cr = streamTracker.completeAndConsumeIfLast(conversationId);
+                                    if (cr.allDone()) {
+                                        completeEmitterQuietly(emitter, approvalEmitterDone);
+                                    }
+                                    return;
+                                }
 
                                 boolean isUserStop = e instanceof java.util.concurrent.CancellationException
                                         || (e.getCause() instanceof java.util.concurrent.CancellationException);
@@ -386,6 +429,10 @@ public class ChatController {
                                     } else if (isUserStop) {
                                         savedAssistant = conversationService.saveMessage(conversationId, "assistant",
                                                 replayIsFollowup ? "[已中断]" : "[已停止生成]", null, errStatus);
+                                    } else {
+                                        savedAssistant = conversationService.saveMessage(conversationId, "assistant",
+                                                "[错误] " + (e.getMessage() != null ? e.getMessage() : "replay error"),
+                                                null, "failed");
                                     }
 
                                     if (replayIsFollowup) {
@@ -406,7 +453,8 @@ public class ChatController {
                                         ));
                                         int stoppedMsgCount = conversationService.getMessageCount(conversationId);
                                         broadcastEvent(conversationId, "done", buildDonePayload(
-                                                conversationId, "stopped", savedAssistant, 0, 0, true, stoppedMsgCount));
+                                                conversationId, "stopped", savedAssistant, 0, 0,
+                                                isAssistantPersisted(savedAssistant), stoppedMsgCount));
                                     } else {
                                         broadcastEvent(conversationId, "error", buildErrorPayload(
                                                 conversationId,
@@ -433,6 +481,8 @@ public class ChatController {
                                     () -> log.debug("SSE replay subscription completed: conversationId={}", conversationId));
 
                     streamTracker.setDisposable(conversationId, disposable);
+                    streamTracker.setEmergencySaveCallback(conversationId,
+                            () -> emergencySaveAccumulator(conversationId, accumulator));
 
                 } catch (Exception e) {
                     log.error("SSE approval replay setup error: {}", e.getMessage());
@@ -445,8 +495,22 @@ public class ChatController {
 
         // ---- 正常请求：注册流状态并附着首个订阅者 ----
         streamTracker.register(conversationId);
+        streamTracker.bindRunMeta(conversationId, agentId, username);
         registerEmitterCallbacks(emitter, conversationId);
         streamTracker.attach(conversationId, emitter);
+
+        // Per-emitter "the SSE channel is open and you should reset any
+        // pending placeholder UI". Sent directly to the emitter rather than
+        // broadcast so reconnecting subscribers don't see a duplicate marker
+        // for an already-open conversation.
+        try {
+            sendEvent(emitter, "stream_started", Map.of(
+                    "conversationId", conversationId,
+                    "timestamp", System.currentTimeMillis()
+            ));
+        } catch (IOException e) {
+            log.debug("Failed to send stream_started event for {}: {}", conversationId, e.getMessage());
+        }
 
         // 标记 emitter 是否已结束，防止 Flux 回调再次写入已关闭的 emitter
         AtomicBoolean emitterDone = new AtomicBoolean(false);
@@ -486,6 +550,36 @@ public class ChatController {
                         })
                         .doOnComplete(() -> {
                             if (!finalized.compareAndSet(false, true)) return;
+                            // Force-recycle: the recycle path already wrote a
+                            // "[已被用户中止]" placeholder (or the partial
+                            // content via emergencySave). The agent's flux may
+                            // have completed the same millisecond — skip its
+                            // save + broadcast so we don't append a duplicate
+                            // assistant row below the placeholder. Cleanup
+                            // still runs so queue draining + emitter close
+                            // happen normally.
+                            if (streamTracker.isRecycled(conversationId)) {
+                                log.info("SSE doOnComplete skipped for force-recycled conversation: {}", conversationId);
+                                streamTracker.clearInterruptState(conversationId);
+                                // Defensive: keep DB stream_status consistent with the
+                                // "this turn is over" reality even when we skip the
+                                // save. Force-recycle's controller path already wrote
+                                // 'idle' for the recycled run, so this is normally a
+                                // no-op — but if a register() ever fails to clear the
+                                // marker (e.g. a different turn snuck through), this
+                                // prevents the row leaking at 'running' across refresh.
+                                try {
+                                    conversationService.updateStreamStatus(conversationId, "idle");
+                                } catch (Exception e) {
+                                    log.debug("recycled-skip: stream_status reset failed for {}: {}",
+                                            conversationId, e.getMessage());
+                                }
+                                ChatStreamTracker.CompletionResult cr = streamTracker.completeAndConsumeIfLast(conversationId);
+                                if (cr.allDone()) {
+                                    completeEmitterQuietly(emitter, emitterDone);
+                                }
+                                return;
+                            }
                             // 区分四种完成语义：
                             // 1. 正常完成（stopRequested=false）→ completed
                             // 2. 用户主动停止 → stopped
@@ -522,6 +616,9 @@ public class ChatController {
                                 } else if (wasStopped) {
                                     savedAssistant = conversationService.saveMessage(conversationId, "assistant",
                                             isInterruptFollowup ? "[已中断]" : "[已停止生成]", null, persistStatus);
+                                } else {
+                                    savedAssistant = saveEmptyAssistantPlaceholder(
+                                            conversationId, persistStatus, accumulator, "SSE doOnComplete");
                                 }
                                 // 发布对话完成事件（仅正常完成时；停止/中断/错误均不触发记忆提取）
                                 // RFC-049 follow-up: also skip on isError — error turns persist
@@ -550,7 +647,8 @@ public class ChatController {
                                     int msgCount = conversationService.getMessageCount(conversationId);
                                     broadcastEvent(conversationId, "done", buildDonePayload(
                                             conversationId, persistStatus, savedAssistant,
-                                            accumulator.getPromptTokens(), accumulator.getCompletionTokens(), true, msgCount));
+                                            accumulator.getPromptTokens(), accumulator.getCompletionTokens(),
+                                            isAssistantPersisted(savedAssistant), msgCount));
                                 }
                             } catch (Exception e) {
                                 log.warn("SSE complete error: {}", e.getMessage());
@@ -592,6 +690,22 @@ public class ChatController {
                             boolean wasFirst = finalized.compareAndSet(false, true);
                             log.info("SSE doOnCancel fired: conversationId={}, wasFirst={}", conversationId, wasFirst);
                             if (!wasFirst) return;
+                            // Force-recycle short-circuit: see doOnComplete above.
+                            if (streamTracker.isRecycled(conversationId)) {
+                                log.info("SSE doOnCancel skipped for force-recycled conversation: {}", conversationId);
+                                streamTracker.clearInterruptState(conversationId);
+                                try {
+                                    conversationService.updateStreamStatus(conversationId, "idle");
+                                } catch (Exception e) {
+                                    log.debug("recycled-skip: stream_status reset failed for {}: {}",
+                                            conversationId, e.getMessage());
+                                }
+                                ChatStreamTracker.CompletionResult cr = streamTracker.completeAndConsumeIfLast(conversationId);
+                                if (cr.allDone()) {
+                                    completeEmitterQuietly(emitter, emitterDone);
+                                }
+                                return;
+                            }
                             // 区分用户主动停止和 interrupt-with-followup
                             ChatStreamTracker.InterruptType interruptType = streamTracker.getInterruptType(conversationId);
                             boolean isInterruptFollowup = interruptType == ChatStreamTracker.InterruptType.USER_INTERRUPT_WITH_FOLLOWUP;
@@ -635,7 +749,8 @@ public class ChatController {
                                     ));
                                     int stoppedMsgCount = conversationService.getMessageCount(conversationId);
                                     broadcastEvent(conversationId, "done", buildDonePayload(
-                                            conversationId, "stopped", savedAssistant, 0, 0, true, stoppedMsgCount));
+                                            conversationId, "stopped", savedAssistant, 0, 0,
+                                            isAssistantPersisted(savedAssistant), stoppedMsgCount));
                                 }
                             } catch (Exception e) {
                                 log.warn("SSE stop finalize error: {}", e.getMessage());
@@ -657,6 +772,23 @@ public class ChatController {
                             boolean wasFirst = finalized.compareAndSet(false, true);
                             if (!wasFirst) {
                                 log.info("SSE doOnError skipped (finalized by doOnCancel): conversationId={}", conversationId);
+                                return;
+                            }
+                            // Force-recycle short-circuit: see doOnComplete above.
+                            if (streamTracker.isRecycled(conversationId)) {
+                                log.info("SSE doOnError skipped for force-recycled conversation: {}, cause={}",
+                                        conversationId, e.getMessage());
+                                streamTracker.clearInterruptState(conversationId);
+                                try {
+                                    conversationService.updateStreamStatus(conversationId, "idle");
+                                } catch (Exception ex) {
+                                    log.debug("recycled-skip: stream_status reset failed for {}: {}",
+                                            conversationId, ex.getMessage());
+                                }
+                                ChatStreamTracker.CompletionResult cr = streamTracker.completeAndConsumeIfLast(conversationId);
+                                if (cr.allDone()) {
+                                    completeEmitterQuietly(emitter, emitterDone);
+                                }
                                 return;
                             }
 
@@ -721,7 +853,8 @@ public class ChatController {
                                     ));
                                     int stoppedMsgCount = conversationService.getMessageCount(conversationId);
                                     broadcastEvent(conversationId, "done", buildDonePayload(
-                                            conversationId, "stopped", savedAssistant, 0, 0, true, stoppedMsgCount));
+                                            conversationId, "stopped", savedAssistant, 0, 0,
+                                            isAssistantPersisted(savedAssistant), stoppedMsgCount));
                                 } else {
                                     broadcastEvent(conversationId, "error", buildErrorPayload(conversationId, errorMsg, savedAssistant));
                                 }
@@ -1008,6 +1141,14 @@ public class ChatController {
         private List<MessageContentPart> contentParts;
         /** true 表示断线重连，不发送新消息，只附着到已有的流 */
         private Boolean reconnect;
+        /**
+         * Last SSE event id the client has already processed. Only meaningful
+         * when {@link #reconnect} is true — the server skips events with
+         * id &le; this value during buffer replay so the client doesn't
+         * see them twice. 0 (or null) means "replay everything", matching
+         * the legacy attach behavior for backwards compatibility.
+         */
+        private Long lastEventId;
         /** 思考深度：off / low / medium / high / max，null 表示跟随 Agent 默认 */
         private String thinkingLevel;
     }
@@ -1115,6 +1256,13 @@ public class ChatController {
                                     accumulator.getRuntimeModelName(),
                                     accumulator.getRuntimeProviderId(),
                                     accumulator.toMetadataJson());
+                        } else if (queuedWasStopped) {
+                            boolean queuedIsFollowup = queuedInterrupt == ChatStreamTracker.InterruptType.USER_INTERRUPT_WITH_FOLLOWUP;
+                            savedAssistant = conversationService.saveMessage(conversationId, "assistant",
+                                    queuedIsFollowup ? "[已中断]" : "[已停止生成]", null, persistStatus);
+                        } else {
+                            savedAssistant = saveEmptyAssistantPlaceholder(
+                                    conversationId, persistStatus, accumulator, "SSE queued doOnComplete");
                         }
                         broadcastEvent(conversationId, "message_complete", Map.of(
                                 "status", persistStatus,
@@ -1123,7 +1271,8 @@ public class ChatController {
                         ));
                         broadcastEvent(conversationId, "done", buildDonePayload(
                                 conversationId, persistStatus, savedAssistant,
-                                accumulator.getPromptTokens(), accumulator.getCompletionTokens(), true,
+                                accumulator.getPromptTokens(), accumulator.getCompletionTokens(),
+                                isAssistantPersisted(savedAssistant),
                                 conversationService.getMessageCount(conversationId)));
                     } catch (Exception e) {
                         log.warn("SSE queued complete error: {}", e.getMessage());
@@ -1236,6 +1385,29 @@ public class ChatController {
                 ? "interrupted" : "stopped";
     }
 
+    static String emptyAssistantPlaceholder(String status) {
+        if ("awaiting_approval".equals(status)) return "[等待审批]";
+        return "[本次没有输出]";
+    }
+
+    static boolean isAssistantPersisted(MessageEntity savedAssistant) {
+        return savedAssistant != null;
+    }
+
+    private MessageEntity saveEmptyAssistantPlaceholder(String conversationId, String status,
+                                                       StreamAccumulator accumulator, String source) {
+        log.warn("{} with empty accumulator: conversationId={}, status={}, finishReason={}, phase={}, hasSegments={}",
+                source, conversationId, status, accumulator.getFinishReason(),
+                accumulator.getCurrentPhase(), !accumulator.segmentsEmpty());
+        return conversationService.saveMessage(conversationId, "assistant",
+                emptyAssistantPlaceholder(status), null, status,
+                accumulator.getPromptTokens(),
+                accumulator.getCompletionTokens(),
+                accumulator.getRuntimeModelName(),
+                accumulator.getRuntimeProviderId(),
+                accumulator.toMetadataJson());
+    }
+
     private Map<String, Object> buildDonePayload(String conversationId, String status, MessageEntity savedAssistant,
                                                  int promptTokens, int completionTokens,
                                                  boolean persisted, Integer messageCount) {
@@ -1287,6 +1459,9 @@ public class ChatController {
             String text = accumulator.getContent();
             List<MessageContentPart> parts = accumulator.toAssistantParts();
             if (text.isBlank() && parts.isEmpty()) {
+                log.warn("[ChatController] Emergency save skipped (empty accumulator): conversationId={}, finishReason={}, phase={}, hasSegments={}",
+                        conversationId, accumulator.getFinishReason(), accumulator.getCurrentPhase(),
+                        !accumulator.segmentsEmpty());
                 return;
             }
             boolean awaitingApproval = accumulator.isAwaitingApproval();
@@ -1374,8 +1549,13 @@ public class ChatController {
      * 注册 SseEmitter 的完整生命周期回调
      */
     private void registerEmitterCallbacks(SseEmitter emitter, String conversationId) {
-        emitter.onCompletion(() ->
-                log.debug("SSE emitter completed: conversationId={}", conversationId));
+        emitter.onCompletion(() -> {
+            log.debug("SSE emitter completed: conversationId={}", conversationId);
+            // Detach immediately so a subsequent broadcast (heartbeat / async_task_*)
+            // doesn't waste a send call on the zombie emitter and emit
+            // "Removing dead subscriber ... ResponseBodyEmitter has already completed".
+            streamTracker.detach(conversationId, emitter);
+        });
         emitter.onTimeout(() -> {
             log.debug("SSE emitter timeout: conversationId={}", conversationId);
             streamTracker.detach(conversationId, emitter);
@@ -1445,6 +1625,19 @@ public class ChatController {
         private String runtimeProviderId = "";
         private boolean awaitingApproval = false;
         private String currentPhase = "";
+        /**
+         * Graph-emitted FinishReason for the turn (e.g. {@code "incomplete"},
+         * {@code "stopped"}, {@code "evidence_insufficient"}). Sourced from
+         * the {@code finish_reason} {@link vip.mate.agent.GraphEventPublisher}
+         * event that {@code FinalAnswerNode} attaches to its PENDING_EVENTS
+         * output — same pipeline the SSE accumulator already drains, so the
+         * value is delivered alongside the assistant content (not via a
+         * sibling SSE-only broadcast that would bypass this accumulator).
+         * Persisted into message metadata so downstream filters
+         * (memory promotion gate) see a machine-readable status instead of
+         * having to guess from text. Empty string until the event arrives.
+         */
+        private String finishReason = "";
         private Long planId = null;
         private List<String> planSteps = List.of();
         private Integer currentPlanStep = null;
@@ -1469,6 +1662,17 @@ public class ChatController {
                         streamTracker.updatePhase(conversationId, phase);
                         // phase 切换时关闭 running 的 content/thinking segment，保留边界
                         finalizeRunningSegments("content", "thinking");
+                    }
+                }
+                if ("finish_reason".equals(delta.eventType())) {
+                    Object reason = delta.eventData().get("reason");
+                    if (reason != null) {
+                        // Last-write-wins: graph normally fires this exactly once
+                        // at FinalAnswerNode completion. Replay paths that re-enter
+                        // the graph after approval will emit a fresh value, which
+                        // is the correct behavior — the latest reason is what gets
+                        // persisted with the assistant message.
+                        finishReason = String.valueOf(reason);
                     }
                 }
                 accumulateToolEvent(delta.eventType(), delta.eventData(), conversationId);
@@ -1669,6 +1873,9 @@ public class ChatController {
         int getCompletionTokens() { return completionTokens; }
         String getRuntimeModelName() { return runtimeModelName; }
         String getRuntimeProviderId() { return runtimeProviderId; }
+        String getCurrentPhase() { return currentPhase; }
+        String getFinishReason() { return finishReason; }
+        boolean segmentsEmpty() { return segments.isEmpty(); }
 
         synchronized List<MessageContentPart> toAssistantParts() {
             List<MessageContentPart> parts = new ArrayList<>();
@@ -1744,11 +1951,24 @@ public class ChatController {
                     // historical messages as "data returned directly by tool".
                     metadata.put("directToolNames", directToolNames);
                 }
+                if (!finishReason.isEmpty()) {
+                    // Surface graph FinishReason so MemorySummarizationGate and
+                    // any other downstream consumer can branch on a structured
+                    // status (e.g. skip INCOMPLETE / STOPPED / ERROR_FALLBACK
+                    // turns from long-term memory promotion) instead of doing
+                    // brittle text matching on the assistant content.
+                    metadata.put("finishReason", finishReason);
+                }
                 return objectMapper.writeValueAsString(metadata);
             } catch (Exception e) {
                 log.warn("Failed to serialize metadata: {}", e.getMessage());
                 return "{}";
             }
         }
+    }
+
+    private static Long parseLongOrNull(String s) {
+        if (s == null || s.isBlank()) return null;
+        try { return Long.parseLong(s.trim()); } catch (NumberFormatException e) { return null; }
     }
 }

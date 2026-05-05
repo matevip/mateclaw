@@ -83,8 +83,12 @@ public class BrowserUseTool {
         Default is headless. Use headed=true with action=start for a visible window.
         Typical flow: start → open(url) → snapshot → click/type → stop.
         If start fails, run action=diagnose for a full report of what's missing and how to fix it.
-        When web_search is unavailable (no Serper/Tavily API key), use this tool to fetch content directly:
-        e.g. action=open url=https://news.google.com/search?q=... then action=snapshot to read the page.
+
+        SCOPE — use this tool ONLY for tasks that require driving a real browser:
+        clicking, typing into forms, taking screenshots, executing JS in page context, or
+        interacting with sites that need a logged-in session. For plain web search or
+        retrieving public page content, prefer the `search` tool — do not call `browser_use`
+        as a search alternative.
 
         Supported actions:
         - start: Launch a new browser (tries system Chrome, system Edge, then Playwright bundled). Optional headed=true.
@@ -154,6 +158,12 @@ public class BrowserUseTool {
     /**
      * 获取或创建共享 Playwright 实例（双重检查锁定）。
      * 首次调用约 1-2s（启动 Node.js），后续调用 ~0ms。
+     *
+     * <p>Issue #40: Playwright.create() spawns a Node.js driver subprocess by extracting
+     * a bundled binary to a temp directory. On Windows this can fail when the user profile
+     * path contains non-ASCII characters or when antivirus quarantines the extracted exe.
+     * We wrap the failure with a message that points the LLM/user at action=diagnose so
+     * they don't get a bare stack trace.
      */
     private Playwright getOrCreatePlaywright() {
         Playwright pw = sharedPlaywright;
@@ -167,7 +177,17 @@ public class BrowserUseTool {
             }
             log.info("[BrowserUse] Creating shared Playwright instance...");
             long start = System.currentTimeMillis();
-            pw = Playwright.create();
+            try {
+                pw = Playwright.create();
+            } catch (Throwable t) {
+                String os = System.getProperty("os.name", "?");
+                log.error("[BrowserUse] Playwright.create() failed on {}: {}", os, t.getMessage(), t);
+                throw new PlaywrightException(
+                        "Failed to start Playwright driver on " + os + ": " + t.getMessage()
+                                + ". Common causes on Windows: (a) user profile path contains non-ASCII chars,"
+                                + " (b) antivirus blocked the extracted driver exe, (c) %TEMP% is on a read-only volume."
+                                + " Run action=diagnose for a full report.", t);
+            }
             sharedPlaywright = pw;
             log.info("[BrowserUse] Playwright instance created in {}ms", System.currentTimeMillis() - start);
             return pw;
@@ -237,7 +257,8 @@ public class BrowserUseTool {
         }
 
         BrowserSession session = new BrowserSession(r.getBrowser(), r.getContext(), r.getPage(),
-                headed, r.isConnectedViaCdp(), r.getCdpUrl());
+                headed, r.isConnectedViaCdp(), r.getCdpUrl(),
+                r.getUserDataDir(), r.getOwnedProcess());
         sessions.put(sessionKey, session);
         scheduleIdleCheck(sessionKey);
 
@@ -277,8 +298,10 @@ public class BrowserUseTool {
             return error("Failed to connect to CDP at " + cdpUrl + ": " + r.getFailureSummary());
         }
 
+        // action=connect_cdp attaches to a user-managed Chrome — we did not spawn it,
+        // so userDataDir / ownedProcess stay null and close() will only disconnect.
         BrowserSession session = new BrowserSession(r.getBrowser(), r.getContext(), r.getPage(),
-                true, true, r.getCdpUrl());
+                true, true, r.getCdpUrl(), null, null);
         sessions.put(sessionKey, session);
         scheduleIdleCheck(sessionKey);
 
@@ -771,18 +794,33 @@ public class BrowserUseTool {
         final boolean headed;
         final boolean connectedViaCdp;
         final String cdpUrl;
+        /**
+         * Temp profile directory we created for the EXTERNAL_CDP fallback.
+         * Null when the session connected to a user-managed Chrome (CONFIG_CDP /
+         * action=connect_cdp) or used a non-CDP launch strategy.
+         */
+        final java.nio.file.Path userDataDir;
+        /**
+         * Chrome subprocess we spawned ourselves for EXTERNAL_CDP. Null otherwise.
+         * Closing the Playwright {@code Browser} only severs the CDP socket; the
+         * actual Chrome process keeps running until we destroyForcibly() it here.
+         */
+        final Process ownedProcess;
         volatile long lastActivity;
         /** 空闲看门狗定时任务（stop 时取消，避免泄漏） */
         volatile ScheduledFuture<?> idleWatchdog;
 
         BrowserSession(Browser browser, BrowserContext context, Page page,
-                        boolean headed, boolean connectedViaCdp, String cdpUrl) {
+                        boolean headed, boolean connectedViaCdp, String cdpUrl,
+                        java.nio.file.Path userDataDir, Process ownedProcess) {
             this.browser = browser;
             this.context = context;
             this.page = page;
             this.headed = headed;
             this.connectedViaCdp = connectedViaCdp;
             this.cdpUrl = cdpUrl;
+            this.userDataDir = userDataDir;
+            this.ownedProcess = ownedProcess;
             this.lastActivity = System.currentTimeMillis();
         }
 
@@ -795,15 +833,40 @@ public class BrowserUseTool {
         }
 
         /**
-         * 关闭浏览器会话（不关闭共享 Playwright）。
-         * CDP 模式：仅断开连接，Chrome 进程继续运行。
-         * Launch 模式：关闭 context + browser（终止 Chromium 进程）。
+         * Close the session (does not touch the shared Playwright driver).
+         * <ul>
+         *   <li>User-managed CDP (ownedProcess == null): just disconnect — the user owns the Chrome process.</li>
+         *   <li>Self-spawned CDP (ownedProcess != null): disconnect, then destroyForcibly() the Chrome we spawned,
+         *       wait briefly for it to exit so Windows lockfiles are released, then deleteQuietly() the temp profile.</li>
+         *   <li>Launch mode (connectedViaCdp == false): close context + browser; Playwright handles process teardown.</li>
+         * </ul>
          */
         void close() {
             if (connectedViaCdp) {
                 try {
                     if (browser != null) browser.close();
                 } catch (Exception ignored) {}
+                if (ownedProcess != null) {
+                    try {
+                        // Snapshot descendants BEFORE killing the parent. Chrome on Windows
+                        // spawns ~6 child processes (renderer, GPU, network service, ...)
+                        // that hold open handles inside the user-data-dir. destroyForcibly()
+                        // only sends TerminateProcess to the parent; killing children must
+                        // be done separately, otherwise the temp dir cannot be deleted and
+                        // the orphaned chrome.exe instances keep running.
+                        java.util.List<ProcessHandle> children = ownedProcess.descendants()
+                                .toList();
+                        ownedProcess.destroyForcibly();
+                        for (ProcessHandle h : children) {
+                            try { h.destroyForcibly(); } catch (Exception ignored) {}
+                        }
+                        ownedProcess.waitFor(5, TimeUnit.SECONDS);
+                        for (ProcessHandle h : children) {
+                            try { h.onExit().get(2, TimeUnit.SECONDS); } catch (Exception ignored) {}
+                        }
+                    } catch (Exception ignored) {}
+                    BrowserLauncher.deleteQuietly(userDataDir);
+                }
             } else {
                 try {
                     if (context != null) context.close();

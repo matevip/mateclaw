@@ -10,6 +10,7 @@ import org.springframework.core.io.FileSystemResource;
 import org.springframework.util.MimeType;
 import reactor.core.publisher.Flux;
 import vip.mate.approval.ApprovalPlaceholderUtil;
+import vip.mate.llm.service.ModelCapabilityService;
 import vip.mate.workspace.conversation.ConversationService;
 import vip.mate.workspace.conversation.model.MessageContentPart;
 import vip.mate.workspace.conversation.model.MessageEntity;
@@ -18,7 +19,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -46,7 +49,7 @@ public abstract class BaseAgent {
     /**
      * Max ReAct iterations (one reasoning + action + observation step counts as one).
      * Default 100, hard ceiling 100 (enforced in AgentGraphBuilder so per-agent DB
-     * overrides cannot exceed it). Aligned with QwenPaw's _MAX_MAX_ITERATIONS.
+     * overrides cannot exceed it).
      */
     public static final int MAX_ITERATIONS_HARD_CEILING = 100;
     protected int maxIterations = 100;
@@ -56,6 +59,13 @@ public abstract class BaseAgent {
 
     /** 模型名称 */
     protected String modelName;
+
+    /**
+     * Modalities the chat model can natively consume (resolved at agent build time
+     * by {@link vip.mate.llm.service.ModelCapabilityService}). Empty set = unknown model,
+     * fall back to text-only behavior. See issue #44.
+     */
+    protected Set<ModelCapabilityService.Modality> modelCapabilities = EnumSet.noneOf(ModelCapabilityService.Modality.class);
 
     /** 采样温度 */
     protected Double temperature;
@@ -228,17 +238,36 @@ public abstract class BaseAgent {
             }
         }
 
-        // Tail guard: a few providers reject prompts whose history ends with an
-        // assistant message. Anthropic Claude returns 400 "does not support
-        // assistant message prefill"; DeepSeek thinking mode requires the
-        // last assistant turn's reasoning_content (which we may not have).
-        // The trailing-user-dedup above can already produce an assistant tail
-        // when the immediately-prior turn was an error / placeholder that got
-        // dropped by stage 1 / 1.5 of sanitizeForLlm. Strip remaining assistant
-        // tails defensively — the current user message is fed in separately as
-        // the final prompt by the caller, so dropping these assistant entries
-        // never loses information the LLM needs.
-        while (!messages.isEmpty() && messages.get(messages.size() - 1) instanceof AssistantMessage) {
+        // Tail guard — orphan-user strip (issue #47).
+        //
+        // Invariant: every caller of buildConversationHistory appends the
+        // current user message AFTER this history (BaseAgent.buildClient
+        // via .user(), StateGraphReActAgent / StateGraphPlanExecuteAgent
+        // via messages.add(buildCurrentUserMessage)). So the final prompt is
+        //   [system, ...history, current_user]
+        // and is *always* terminated by a user message. That means a trailing
+        // assistant in history is FINE for every provider we support — it
+        // produces the correct [..., user, assistant, current_user] alternation
+        // (OpenAI, Anthropic, DeepSeek regular/thinking, Gemini, Qwen, …).
+        //
+        // The actual hazard is the opposite: a trailing USER in history.
+        // That happens when the immediately-prior turn's assistant message
+        // was dropped by Stage 1 (approval placeholder) or Stage 1.5 (errored
+        // turn / "[错误] " row), or never persisted at all (turn interrupted
+        // before doOnComplete saved the assistant). In that case the history
+        // ends with an orphan unanswered user, and appending the current user
+        // produces TWO consecutive user messages. Most providers concatenate
+        // those and answer both — leaking the orphan question's answer
+        // alongside the current answer. (This was the symptom reported in
+        // issue #47, originally caused by a tail guard that stripped trailing
+        // ASSISTANT messages instead of trailing USER ones — a direction-
+        // reversed version of this loop.)
+        //
+        // Stripping orphan users is safe: the user re-asked or asked a new
+        // question; the orphan turn produced no answer the model can build
+        // on. We lose a small amount of conversational context in exchange
+        // for clean alternation across every provider.
+        while (!messages.isEmpty() && messages.get(messages.size() - 1) instanceof UserMessage) {
             messages.remove(messages.size() - 1);
         }
         return messages;
@@ -273,6 +302,19 @@ public abstract class BaseAgent {
      */
     private Message sanitizeForLlm(MessageEntity entity) {
         if (entity == null) {
+            return null;
+        }
+
+        // Stage 0: drop cron-run header rows (system role + "📋 " prefix)
+        // inserted by CronJobLifecycleService.startRun. These are UI dividers
+        // for the unified tasks_<wsId> view and the IM channel-session
+        // mirror — they carry no semantic context for the LLM. Without this
+        // skip, every subsequent IM turn would feed the model unsolicited
+        // SystemMessage rows like "📋 每日新闻 · 定时触发 · 2026-04-30T10:55"
+        // and bloat the prompt with scheduler metadata.
+        if ("system".equals(entity.getRole())
+                && entity.getContent() != null
+                && entity.getContent().startsWith("📋 ")) {
             return null;
         }
 
@@ -442,7 +484,12 @@ public abstract class BaseAgent {
         return switch (message.getRole()) {
             case "assistant" -> new AssistantMessage(renderedContent);
             case "system" -> new SystemMessage(renderedContent);
-            case "user" -> buildUserMessage(message, renderedContent);
+            // History user messages: text only. Re-injecting Media on every replay
+            // accumulates attachments across turns — many providers cap at 1 video
+            // per request (e.g. Zhipu GLM-5V returns code 1210). The current turn
+            // gets Media via buildCurrentUserMessage, which is the only path that
+            // should send raw bytes to the model.
+            case "user" -> buildUserMessage(message, renderedContent, false);
             default -> null;
         };
     }
@@ -451,15 +498,15 @@ public abstract class BaseAgent {
 
     /**
      * 判断当前模型是否支持视频输入。
-     * 仅已知支持视频分析的视觉模型（Qwen-VL、GPT-4o、Gemini 等）才注入视频 Media。
+     * 由 {@link ModelCapabilityService} 在 agent 构建时解析并注入到
+     * {@link #modelCapabilities}，per-model 粒度（区分如 glm-4v vs glm-4v-plus）。
      */
     private boolean modelSupportsVideo() {
-        if (modelName == null) return false;
-        String n = modelName.toLowerCase();
-        return (n.contains("qwen") && n.contains("vl"))
-                || n.contains("gpt-4o")
-                || n.contains("gemini")
-                || (n.contains("glm") && n.contains("v"));
+        return modelCapabilities.contains(ModelCapabilityService.Modality.VIDEO);
+    }
+
+    private boolean modelSupportsVision() {
+        return modelCapabilities.contains(ModelCapabilityService.Modality.VISION);
     }
 
     /**
@@ -467,9 +514,27 @@ public abstract class BaseAgent {
      * 让模型在 prompt 中直接看到媒体内容，不需要再调 MCP read_media_file 工具。
      */
     protected UserMessage buildUserMessage(MessageEntity message, String renderedContent) {
+        return buildUserMessage(message, renderedContent, true);
+    }
+
+    /**
+     * @param injectMedia when {@code false} (history replay), skip the Media-loading
+     *                    branch entirely and return text-only — providers like Zhipu
+     *                    GLM-5V cap at 1 video per request, so re-injecting historical
+     *                    attachments on every turn breaks the call.
+     */
+    protected UserMessage buildUserMessage(MessageEntity message, String renderedContent, boolean injectMedia) {
+        if (!injectMedia) {
+            return new UserMessage(renderedContent == null ? "" : renderedContent);
+        }
         List<MessageContentPart> parts = conversationService.parseMessageParts(message);
         List<Media> mediaList = new ArrayList<>();
+        // Reasons for attachments that the model cannot consume — surfaced to the agent
+        // via the user message text so it does not hallucinate a tool call to read them.
+        // See issue #44.
+        List<String> skippedAttachments = new ArrayList<>();
         boolean videoSupported = modelSupportsVideo();
+        boolean visionSupported = modelSupportsVision();
 
         for (MessageContentPart part : parts) {
             if (part == null) continue;
@@ -490,6 +555,15 @@ public abstract class BaseAgent {
             if (isImage && contentType.contains("svg")) {
                 log.debug("[{}] Skipping SVG attachment (not supported by multimodal API): {}",
                         agentName, part.getFileName());
+                skippedAttachments.add(part.getFileName() + "(SVG 格式，多模态 API 不支持)");
+                continue;
+            }
+
+            // 图片仅在模型支持视觉时注入；纯文本模型（如 GLM-5-Turbo / DeepSeek-V3）会被跳过
+            if (isImage && !visionSupported) {
+                log.debug("[{}] Skipping image attachment (model '{}' does not support vision): {}",
+                        agentName, modelName, part.getFileName());
+                skippedAttachments.add(part.getFileName() + "(当前模型 " + modelName + " 不支持图片输入)");
                 continue;
             }
 
@@ -497,6 +571,7 @@ public abstract class BaseAgent {
             if (isVideo && !videoSupported) {
                 log.debug("[{}] Skipping video attachment (model '{}' does not support video): {}",
                         agentName, modelName, part.getFileName());
+                skippedAttachments.add(part.getFileName() + "(当前模型 " + modelName + " 不支持视频输入)");
                 continue;
             }
 
@@ -504,6 +579,7 @@ public abstract class BaseAgent {
             if (isVideo && part.getFileSize() != null && part.getFileSize() > MAX_VIDEO_SIZE_BYTES) {
                 log.warn("[{}] Skipping oversized video attachment ({}MB > 20MB): {}",
                         agentName, part.getFileSize() / (1024 * 1024), part.getFileName());
+                skippedAttachments.add(part.getFileName() + "(视频超过 20MB 大小限制)");
                 continue;
             }
 
@@ -515,6 +591,7 @@ public abstract class BaseAgent {
             if (mediaPath == null) {
                 log.warn("[{}] {} file not found for attachment: {}, path: {}, mediaId: {}",
                         agentName, isVideo ? "Video" : "Image", part.getFileName(), part.getPath(), part.getMediaId());
+                skippedAttachments.add(part.getFileName() + "(文件未找到)");
                 continue;
             }
             try {
@@ -526,14 +603,23 @@ public abstract class BaseAgent {
             } catch (Exception e) {
                 log.warn("[{}] Failed to create Media for {} {}: {}",
                         agentName, isVideo ? "video" : "image", part.getFileName(), e.getMessage());
+                skippedAttachments.add(part.getFileName() + "(媒体加载失败)");
             }
         }
 
+        String finalText = renderedContent;
+        if (!skippedAttachments.isEmpty()) {
+            finalText = (renderedContent == null ? "" : renderedContent)
+                    + "\n\n[系统提示] 以下附件未能传入当前模型：" + String.join("、", skippedAttachments)
+                    + "。\n请用对话语言清晰、友好地告诉用户：当前模型无法处理这类附件，建议切换到具备相应能力的多模态模型（图片需视觉模型，视频需视频理解模型）后重新上传。"
+                    + "不要调用任何工具（包括 ffmpeg、浏览器、文件读取等）尝试解析这些附件。";
+        }
+
         if (mediaList.isEmpty()) {
-            return new UserMessage(renderedContent);
+            return new UserMessage(finalText);
         }
         return UserMessage.builder()
-                .text(renderedContent)
+                .text(finalText)
                 .media(mediaList)
                 .build();
     }

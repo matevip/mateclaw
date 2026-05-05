@@ -156,6 +156,9 @@ public final class MateClawStateKeys {
      */
     public static final String DIRECT_TOOL_OUTPUTS = "direct_tool_outputs";
 
+    /** Source references observed from successful tool results during this run. */
+    public static final String SOURCE_EVIDENCE_LEDGER = "source_evidence_ledger";
+
     // ===== RFC-063r: ChatOrigin propagation through the StateGraph =====
 
     /**

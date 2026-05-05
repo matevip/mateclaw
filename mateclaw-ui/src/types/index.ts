@@ -162,6 +162,18 @@ export interface MessageSegment {
   plan?: PlanMeta
   /** 时间戳 */
   timestamp?: number
+  /**
+   * Iteration index this segment belongs to (0-based). Set by iteration_start —
+   * lets MessageBubble group thinking/tool/content segments per iteration so
+   * the next iteration's output never appends onto the previous one's tail.
+   */
+  iterationIndex?: number
+  /** Subagent / delegation child ID, when this segment was emitted under a child scope. */
+  subagentId?: string
+  /** Backend signaled the running content was truncated to break a repetition pattern. */
+  repetitionWarning?: 'char_pattern' | 'sentence_repetition'
+  /** Number of trailing characters dropped when the repetition guard fired. */
+  truncatedChars?: number
 }
 
 export interface MessageMetadata {
@@ -188,7 +200,7 @@ export interface MessageMetadata {
 }
 
 export interface MessageContentPart {
-  type: 'text' | 'thinking' | 'image' | 'file' | 'audio' | 'video' | 'tool_call' | 'parse_error'
+  type: 'text' | 'thinking' | 'image' | 'file' | 'audio' | 'video' | 'model3d' | 'tool_call' | 'parse_error'
   text?: string
   fileUrl?: string
   fileName?: string
@@ -233,6 +245,8 @@ export interface Skill {
 
 /** 运行时解析状态（来自 /runtime/status） */
 export interface SkillRuntimeStatus {
+  /** RFC-090 Phase 2 — entity primary key */
+  id?: number
   name: string
   description?: string
   source: string  // "directory" | "database"
@@ -256,6 +270,77 @@ export interface SkillRuntimeStatus {
   dependencySummary?: string | null
   // Computed label
   runtimeStatusLabel?: string
+  // RFC-090 §14.1 — features matrix + manifest SoT
+  manifest?: SkillManifest | null
+  /** Map<featureId, "READY" | "SETUP_NEEDED" | "UNSUPPORTED"> */
+  featureStatuses?: Record<string, string>
+  /** featureIds whose status is READY */
+  activeFeatures?: string[]
+  /** Tools advertised to the LLM after feature filtering */
+  effectiveAllowedTools?: string[]
+}
+
+/** RFC-090 §14.6 — typed view onto manifest_json */
+export interface SkillManifest {
+  id?: string
+  name?: string
+  description?: string
+  icon?: string
+  version?: string
+  author?: string
+  /** prompt | code | mcp | acp | knowledge */
+  type?: string
+  category?: string
+  allowedTools?: string[]
+  requires?: SkillManifestRequirement[]
+  platforms?: string[]
+  features?: SkillManifestFeature[]
+  settings?: SkillManifestSetting[]
+  requiresModel?: string[]
+  dashboardMetrics?: SkillManifestDashboardMetric[]
+  selfEvolution?: { lessonsEnabled?: boolean; lessonsMaxEntries?: number; memoryWritesAllowed?: boolean }
+  knowledge?: {
+    bindKb?: string
+    retrieval?: string
+    topK?: number
+    citation?: string
+    rerank?: boolean
+    boundKbId?: number | null
+  } | null
+  extras?: Record<string, any>
+}
+
+export interface SkillManifestRequirement {
+  key: string
+  type?: string
+  check?: string
+  optional?: boolean
+  description?: string
+  install?: Record<string, string>
+}
+
+export interface SkillManifestFeature {
+  id: string
+  label?: string
+  requires?: string[]
+  platforms?: string[]
+  tools?: string[]
+  fallbackMessage?: string
+  unsupportedMessage?: string
+}
+
+export interface SkillManifestSetting {
+  key: string
+  label?: string
+  type?: string
+  defaultValue?: any
+  options?: Record<string, any>[]
+}
+
+export interface SkillManifestDashboardMetric {
+  label?: string
+  memoryKey?: string
+  format?: string
 }
 
 /** 安全扫描发现 */
@@ -336,6 +421,9 @@ export interface Channel {
   agentId?: string | number
   botPrefix?: string
   configJson?: string
+  /** Identity snapshot from the most recent successful credential verify
+   *  (RFC-084). JSON-encoded {accountName, accountId, team, region, ...}. */
+  identityJson?: string
   enabled: boolean
   description?: string
   // 前端扩展字段
@@ -778,7 +866,7 @@ export interface CronJob {
   timezone: string
   agentId: string | number
   agentName?: string
-  taskType: 'text' | 'agent'
+  taskType: 'text' | 'agent' | 'reminder'
   triggerMessage?: string
   requestBody?: string
   enabled: boolean

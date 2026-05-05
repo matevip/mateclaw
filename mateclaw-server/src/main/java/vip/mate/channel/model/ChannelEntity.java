@@ -34,6 +34,16 @@ public class ChannelEntity {
     @TableField(value = "config_json", updateStrategy = FieldStrategy.ALWAYS)
     private String configJson;
 
+    /**
+     * Identity snapshot from the most recent successful credential probe
+     * (RFC-084 follow-up). JSON-encoded {@code accountName / accountId / team /
+     * region / ...} payload. Surfaced on the list page so cards read
+     * "Connected as @MyBot" instead of the type-level description. Optional —
+     * legacy rows have it null until the next successful connect.
+     */
+    @TableField(value = "identity_json", updateStrategy = FieldStrategy.ALWAYS)
+    private String identityJson;
+
     /** 是否启用 */
     private Boolean enabled;
 

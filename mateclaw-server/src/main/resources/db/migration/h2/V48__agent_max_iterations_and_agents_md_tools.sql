@@ -4,7 +4,7 @@
 --    User-customized rows (any value other than 25/20) were silently skipped, so the
 --    StateGraph ReAct agent kept running with maxIterations=25 even after V47.
 --    V48 widens the condition: any seeded agent row with max_iterations < 100 gets
---    bumped to 100, matching the QwenPaw-style ceiling. Custom rows above 100 still
+--    bumped to 100, matching the hard ceiling. Custom rows above 100 still
 --    get clamped at runtime by AgentGraphBuilder.
 --
 -- 2) AGENTS.md tool guidance: the workspace's seeded AGENTS.md only mentioned

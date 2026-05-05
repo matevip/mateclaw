@@ -86,6 +86,14 @@ public class ConversationVO extends ConversationEntity {
 
     private static String extractSource(String conversationId) {
         if (conversationId == null) return "web";
+        // Underscore-prefixed cron buckets — use the cron icon for both.
+        // tasks_<wsId> is the unified per-workspace cron output conversation
+        // (CronConversationResolver.resolve for web-origin jobs). cron_<id>
+        // is the legacy per-job orphan kept as the IM-cron fallback when
+        // no channel session exists yet.
+        if (conversationId.startsWith("tasks_") || conversationId.startsWith("cron_")) {
+            return "cron";
+        }
         int colonIdx = conversationId.indexOf(':');
         if (colonIdx <= 0) return "web";
         String prefix = conversationId.substring(0, colonIdx);

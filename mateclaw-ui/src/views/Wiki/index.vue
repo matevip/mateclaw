@@ -282,6 +282,10 @@
               <div v-if="activeTab === 'config'" class="tab-content tab-content--config">
                 <WikiConfig />
               </div>
+
+              <div v-if="activeTab === 'hotCache'" class="tab-content tab-content--hot-cache">
+                <HotCachePanel />
+              </div>
             </div>
           </div>
         </div>
@@ -318,6 +322,7 @@ import RawMaterialPanel from './components/RawMaterialPanel.vue'
 import WikiPageViewer from './components/WikiPageViewer.vue'
 import WikiConfig from './components/WikiConfig.vue'
 import WikiGraphView from './components/WikiGraphView.vue'
+import HotCachePanel from './components/HotCachePanel.vue'
 
 const { t } = useI18n()
 const store = useWikiStore()
@@ -507,6 +512,7 @@ const tabs = computed(() => [
   { key: 'pages', label: t('wiki.pages') },
   { key: 'graph', label: t('wiki.graph.tab') },
   { key: 'config', label: t('wiki.config') },
+  { key: 'hotCache', label: t('wiki.hotCache.tab') },
 ])
 
 async function selectKB(id: number) {

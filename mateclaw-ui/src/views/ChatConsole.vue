@@ -26,7 +26,7 @@
 
       <div class="agent-selector">
         <button class="agent-select-trigger" @click="agentDropdownOpen = !agentDropdownOpen" :title="`${$t('chat.selectAgent')} (⌘K)`">
-          <span class="agent-select-trigger__icon">{{ currentAgent?.icon || '🤖' }}</span>
+          <span class="agent-select-trigger__icon" :style="{ color: agentIconColor(currentAgent?.icon) }"><SkillIcon :value="currentAgent?.icon" :size="24" :fallback="'🤖'" /></span>
           <span v-if="!convPanelCollapsed || isMobile" class="agent-select-trigger__name">{{ currentAgent?.name || $t('chat.selectAgent') }}</span>
           <svg v-if="!convPanelCollapsed || isMobile" class="agent-select-trigger__arrow" :class="{ open: agentDropdownOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
@@ -42,10 +42,10 @@
               :class="{ active: String(agent.id) === String(selectedAgentId) }"
               @click="selectAgent(agent)"
             >
-              <span class="agent-dropdown-item__icon">{{ agent.icon || '🤖' }}</span>
+              <span class="agent-dropdown-item__icon" :style="{ color: agentIconColor(agent.icon) }"><SkillIcon :value="agent.icon" :size="18" :fallback="'🤖'" /></span>
               <div class="agent-dropdown-item__info">
                 <span class="agent-dropdown-item__name">{{ agent.name }}</span>
-                <span class="agent-dropdown-item__desc">{{ agent.description || agent.agentType }}</span>
+                <span class="agent-dropdown-item__desc">{{ agentTagline(agent) }}</span>
               </div>
               <span v-if="String(agent.id) === String(selectedAgentId)" class="agent-dropdown-item__check">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
@@ -90,6 +90,16 @@
               />
               <div v-else class="conv-title" @dblclick.stop="startRename(conv)">
                 <span>{{ conv.title }}</span>
+                <!-- Unread dot for the unified tasks conversation: when a
+                     cron run lands but the user hasn't opened the conversation
+                     since, show a small accent dot. Avoids needing a server-side
+                     last-viewed table for MVP — localStorage tracks per-conv
+                     last-view timestamp, sidebar compares to lastActiveTime. -->
+                <span
+                  v-if="hasUnread(conv)"
+                  class="conv-unread-dot"
+                  :title="$t('chat.hasUnread', '有新内容')"
+                ></span>
                 <span
                   v-if="conv.streamStatus === 'running'"
                   class="conv-running-badge"
@@ -143,10 +153,21 @@
           </button>
           <div class="chat-stage-copy" v-if="currentAgent">
             <div class="chat-stage-kicker">{{ $t('nav.chat') }}</div>
-            <div class="agent-badge" :title="currentAgent.name">
-              <span class="agent-badge-icon">{{ currentAgent.icon || '🤖' }}</span>
-              <span class="agent-badge-name">{{ currentAgent.name }}</span>
-              <span class="agent-badge-type">{{ currentAgent.agentType === 'react' ? 'ReAct' : 'Plan-Execute' }}</span>
+            <!--
+              Header reads as "who is this employee" — name + tagline.
+              The runtime mode (ReAct / Plan-Execute) is technical jargon
+              to end users and lives in the badge tooltip instead, so the
+              header doesn't get polluted.
+            -->
+            <div
+              class="agent-badge"
+              :title="`${currentAgent.name}${currentAgentRuntimeMode ? ' · ' + currentAgentRuntimeMode : ''}`"
+            >
+              <span class="agent-badge-icon" :style="{ color: agentIconColor(currentAgent.icon) }"><SkillIcon :value="currentAgent.icon" :size="22" :fallback="'🤖'" /></span>
+              <div class="agent-badge-text">
+                <span class="agent-badge-name">{{ currentAgent.name }}</span>
+                <span v-if="currentAgentTagline" class="agent-badge-tagline">{{ currentAgentTagline }}</span>
+              </div>
               <span class="status-dot" :class="connectionStatusClass" :title="connectionStatusLabel"></span>
             </div>
           </div>
@@ -216,6 +237,21 @@
         </template>
       </MessageList>
 
+      <!-- Cron job in-flight placeholder — visible while T2 hasn't committed
+           the assistant message yet. Populated by pollActivity → /cron-jobs/active-runs. -->
+      <div v-if="activeCronRuns.length > 0" class="cron-running-bar">
+        <div v-for="run in activeCronRuns" :key="run.runId" class="cron-running-item">
+          <span class="cron-running-spinner">🌀</span>
+          <span class="cron-running-text">
+            <strong>{{ run.jobName || $t('chat.cronRunning.fallbackName') }}</strong>
+            <span class="cron-running-meta">
+              · {{ $t('chat.cronRunning.executing') }}
+              <template v-if="run.startedAt"> · {{ elapsedLabel(run.startedAt) }}</template>
+            </span>
+          </span>
+        </div>
+      </div>
+
       <!-- 流式处理 Loading 栏（消息和输入框之间） -->
       <StreamLoadingBar
         :is-loading="isGenerating && !showModelPrompt"
@@ -226,6 +262,7 @@
         :phase-info="phaseInfo"
         :running-tool-name="currentRunningToolName"
         :has-queued="hasQueued"
+        :lifecycle-stage="lifecycleStage"
       />
 
       <!-- 使用组件化的 ChatInput -->
@@ -275,9 +312,10 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { ChatDotRound, Delete, Plus, Setting, UploadFilled } from '@element-plus/icons-vue'
-import { conversationApi, agentApi, modelApi, chatApi } from '@/api/index'
+import { conversationApi, agentApi, modelApi, chatApi, cronJobApi } from '@/api/index'
 import { channelIconUrl } from '@/utils/channelSource'
 import { useChat } from '@/composables/chat/useChat'
 import { reconstructErrorInfo } from '@/types/chatError'
@@ -286,6 +324,9 @@ import type { Conversation, Agent, ModelConfig, ProviderInfo, ActiveModelsInfo, 
 
 // 导入组件化组件
 import MessageList from '@/components/chat/MessageList.vue'
+import SkillIcon from '@/components/common/SkillIcon.vue'
+import { parsePrompt, deriveTagline } from '@/utils/agentPromptProfile'
+import { agentIconColor } from '@/utils/agentIconColor'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import StreamLoadingBar from '@/components/chat/StreamLoadingBar.vue'
 import TalkMode from '@/components/chat/TalkMode.vue'
@@ -438,12 +479,13 @@ function cancelRename() {
 }
 
 // Delete with confirmation
-function confirmDeleteConversation(conversationId: string) {
-  ElMessageBox.confirm(
-    t('chat.deleteConfirm') || 'Delete this conversation?',
-    t('common.confirm'),
-    { type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel') }
-  ).then(() => deleteConversation(conversationId)).catch(() => {})
+async function confirmDeleteConversation(conversationId: string) {
+  const ok = await mcConfirm({
+    title: t('common.confirm'),
+    message: t('chat.deleteConfirm') || 'Delete this conversation?',
+    tone: 'danger',
+  })
+  if (ok) deleteConversation(conversationId)
 }
 
 // 拖拽上传
@@ -580,6 +622,7 @@ const {
   hasQueued,
   queueSize,
   heartbeat,
+  lifecycleStage,
   sendMessage: sendChatMessage,
   stopGeneration: stopChatGeneration,
   cancelQueued,
@@ -633,14 +676,72 @@ const connectionStatusLabel = computed(() => {
 // ============ 计算属性 ============
 const currentAgent = computed(() => agents.value.find(a => String(a.id) === String(selectedAgentId.value)))
 
+/** Tagline derived from the agent's role/goal — same source of truth as the
+ *  Agents page card, so the chat header reads the employee identically.
+ *  Falls back to the agent's description when no triad is set. */
+function agentTagline(agent: Agent): string {
+  const profile = parsePrompt(agent.systemPrompt)
+  return deriveTagline(profile, agent.description) || (agent.description || '')
+}
+
+const currentAgentTagline = computed(() =>
+  currentAgent.value ? agentTagline(currentAgent.value) : '',
+)
+/** Human label for the agent's runtime mode — surfaces in the badge tooltip
+ *  only, never in the visible header. */
+const currentAgentRuntimeMode = computed(() => {
+  const a = currentAgent.value
+  if (!a) return ''
+  return a.agentType === 'react' ? t('agents.types.react') : t('agents.types.planExecute')
+})
+
 // 按日期分组的会话列表
+// Per-conversation last-viewed timestamp store (localStorage-backed, MVP).
+// Keyed by conversationId. Updated when user opens a conversation; read by
+// hasUnread() to decide whether to render the small accent dot in the sidebar.
+// Will move to a server-side table once we want cross-device read state.
+const VIEWED_KEY_PREFIX = 'mc-conv-viewed:'
+function markConversationViewed(conversationId: string | undefined, lastActiveTime?: string) {
+  if (!conversationId) return
+  const ts = lastActiveTime ? new Date(lastActiveTime).getTime() : Date.now()
+  try {
+    localStorage.setItem(VIEWED_KEY_PREFIX + conversationId, String(ts))
+  } catch {
+    // localStorage full / disabled — degrade silently; dot just stays on.
+  }
+}
+function hasUnread(conv: Conversation): boolean {
+  // Only the unified tasks_<wsId> conversation gets the unread treatment.
+  // Regular chats have explicit user attention via the streaming bubble itself,
+  // and IM-mirror conversations carry their own platform badges in IM apps.
+  if (!conv.conversationId || !conv.conversationId.startsWith('tasks_')) return false
+  if (!conv.lastActiveTime) return false
+  const lastActive = new Date(conv.lastActiveTime).getTime()
+  if (!Number.isFinite(lastActive)) return false
+  let viewed = 0
+  try {
+    viewed = Number(localStorage.getItem(VIEWED_KEY_PREFIX + conv.conversationId) || '0')
+  } catch {
+    // Treat as never-viewed when storage is unavailable.
+  }
+  // Currently-active conversation is implicitly read.
+  if (currentConversationId.value === conv.conversationId) return false
+  return lastActive > viewed
+}
+
 const groupedConversations = computed(() => {
   const now = new Date()
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const yesterdayStart = todayStart - 86400000
   const last7Start = todayStart - 7 * 86400000
 
+  // Pinned group always sits at the top so the unified cron output (tasks_<wsId>)
+  // is reachable in one glance even after a busy day pushes other conversations
+  // ahead of it. Only the unified-cron conversation pattern is pinned for now;
+  // we'll generalize when we have other always-visible conversations.
+  const pinned: Conversation[] = []
   const groups: { label: string; items: Conversation[] }[] = [
+    { label: t('chat.datePinned', '置顶'), items: pinned },
     { label: t('chat.dateToday'), items: [] },
     { label: t('chat.dateYesterday'), items: [] },
     { label: t('chat.dateLast7Days'), items: [] },
@@ -648,11 +749,15 @@ const groupedConversations = computed(() => {
   ]
 
   for (const conv of conversations.value) {
+    if (conv.conversationId && conv.conversationId.startsWith('tasks_')) {
+      pinned.push(conv)
+      continue
+    }
     const ts = conv.lastActiveTime ? new Date(conv.lastActiveTime).getTime() : 0
-    if (ts >= todayStart) groups[0].items.push(conv)
-    else if (ts >= yesterdayStart) groups[1].items.push(conv)
-    else if (ts >= last7Start) groups[2].items.push(conv)
-    else groups[3].items.push(conv)
+    if (ts >= todayStart) groups[1].items.push(conv)
+    else if (ts >= yesterdayStart) groups[2].items.push(conv)
+    else if (ts >= last7Start) groups[3].items.push(conv)
+    else groups[4].items.push(conv)
   }
 
   return groups.filter(g => g.items.length > 0)
@@ -759,6 +864,58 @@ function handleKeyboardShortcuts(e: KeyboardEvent) {
 let activityPollTimer: number | null = null
 const ACTIVITY_POLL_MS = 4000
 
+// Cron progress placeholder: when a cron job is mid-run on the currently
+// visible conversation (tasks_<wsId> / cron_<id>) the assistant bubble only
+// appears after T2 commits, which can be 1–5 minutes for tool-heavy ReAct
+// loops. activeCronRuns is filled by the same pollActivity tick so the user
+// sees a "executing…" placeholder instead of staring at a blank screen.
+interface ActiveCronRun {
+  runId: number | string
+  jobId: number | string
+  jobName?: string
+  triggerType?: string
+  conversationId?: string
+  startedAt?: string
+}
+const activeCronRuns = ref<ActiveCronRun[]>([])
+function isCronConversation(cid: string | null | undefined): boolean {
+  return !!cid && (cid.startsWith('tasks_') || cid.startsWith('cron_'))
+}
+async function refreshActiveCronRuns(cid: string) {
+  if (!isCronConversation(cid)) {
+    activeCronRuns.value = []
+    return
+  }
+  try {
+    const res: any = await cronJobApi.activeRuns(cid)
+    if (currentConversationId.value !== cid) return
+    const next: ActiveCronRun[] = res?.data ?? []
+    const wasRunning = activeCronRuns.value.length > 0
+    activeCronRuns.value = next
+    // Transition from "had runs" to "no runs" → assistant bubble was just
+    // persisted by T2; fetch messages so it shows up without waiting for the
+    // next pollActivity tick to align.
+    if (wasRunning && next.length === 0) {
+      await refreshCurrentConversationMessages(cid)
+    }
+  } catch {
+    // Network blip — keep the previous state, next tick will retry.
+  }
+}
+// Reactive ticker so the elapsed label updates without depending on a poll.
+const elapsedNow = ref(Date.now())
+let elapsedTickTimer: number | null = null
+function elapsedLabel(startedAt?: string): string {
+  if (!startedAt) return ''
+  const ms = elapsedNow.value - new Date(startedAt).getTime()
+  if (ms < 0 || !Number.isFinite(ms)) return ''
+  const sec = Math.floor(ms / 1000)
+  if (sec < 60) return `${sec}s`
+  const min = Math.floor(sec / 60)
+  const rem = sec % 60
+  return `${min}m${rem > 0 ? rem + 's' : ''}`
+}
+
 /**
  * 判断当前消息列表的末尾是不是一条"本地仅有的失败气泡"。
  * 典型场景：SSE setup 阶段就抛错（如"无权操作该会话"），
@@ -808,6 +965,9 @@ async function pollActivity() {
     } catch {
       // 忽略探测失败
     }
+    // Cron progress placeholder — independent of streamStatus because cron
+    // runs use the non-streaming chat() path, so streamStatus stays idle.
+    await refreshActiveCronRuns(cid)
   }
 }
 
@@ -826,6 +986,9 @@ onMounted(async () => {
   await Promise.all([loadAgents(), loadModelState(), loadConversations()])
   await hydrateStateFromRoute()
   activityPollTimer = window.setInterval(pollActivity, ACTIVITY_POLL_MS)
+  elapsedTickTimer = window.setInterval(() => {
+    if (activeCronRuns.value.length > 0) elapsedNow.value = Date.now()
+  }, 1000)
 })
 
 onBeforeUnmount(() => {
@@ -839,6 +1002,10 @@ onBeforeUnmount(() => {
   if (activityPollTimer !== null) {
     clearInterval(activityPollTimer)
     activityPollTimer = null
+  }
+  if (elapsedTickTimer !== null) {
+    clearInterval(elapsedTickTimer)
+    elapsedTickTimer = null
   }
   // Switching tabs / route changes / mouse-detach unmount this component, but the
   // backend agent should keep running so the user can reconnect later. Use
@@ -985,6 +1152,16 @@ async function selectConversation(conv: Conversation) {
   }
   currentConversationId.value = conv.conversationId
   selectedAgentId.value = conv.agentId || selectedAgentId.value
+  // Reset cron placeholder state up front; the immediate fetch below repopulates
+  // it for cron conversations so the user doesn't wait up to 4s for the next tick.
+  activeCronRuns.value = []
+  if (isCronConversation(conv.conversationId)) {
+    void refreshActiveCronRuns(conv.conversationId)
+  }
+  // Mark as read when opened — clears the unread dot on tasks_<wsId> after
+  // the user actually visits the cron output. localStorage-only for MVP;
+  // server-side last-viewed table is a future enhancement.
+  markConversationViewed(conv.conversationId, conv.lastActiveTime)
   const requestedConvId = conv.conversationId
   try {
     const res: any = await conversationApi.listMessages(requestedConvId)
@@ -1101,7 +1278,9 @@ async function selectConversation(conv: Conversation) {
 }
 
 function newConversation() {
-  resetStreamingState()
+  // Creating a new chat is just local navigation. Keep any previous backend
+  // run alive so the user can return and reconnect to it later.
+  resetForNewConversation()
   currentConversationId.value = `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   messages.value = []
 }
@@ -1577,6 +1756,35 @@ function handleCodeCopy(e: MouseEvent) {
 </script>
 
 <style scoped>
+.cron-running-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
+  margin: 0 12px;
+  background: var(--mc-warning-bg, rgba(255, 159, 67, 0.08));
+  border: 1px solid var(--mc-warning, rgba(255, 159, 67, 0.35));
+  border-radius: 10px;
+  color: var(--mc-text-primary);
+  font-size: 13px;
+}
+.cron-running-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cron-running-spinner {
+  display: inline-block;
+  font-size: 16px;
+  animation: cron-spin 1.6s linear infinite;
+}
+@keyframes cron-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.cron-running-text { line-height: 1.4; }
+.cron-running-meta { color: var(--mc-text-secondary); margin-left: 4px; }
+
 .chat-console-shell {
   background: transparent;
   min-height: 0;
@@ -1923,6 +2131,19 @@ function handleCodeCopy(e: MouseEvent) {
   pointer-events: none;
 }
 
+/* Inline unread accent dot — shown next to title when a conversation has
+   activity since the user's last view (currently scoped to tasks_<wsId>). */
+.conv-unread-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mc-primary, #d97757);
+  margin-left: 6px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
 .conv-item.is-running {
   background: color-mix(in srgb, #fbbf24 8%, transparent);
 }
@@ -2145,6 +2366,13 @@ function handleCodeCopy(e: MouseEvent) {
   font-size: 14px;
 }
 
+.agent-badge-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
 .agent-badge-name {
   font-size: 13px;
   font-weight: 600;
@@ -2152,14 +2380,18 @@ function handleCodeCopy(e: MouseEvent) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.2;
 }
 
-.agent-badge-type {
+/* The tagline answers "what does this employee do" — runtime mode lives in
+   the badge tooltip, not on screen, so we don't compete for attention. */
+.agent-badge-tagline {
   font-size: 11px;
-  color: var(--mc-primary-light);
-  background: var(--mc-bg-elevated);
-  padding: 1px 6px;
-  border-radius: 10px;
+  color: var(--mc-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
 }
 
 .status-dot {
@@ -2372,8 +2604,7 @@ function handleCodeCopy(e: MouseEvent) {
     display: none;
   }
 
-  .agent-badge-name,
-  .agent-badge-type {
+  .agent-badge-text {
     display: none;
   }
 

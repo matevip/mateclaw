@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.system.model.SystemSettingsDTO;
 import vip.mate.system.service.SystemSettingService;
 import vip.mate.task.AsyncTaskService;
@@ -15,7 +16,9 @@ import vip.mate.workspace.conversation.model.MessageContentPart;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 图片生成服务 — 统一入口，处理 provider 选择、参数归一化、fallback、同步/异步提交
@@ -35,6 +38,7 @@ public class ImageGenerationService {
     private final ConversationService conversationService;
     private final ImageFileDownloader fileDownloader;
     private final ObjectMapper objectMapper;
+    private final ChatStreamTracker streamTracker;
 
     private static final String TASK_TYPE = "image_generation";
 
@@ -186,6 +190,23 @@ public class ImageGenerationService {
                     "图片已生成完毕",
                     contentParts, "completed");
 
+            // Broadcast async_task_completed so the chat window renders the image
+            // inline immediately. Without this, the message is in DB but the SSE
+            // stream never tells the frontend a new assistant turn arrived, so the
+            // user's "loading…" spinner stays until they refresh and the
+            // conversation re-fetches from DB. Mirror the async path's payload
+            // shape (taskId / taskType / success / imageUrl) so the existing
+            // frontend handler treats it identically.
+            for (String servingUrl : servingUrls) {
+                Map<String, Object> data = new HashMap<>();
+                data.put("taskId", taskId);
+                data.put("taskType", TASK_TYPE);
+                data.put("success", true);
+                data.put("imageUrl", servingUrl);
+                data.put("providerName", submitResult.getProviderName());
+                streamTracker.broadcastObject(conversationId, "async_task_completed", data);
+            }
+
             log.info("[ImageGen] Sync generation completed, {} image(s) saved for conversation {}",
                     servingUrls.size(), conversationId);
 
@@ -253,8 +274,10 @@ public class ImageGenerationService {
         ImageProviderCapabilities caps = provider.detailedCapabilities();
         if (caps == null) return;
 
-        request.setSize(caps.normalizeSize(request.getSize()));
-        request.setAspectRatio(caps.normalizeAspectRatio(request.getAspectRatio()));
+        // Resolve aspect ratio first so size normalization can preserve orientation.
+        String aspectRatio = caps.normalizeAspectRatio(request.getAspectRatio());
+        request.setAspectRatio(aspectRatio);
+        request.setSize(caps.normalizeSize(request.getSize(), aspectRatio));
         if (request.getCount() != null) {
             request.setCount(caps.normalizeCount(request.getCount()));
         }

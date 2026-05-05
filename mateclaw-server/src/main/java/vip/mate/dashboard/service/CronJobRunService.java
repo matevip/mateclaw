@@ -7,12 +7,15 @@ import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.cron.model.CronJobEntity;
 import vip.mate.cron.repository.CronJobMapper;
+import vip.mate.dashboard.model.ActiveCronRunVO;
 import vip.mate.dashboard.model.CronJobRunEntity;
 import vip.mate.dashboard.repository.CronJobRunMapper;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -117,5 +120,48 @@ public class CronJobRunService {
                         .in(CronJobRunEntity::getCronJobId, jobIds)
                         .orderByDesc(CronJobRunEntity::getStartedAt)
                         .last("LIMIT " + limit));
+    }
+
+    /**
+     * Active runs (status='running') for one conversation, joined with the
+     * cron job name. Used by the chat console to render a placeholder bubble
+     * while the LLM is still thinking — covers the gap between T1 (run row
+     * inserted, user message visible) and T2 (assistant message persisted),
+     * which can be 1–5 minutes when the agent does multi-iteration tool use.
+     */
+    public List<ActiveCronRunVO> listActiveByConversation(String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return Collections.emptyList();
+        }
+        List<CronJobRunEntity> runs = runMapper.selectList(
+                new LambdaQueryWrapper<CronJobRunEntity>()
+                        .eq(CronJobRunEntity::getConversationId, conversationId)
+                        .eq(CronJobRunEntity::getStatus, "running")
+                        .orderByAsc(CronJobRunEntity::getStartedAt));
+        if (runs.isEmpty()) return Collections.emptyList();
+
+        Set<Long> jobIds = runs.stream()
+                .map(CronJobRunEntity::getCronJobId)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, String> jobNameById = new HashMap<>();
+        if (!jobIds.isEmpty()) {
+            cronJobMapper.selectList(
+                    new LambdaQueryWrapper<CronJobEntity>()
+                            .in(CronJobEntity::getId, jobIds)
+                            .select(CronJobEntity::getId, CronJobEntity::getName))
+                    .forEach(j -> jobNameById.put(j.getId(), j.getName()));
+        }
+
+        return runs.stream().map(r -> {
+            ActiveCronRunVO vo = new ActiveCronRunVO();
+            vo.setRunId(r.getId());
+            vo.setJobId(r.getCronJobId());
+            vo.setJobName(jobNameById.getOrDefault(r.getCronJobId(), ""));
+            vo.setTriggerType(r.getTriggerType());
+            vo.setConversationId(r.getConversationId());
+            vo.setStartedAt(r.getStartedAt());
+            return vo;
+        }).toList();
     }
 }

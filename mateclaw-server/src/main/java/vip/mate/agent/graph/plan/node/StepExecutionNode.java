@@ -36,7 +36,12 @@ import java.util.Map;
  * 步骤执行节点
  * <p>
  * 执行当前步骤，使用显式工具执行循环（internalToolExecutionEnabled=false）。
- * 单步最大工具调用次数限制为 5 次，防止无限循环。
+ * 单步最大工具调用次数限制为 {@link #MAX_TOOL_CALLS_PER_STEP} 次，与
+ * {@code BaseAgent.MAX_ITERATIONS_HARD_CEILING} 对齐——因此实际生效的上限
+ * 永远是 agent 的 {@code max_iterations}（DB 列），单步本身不会先于 agent
+ * 的整体预算被打掉。早期 5 次的硬限制对"查新闻 + 整理 Word"这种合理多
+ * 工具任务过紧，被 LimitExceededNode 提前拦截后用户看到的是冷冰冰的
+ * "工具调用次数超出最大限制"。
  * <p>
  * 支持 NEEDS_APPROVAL 审批流程：对需要审批的工具调用创建 pending，
  * 发出 SSE 事件后立即返回审批提示（非阻塞）。审批通过后通过 replay 重新执行。
@@ -54,8 +59,29 @@ public class StepExecutionNode implements NodeAction {
     private final ConversationWindowManager conversationWindowManager;
     private final String reasoningEffort;
     private final NodeStreamingChatHelper streamingHelper;
+    private final long stepWallClockTimeoutMs;
 
-    private static final int MAX_TOOL_CALLS_PER_STEP = 5;
+    /**
+     * Per-step tool-call ceiling, aligned with {@code BaseAgent.MAX_ITERATIONS_HARD_CEILING}.
+     * Matching the agent-level cap means this constant is never the bottleneck —
+     * the agent's own {@code max_iterations} (DB column) will fire first if a
+     * task is genuinely runaway, and a well-budgeted multi-tool step (e.g.
+     * web_search + browser_navigate + browser_read*N + file_write) is no longer
+     * cut short by an arbitrary 5-call ceiling.
+     */
+    private static final int MAX_TOOL_CALLS_PER_STEP = 100;
+
+    /**
+     * Wall-clock budget per step, complementing {@link #MAX_TOOL_CALLS_PER_STEP}.
+     * The call-count cap doesn't help when a single LLM stream stalls or a
+     * concurrency-unsafe tool runs synchronously without a per-tool deadline
+     * (the parallel batch path enforces {@code ToolTimeoutProperties}, but the
+     * single-unsafe path in {@code ToolExecutionExecutor#executeSingleTool}
+     * currently does not). 10 minutes is generous for legitimate long steps
+     * (large file edits, multi-page browser flows) while still cutting off the
+     * pathological cases where the agent appears frozen to the user.
+     */
+    private static final long STEP_WALL_CLOCK_TIMEOUT_MS = 10 * 60 * 1000L;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public StepExecutionNode(ChatModel chatModel, AgentToolSet toolSet,
@@ -64,6 +90,19 @@ public class StepExecutionNode implements NodeAction {
                              ChatStreamTracker streamTracker,
                              String reasoningEffort, NodeStreamingChatHelper streamingHelper,
                              ConversationWindowManager conversationWindowManager) {
+        this(chatModel, toolSet, executor, planningService, streamTracker,
+                reasoningEffort, streamingHelper, conversationWindowManager,
+                STEP_WALL_CLOCK_TIMEOUT_MS);
+    }
+
+    /** Test-friendly overload — production callers use the default timeout. */
+    StepExecutionNode(ChatModel chatModel, AgentToolSet toolSet,
+                      ToolExecutionExecutor executor,
+                      PlanningService planningService,
+                      ChatStreamTracker streamTracker,
+                      String reasoningEffort, NodeStreamingChatHelper streamingHelper,
+                      ConversationWindowManager conversationWindowManager,
+                      long stepWallClockTimeoutMs) {
         this.chatModel = chatModel;
         this.toolSet = toolSet;
         this.executor = executor;
@@ -72,6 +111,7 @@ public class StepExecutionNode implements NodeAction {
         this.conversationWindowManager = conversationWindowManager;
         this.reasoningEffort = reasoningEffort;
         this.streamingHelper = streamingHelper;
+        this.stepWallClockTimeoutMs = stepWallClockTimeoutMs;
     }
 
     @Override
@@ -106,6 +146,15 @@ public class StepExecutionNode implements NodeAction {
         log.info("[StepExecution] Executing step {}/{}: {}", stepIndex + 1, steps.size(), step);
 
         List<GraphEventPublisher.GraphEvent> events = new ArrayList<>();
+        // Iteration boundary for the plan-execute loop: each step is one
+        // iteration that may itself fan out to multiple LLM calls. Reason is
+        // "plan_step" so consumers can distinguish it from ReAct's
+        // "react_step" / "first_turn" markers when both stream into the
+        // same SSE feed.
+        boolean iterationEventsOn = streamTracker == null || streamTracker.isIterationEventsEnabled();
+        if (iterationEventsOn) {
+            events.add(GraphEventPublisher.iterationStart(stepIndex, "plan_step", "parent", null));
+        }
         events.add(GraphEventPublisher.stepStarted(stepIndex, step));
         events.add(GraphEventPublisher.phase("executing", Map.of("stepIndex", stepIndex, "stepTitle", step)));
 
@@ -128,8 +177,24 @@ public class StepExecutionNode implements NodeAction {
         // outputs across the inner loop and break out as soon as one appears.
         List<DirectToolOutput> stepDirectOutputs = new ArrayList<>();
 
+        // Wall-clock budget guards against a single hung LLM stream or
+        // synchronous unsafe-tool call (the per-tool timeout is enforced only
+        // in the parallel batch path of ToolExecutionExecutor). Checked at the
+        // top of each iteration so we never issue another LLM call after the
+        // budget is gone.
+        long stepStartedAtMs = System.currentTimeMillis();
+        boolean wallClockExceeded = false;
+
         try {
             while (toolCallCount < MAX_TOOL_CALLS_PER_STEP) {
+                long elapsedMs = System.currentTimeMillis() - stepStartedAtMs;
+                if (elapsedMs > stepWallClockTimeoutMs) {
+                    log.warn("[StepExecution] Step {} exceeded wall-clock budget " +
+                            "({} ms > {} ms) after {} tool round(s); aborting step",
+                            stepIndex, elapsedMs, stepWallClockTimeoutMs, toolCallCount);
+                    wallClockExceeded = true;
+                    break;
+                }
                 // PR-2 (RFC-049 §2.3.4): always use OpenAiChatOptions so the relay
                 // producer in NodeStreamingChatHelper.doStreamCall can attach the
                 // user-token. Using ToolCallingChatOptions when reasoningEffort is
@@ -144,6 +209,10 @@ public class StepExecutionNode implements NodeAction {
                 }
                 oaiOpts.setInternalToolExecutionEnabled(false);
                 ChatOptions options = oaiOpts;
+
+                if (conversationWindowManager != null) {
+                    messages = conversationWindowManager.pruneOldToolResultsForModelInput(messages);
+                }
 
                 NodeStreamingChatHelper.StreamResult result = streamingHelper.streamCall(
                         chatModel, new Prompt(messages, options), conversationId,
@@ -288,6 +357,10 @@ public class StepExecutionNode implements NodeAction {
                         "Plan completed via returnDirect tool: " +
                         stepDirectOutputs.get(0).toolName());
                 events.add(GraphEventPublisher.stepCompleted(stepIndex, assembled));
+                if (iterationEventsOn) {
+                    events.add(GraphEventPublisher.iterationEnd(stepIndex, "parent", null,
+                            assembled != null ? assembled.length() : 0, 0));
+                }
                 return PlanStateAccessor.output()
                         .currentStepResult(assembled)
                         .currentStepIndex(steps.size())  // 越界 → dispatcher 收束
@@ -305,8 +378,13 @@ public class StepExecutionNode implements NodeAction {
             }
 
             if (finalResult == null) {
-                finalResult = "步骤执行超过最大工具调用次数限制（" + MAX_TOOL_CALLS_PER_STEP + "次）";
-                log.warn("[StepExecution] Step {} exceeded max tool call limit", stepIndex);
+                if (wallClockExceeded) {
+                    finalResult = "步骤执行超过最大耗时限制（"
+                            + (stepWallClockTimeoutMs / 1000) + "秒），已中止本步骤";
+                } else {
+                    finalResult = "步骤执行超过最大工具调用次数限制（" + MAX_TOOL_CALLS_PER_STEP + "次）";
+                    log.warn("[StepExecution] Step {} exceeded max tool call limit", stepIndex);
+                }
             }
 
         } catch (Exception e) {
@@ -315,6 +393,10 @@ public class StepExecutionNode implements NodeAction {
             planningService.updateSubPlanFailure(planId, stepIndex, shortError);
             planningService.markPlanFailed(planId, "步骤" + (stepIndex + 1) + " 执行失败：" + shortError);
             events.add(GraphEventPublisher.stepCompleted(stepIndex, shortError));
+            if (iterationEventsOn) {
+                events.add(GraphEventPublisher.iterationEnd(stepIndex, "parent", null,
+                        shortError != null ? shortError.length() : 0, 0));
+            }
             return PlanStateAccessor.output()
                     .currentStepResult(shortError)
                     .currentPhase("plan_aborted")
@@ -327,6 +409,11 @@ public class StepExecutionNode implements NodeAction {
 
         planningService.updateSubPlanResult(planId, stepIndex, finalResult);
         events.add(GraphEventPublisher.stepCompleted(stepIndex, finalResult));
+        if (iterationEventsOn) {
+            events.add(GraphEventPublisher.iterationEnd(stepIndex, "parent", null,
+                    finalResult != null ? finalResult.length() : 0,
+                    stepThinking != null ? stepThinking.length() : 0));
+        }
 
         log.info("[StepExecution] Step {}/{} completed: {}",
                 stepIndex + 1, steps.size(),

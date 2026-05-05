@@ -45,7 +45,7 @@
             </td>
             <td>
               <div class="agent-cell">
-                <span class="agent-icon-sm">{{ session.agentIcon || '🤖' }}</span>
+                <span class="agent-icon-sm"><SkillIcon :value="session.agentIcon" :size="16" :fallback="'🤖'" /></span>
                 <span>{{ session.agentName || '-' }}</span>
               </div>
             </td>
@@ -93,10 +93,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { conversationApi } from '@/api/index'
 import { channelIconUrl, sourceLabel } from '@/utils/channelSource'
 import type { Conversation } from '@/types/index'
+import SkillIcon from '@/components/common/SkillIcon.vue'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -126,7 +128,12 @@ function viewSession(session: Conversation) {
 }
 
 async function deleteSession(conversationId: string) {
-  try { await ElMessageBox.confirm(t('sessions.deleteConfirm'), t('sessions.deleteTitle'), { type: 'warning' }) } catch { return }
+  const ok = await mcConfirm({
+    title: t('sessions.deleteTitle'),
+    message: t('sessions.deleteConfirm'),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await conversationApi.delete(conversationId)
     await loadSessions()

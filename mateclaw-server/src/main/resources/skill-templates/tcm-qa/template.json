@@ -1,0 +1,49 @@
+{
+  "id": "tcm-qa",
+  "name": "中医药知识问答",
+  "nameEn": "TCM Knowledge Q&A",
+  "category": "data",
+  "type": "knowledge",
+  "icon": "🌿",
+  "description": "Domain Q&A skill backed by a Wiki KB (e.g. 古籍 / 临床指南). Bind to a KB and start asking — citations are required by default.",
+  "descriptionZh": "中医师 / 药师可绑定古籍 / 临床指南 KB，自动 RAG + 引用追踪。",
+  "fields": [
+    {
+      "key": "skill_name",
+      "label": "Skill 标识 (slug)",
+      "type": "text",
+      "required": true,
+      "placeholder": "tcm-classics-qa",
+      "hint": "小写英文 + 连字符；用作 SKILL.md 的 name 字段"
+    },
+    {
+      "key": "display_name_zh",
+      "label": "显示名 (中文)",
+      "type": "text",
+      "required": false,
+      "placeholder": "中医药问答助手"
+    },
+    {
+      "key": "kb_slug",
+      "label": "Wiki KB slug",
+      "type": "kb-picker",
+      "required": true,
+      "hint": "选择已存在的 Wiki 知识库；不存在请先到 Wiki 页面创建"
+    },
+    {
+      "key": "expert_persona",
+      "label": "专家人设",
+      "type": "textarea",
+      "required": true,
+      "default": "你是有 20 年临床经验的中医师，擅长辨证论治。",
+      "hint": "skill 的角色定位，会注入到 system prompt"
+    },
+    {
+      "key": "citation_required",
+      "label": "强制引用古籍出处",
+      "type": "toggle",
+      "default": true
+    }
+  ],
+  "skillMd": "---\nname: {{skill_name}}\ndescription: {{display_name_zh}} - 基于 Wiki KB 的领域问答\ntype: knowledge\nicon: \"🌿\"\ncategory: data\nversion: 1.0.0\nauthor: skill-template-wizard\nknowledge:\n  bind_kb: {{kb_slug}}\n  retrieval: hybrid\n  top_k: 6\n  citation: {{citation_string}}\n  rerank: true\nself-evolution:\n  lessons_enabled: true\n  lessons_max_entries: 30\n---\n\n# {{display_name_zh}}\n\n{{expert_persona}}\n\n基于检索到的 KB 内容，结合用户描述给出专业建议。\n{{citation_instruction}}\n\n如果检索结果不足以支撑判断，告知用户「需要更多信息」，不要编造。\n"
+}

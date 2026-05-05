@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
@@ -38,5 +39,21 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .allowedHeaders("*")
                 .allowCredentials(true)
                 .maxAge(3600);
+    }
+
+    /**
+     * Expose per-skill bundled assets (logos, screenshots, ...) at
+     * {@code /skill-assets/<skillName>/...}.
+     *
+     * <p>Source layout: {@code src/main/resources/skills/<name>/assets/<file>}.
+     * Built-in skills can ship icons / hero images alongside SKILL.md without
+     * polluting {@code src/main/resources/static/} (gitignored — that path is
+     * the mateclaw-ui Vite build output).
+     */
+    @Override
+    public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        registry.addResourceHandler("/skill-assets/**")
+                .addResourceLocations("classpath:/skills/")
+                .setCachePeriod(86400);
     }
 }

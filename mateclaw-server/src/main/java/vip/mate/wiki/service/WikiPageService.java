@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.repository.WikiPageMapper;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -72,6 +73,47 @@ public class WikiPageService {
      * default {@link #listByKbId} filter. Used by the admin UI's "show archived"
      * panel so users can see what they archived and recover it.
      */
+    /**
+     * Pages in {@code kbId} created at or after {@code since}, newest first.
+     * Used by the hot-cache rebuilder to surface "what was just added";
+     * archived pages and system pages (overview/log) are excluded so the
+     * snapshot stays focused on user-visible knowledge.
+     */
+    public List<WikiPageEntity> findRecentCreated(Long kbId, LocalDateTime since, int limit) {
+        if (kbId == null || since == null || limit <= 0) return java.util.List.of();
+        List<WikiPageEntity> rows = pageMapper.selectList(
+                new LambdaQueryWrapper<WikiPageEntity>()
+                        .eq(WikiPageEntity::getKbId, kbId)
+                        .ne(WikiPageEntity::getArchived, 1)
+                        .ne(WikiPageEntity::getPageType, WikiScaffoldService.SYSTEM_PAGE_TYPE)
+                        .ge(WikiPageEntity::getCreateTime, since)
+                        .orderByDesc(WikiPageEntity::getCreateTime)
+                        .last("LIMIT " + limit));
+        rows.forEach(p -> p.setContent(null));
+        return rows;
+    }
+
+    /**
+     * Pages in {@code kbId} updated at or after {@code since}, newest first.
+     * Same exclusions as {@link #findRecentCreated}.
+     *
+     * <p>A row that was both created and updated in the window will appear
+     * in both lists — the caller deduplicates if needed.
+     */
+    public List<WikiPageEntity> findRecentUpdated(Long kbId, LocalDateTime since, int limit) {
+        if (kbId == null || since == null || limit <= 0) return java.util.List.of();
+        List<WikiPageEntity> rows = pageMapper.selectList(
+                new LambdaQueryWrapper<WikiPageEntity>()
+                        .eq(WikiPageEntity::getKbId, kbId)
+                        .ne(WikiPageEntity::getArchived, 1)
+                        .ne(WikiPageEntity::getPageType, WikiScaffoldService.SYSTEM_PAGE_TYPE)
+                        .ge(WikiPageEntity::getUpdateTime, since)
+                        .orderByDesc(WikiPageEntity::getUpdateTime)
+                        .last("LIMIT " + limit));
+        rows.forEach(p -> p.setContent(null));
+        return rows;
+    }
+
     public List<WikiPageEntity> listArchivedByKbId(Long kbId) {
         List<WikiPageEntity> pages = pageMapper.selectList(
                 new LambdaQueryWrapper<WikiPageEntity>()

@@ -1,0 +1,43 @@
+{
+  "id": "codex-coding-helper",
+  "name": "Codex Coding Helper",
+  "nameZh": "Codex 编程助手",
+  "category": "system",
+  "type": "acp",
+  "icon": "🤖",
+  "description": "Delegate coding tasks to OpenAI Codex CLI via ACP. Requires the codex endpoint to be enabled in Settings ▸ ACP Endpoints.",
+  "descriptionZh": "通过 ACP 协议把编码任务委派给 OpenAI Codex CLI。需先在 Settings ▸ ACP Endpoints 启用 codex 端点。",
+  "fields": [
+    {
+      "key": "skill_name",
+      "label": "Skill 标识 (slug)",
+      "type": "text",
+      "required": true,
+      "placeholder": "team-codex-helper",
+      "hint": "小写英文 + 连字符；最终生成的工具名为 acp_codex_<slug>_prompt"
+    },
+    {
+      "key": "display_name_zh",
+      "label": "显示名 (中文)",
+      "type": "text",
+      "required": false,
+      "placeholder": "团队 Codex 助手"
+    },
+    {
+      "key": "system_prefix",
+      "label": "上游 system 前缀",
+      "type": "textarea",
+      "required": false,
+      "default": "你正在为一个 Java + Vue 3 项目工作，遵循团队的 monorepo 习惯。",
+      "hint": "每次发送给 Codex 之前会自动拼到用户输入前面"
+    },
+    {
+      "key": "cwd_hint",
+      "label": "工作目录提示",
+      "type": "text",
+      "required": false,
+      "placeholder": "/path/to/project (留空使用当前 MateClaw workspace)"
+    }
+  ],
+  "skillMd": "---\nname: {{skill_name}}\ndescription: {{display_name_zh}} - 通过 ACP 委派给 Codex\ntype: acp\nicon: \"🤖\"\ncategory: system\nversion: 1.0.0\nauthor: skill-template-wizard\nacp:\n  endpoint: codex\n  system_prefix: |\n    {{system_prefix}}\n  cwd: {{cwd_hint}}\nself-evolution:\n  lessons_enabled: true\n  lessons_max_entries: 30\n---\n\n# {{display_name_zh}}\n\n这是一个 ACP 委派 skill。Agent 会把编码任务转发给 OpenAI Codex CLI。\n\n## 使用前提\n\n1. 在 Settings ▸ ACP Endpoints 启用 codex 端点 (默认 disabled)\n2. 确认本机已安装 npx + Codex CLI\n3. 该 skill 暴露一个工具 `acp_codex_{{skill_name}}_prompt`，参数为 `prompt: string`\n\n## 委派粒度建议\n\n- 单个 PR 的范围：把整个 Diff + 期望写一段长 prompt 给 Codex\n- 单个 file 修改：包含 file path + 上下文片段\n- 探索性分析：先让 Codex 读 / 列目录，再决定改什么\n"
+}

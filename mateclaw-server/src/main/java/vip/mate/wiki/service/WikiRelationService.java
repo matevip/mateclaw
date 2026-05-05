@@ -3,11 +3,13 @@ package vip.mate.wiki.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import vip.mate.wiki.dto.*;
+import vip.mate.wiki.metrics.WikiMetrics;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.relation.RelationSignalStrategy;
 import vip.mate.wiki.repository.WikiPageCitationMapper;
 import vip.mate.wiki.repository.WikiPageMapper;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -23,15 +25,18 @@ public class WikiRelationService {
     private final WikiPageMapper pageMapper;
     private final WikiPageService pageService;
     private final WikiPageCitationMapper citationMapper;
+    private final WikiMetrics metrics;
 
     public WikiRelationService(List<RelationSignalStrategy> signals,
                                 WikiPageMapper pageMapper,
                                 WikiPageService pageService,
-                                WikiPageCitationMapper citationMapper) {
+                                WikiPageCitationMapper citationMapper,
+                                WikiMetrics metrics) {
         this.signals = signals;
         this.pageMapper = pageMapper;
         this.pageService = pageService;
         this.citationMapper = citationMapper;
+        this.metrics = metrics;
     }
 
     /**
@@ -40,6 +45,8 @@ public class WikiRelationService {
     public List<RelatedPageResult> relatedPages(Long kbId, String seedSlug, int topK) {
         WikiPageEntity seed = pageService.getBySlug(kbId, seedSlug);
         if (seed == null) return List.of();
+
+        long startNanos = System.nanoTime();
 
         Map<Long, Double> totalScores = new HashMap<>();
         Map<Long, List<String>> signalHits = new HashMap<>();
@@ -61,6 +68,13 @@ public class WikiRelationService {
             .limit(topK)
             .map(Map.Entry::getKey)
             .toList();
+
+        // Reports both compute duration and the candidate-set size.
+        // Cache hit/miss is reported once a relation cache layer is wired up;
+        // until then every call is a cold compute by definition.
+        metrics.recordRelationCompute(kbId, totalScores.size(),
+                Duration.ofNanos(System.nanoTime() - startNanos));
+        metrics.recordRelationCacheHit(false);
 
         if (topIds.isEmpty()) return List.of();
         Map<Long, WikiPageLite> liteMap = pageMapper.selectBatchLite(topIds)

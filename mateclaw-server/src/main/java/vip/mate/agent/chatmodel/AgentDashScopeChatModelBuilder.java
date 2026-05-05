@@ -70,18 +70,60 @@ public class AgentDashScopeChatModelBuilder implements ChatModelBuilder {
     }
 
     /**
-     * DashScope's built-in web search is on by default; only an explicit
-     * {@code enableSearch=false} in provider kwargs disables it. Public so
-     * {@code AgentGraphBuilder.build()} can surface the "built-in search
-     * active" log once per agent.
+     * Bailian's built-in web search is only accepted by a subset of models;
+     * sending {@code enable_search} to a model that doesn't support it returns
+     * 400 InvalidParameter and the failover layer then evicts the entire
+     * provider as MODEL_NOT_FOUND. Per the public docs, only Qwen-Plus,
+     * Qwen-Max, Qwen-Turbo and the Qwen3-Max series accept the parameter.
+     *
+     * <p>Resolution order:</p>
+     * <ol>
+     *   <li>Explicit {@code enableSearch} in the model row (per-model toggle)</li>
+     *   <li>Explicit {@code enableSearch} in provider kwargs (admin-level toggle)</li>
+     *   <li>Default: enabled only when the model name matches a known-supporting
+     *       prefix; disabled for everything else (coder / thinking / DeepSeek /
+     *       Long / Vision)</li>
+     * </ol>
+     *
+     * <p>Public so {@code AgentGraphBuilder.build()} can surface the
+     * "built-in search active" log once per agent.</p>
      */
     public boolean isBuiltinSearchEnabled(ModelConfigEntity runtimeModel, ModelProviderEntity provider) {
+        if (runtimeModel != null && runtimeModel.getEnableSearch() != null) {
+            return Boolean.TRUE.equals(runtimeModel.getEnableSearch());
+        }
         Map<String, Object> kwargs = modelProviderService.readProviderGenerateKwargs(provider);
         Object kwargsSearch = kwargs.get("enableSearch");
         if (kwargsSearch != null) {
             return Boolean.TRUE.equals(kwargsSearch);
         }
-        return true;
+        return modelSupportsBuiltinSearch(runtimeModel);
+    }
+
+    /**
+     * Model id prefixes that the Bailian text-generation endpoint documents as
+     * accepting {@code enable_search}. Anything else (qwen-coder-*, qwen-long,
+     * qwen3-*-thinking-*, deepseek-*, qwen*-vl-*) returns 400 InvalidParameter
+     * when the parameter is sent.
+     */
+    private static final java.util.List<String> BUILTIN_SEARCH_SUPPORTED_PREFIXES = java.util.List.of(
+            "qwen-plus",
+            "qwen-max",
+            "qwen-turbo",
+            "qwen3-max",
+            "qwen3.5-flash",
+            "qwen3.6-flash"
+    );
+
+    private static boolean modelSupportsBuiltinSearch(ModelConfigEntity model) {
+        if (model == null) return false;
+        String name = model.getModelName();
+        if (!StringUtils.hasText(name)) return false;
+        String lower = name.trim().toLowerCase();
+        for (String prefix : BUILTIN_SEARCH_SUPPORTED_PREFIXES) {
+            if (lower.startsWith(prefix)) return true;
+        }
+        return false;
     }
 
     DashScopeChatOptions buildDashScopeOptions(ModelConfigEntity runtimeModel, ModelProviderEntity provider) {

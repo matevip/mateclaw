@@ -1,12 +1,14 @@
 package vip.mate.skill.runtime;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.Builder;
 import lombok.Data;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import vip.mate.skill.manifest.SkillManifest;
 import vip.mate.skill.runtime.SkillFrontmatterParser.SkillDependencies;
 import vip.mate.tool.ToolRegistry;
 import vip.mate.tool.model.ToolEntity;
@@ -14,9 +16,11 @@ import vip.mate.tool.repository.ToolMapper;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -42,6 +46,18 @@ public class SkillDependencyChecker {
     }
 
     private static final String CURRENT_OS = detectOS();
+
+    /**
+     * 60s in-memory cache for command-availability probes (RFC-090 §14.7).
+     * Each {@code refreshActiveSkills()} pass calls
+     * {@link #isCommandAvailable(String)} once per declared binary; without
+     * caching that triples ProcessBuilder calls when many skills share the
+     * same prereq (e.g. python3 / ffmpeg).
+     */
+    private final Cache<String, Boolean> commandAvailability = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofSeconds(60))
+            .maximumSize(256)
+            .build();
 
     /**
      * 检查依赖
@@ -112,6 +128,14 @@ public class SkillDependencyChecker {
     // ==================== 检查方法 ====================
 
     private boolean isCommandAvailable(String command) {
+        Boolean cached = commandAvailability.getIfPresent(command);
+        if (cached != null) return cached;
+        boolean available = probeCommand(command);
+        commandAvailability.put(command, available);
+        return available;
+    }
+
+    private boolean probeCommand(String command) {
         try {
             String checkCmd = isWindows() ? "where" : "which";
             ProcessBuilder pb = new ProcessBuilder(checkCmd, command);
@@ -186,6 +210,140 @@ public class SkillDependencyChecker {
     private String buildSummary(List<String> missing) {
         if (missing.isEmpty()) return "All dependencies satisfied";
         return "Missing: " + String.join(", ", missing);
+    }
+
+    // ==================== RFC-090 Phase 2 — per-feature checks (§14.1 / §14.7) ====================
+
+    /**
+     * RFC-090 §14.7 — typed requirement classes.
+     *
+     * <p>Drives {@link #checkRequirement} so callers can ask for a specific
+     * probe regardless of how the manifest expressed it. {@code ANY} is the
+     * fallback when the manifest doesn't declare a type — we infer.
+     */
+    public enum RequirementType { BINARY, ENV_VAR, API_KEY, ANY }
+
+    /**
+     * Status for a single requirement after probing.
+     */
+    public enum RequirementStatus { SATISFIED, MISSING, UNKNOWN }
+
+    /**
+     * Per-feature evaluation result (RFC-090 §14.1).
+     *
+     * <p>Used by {@code SkillPackageResolver} to populate
+     * {@code featureStatuses} on {@code ResolvedSkill}.
+     */
+    @Data
+    @Builder
+    public static class FeatureCheckResult {
+        private String featureId;
+        /** READY | SETUP_NEEDED | UNSUPPORTED — mirrors ResolvedSkill.FeatureStatus. */
+        private String status;
+        @Builder.Default
+        private List<String> missing = new ArrayList<>();
+        private String reason;
+    }
+
+    /**
+     * Probe one manifest requirement.
+     *
+     * <p>{@code env_var} / {@code api_key} are equivalent for the purposes
+     * of this check — both go through {@link System#getenv(String)} on
+     * the {@code check} target.
+     */
+    public RequirementStatus checkRequirement(SkillManifest.RequirementDef req) {
+        if (req == null || req.getKey() == null) return RequirementStatus.UNKNOWN;
+        RequirementType type = inferType(req);
+        String target = req.getCheck() == null || req.getCheck().isBlank() ? req.getKey() : req.getCheck();
+        try {
+            return switch (type) {
+                case BINARY -> isCommandAvailable(target) ? RequirementStatus.SATISFIED : RequirementStatus.MISSING;
+                case ENV_VAR, API_KEY -> {
+                    String value = System.getenv(target);
+                    yield (value != null && !value.isBlank()) ? RequirementStatus.SATISFIED : RequirementStatus.MISSING;
+                }
+                case ANY -> RequirementStatus.UNKNOWN;
+            };
+        } catch (Exception e) {
+            log.debug("Requirement check failed for '{}': {}", req.getKey(), e.getMessage());
+            return RequirementStatus.UNKNOWN;
+        }
+    }
+
+    private RequirementType inferType(SkillManifest.RequirementDef req) {
+        String declared = req.getType();
+        if (declared != null) {
+            return switch (declared.toLowerCase(Locale.ROOT)) {
+                case "binary" -> RequirementType.BINARY;
+                case "env_var", "env" -> RequirementType.ENV_VAR;
+                case "api_key", "key" -> RequirementType.API_KEY;
+                default -> RequirementType.ANY;
+            };
+        }
+        // Fall back to a key-prefix heuristic so legacy manifests work:
+        // synthesized "cmd:..." / "env:..." keys get the right type.
+        if (req.getKey() != null) {
+            String k = req.getKey().toLowerCase(Locale.ROOT);
+            if (k.startsWith("cmd:") || k.startsWith("bin:")) return RequirementType.BINARY;
+            if (k.startsWith("env:")) return RequirementType.ENV_VAR;
+            if (k.endsWith("_api_key") || k.endsWith("_key")) return RequirementType.API_KEY;
+        }
+        return RequirementType.ANY;
+    }
+
+    /**
+     * Evaluate a single feature against a manifest's requirement table.
+     *
+     * <p>Status semantics:
+     * <ul>
+     *   <li>{@code UNSUPPORTED} — current OS not in {@code feature.platforms}</li>
+     *   <li>{@code SETUP_NEEDED} — at least one referenced requirement is missing</li>
+     *   <li>{@code READY} — all referenced requirements satisfied (or unknown)</li>
+     * </ul>
+     * Empty {@code requires}/{@code platforms} on a feature means
+     * "no constraint" — the feature is always READY for that axis.
+     */
+    public FeatureCheckResult checkFeature(SkillManifest.FeatureDef feature,
+                                           Map<String, SkillManifest.RequirementDef> requirementsByKey) {
+        FeatureCheckResult.FeatureCheckResultBuilder b = FeatureCheckResult.builder()
+                .featureId(feature == null ? null : feature.getId());
+        if (feature == null) {
+            return b.status("READY").build();
+        }
+
+        // 1. Platform gate
+        List<String> platforms = feature.getPlatforms();
+        if (platforms != null && !platforms.isEmpty()) {
+            boolean platformMatch = platforms.stream().anyMatch(p -> p.equalsIgnoreCase(CURRENT_OS));
+            if (!platformMatch) {
+                String reason = feature.getUnsupportedMessage() != null && !feature.getUnsupportedMessage().isBlank()
+                        ? feature.getUnsupportedMessage()
+                        : "Unsupported on " + CURRENT_OS;
+                return b.status("UNSUPPORTED").reason(reason).build();
+            }
+        }
+
+        // 2. Requirement gate
+        List<String> missing = new ArrayList<>();
+        if (feature.getRequires() != null && !feature.getRequires().isEmpty()
+                && requirementsByKey != null) {
+            for (String key : feature.getRequires()) {
+                SkillManifest.RequirementDef req = requirementsByKey.get(key);
+                if (req == null) {
+                    missing.add(key + " (undeclared)");
+                    continue;
+                }
+                RequirementStatus st = checkRequirement(req);
+                if (st == RequirementStatus.MISSING) missing.add(key);
+            }
+        }
+        if (!missing.isEmpty()) {
+            return b.status("SETUP_NEEDED").missing(missing)
+                    .reason(feature.getFallbackMessage())
+                    .build();
+        }
+        return b.status("READY").build();
     }
 
     // ==================== 结果模型 ====================

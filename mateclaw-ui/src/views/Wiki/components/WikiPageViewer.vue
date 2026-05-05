@@ -46,8 +46,16 @@
     </div>
 
     <!-- Content -->
-    <article v-if="!editing" class="page-content markdown-body" v-html="renderedContent"></article>
+    <article
+      v-if="!editing"
+      ref="articleRef"
+      class="page-content markdown-body"
+      v-html="renderedContent"
+    ></article>
     <textarea v-else v-model="editContent" class="page-editor" rows="30"></textarea>
+
+    <!-- Click-to-zoom overlay for inline images. Bound after each render via attach(). -->
+    <ImageLightbox ref="lightboxRef" />
 
     <!-- RFC-033: Related Pages Panel (replaces backlinks) -->
     <RelatedPagesPanel
@@ -88,7 +96,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWikiStore, isProtectedPage, type WikiPage } from '@/stores/useWikiStore'
 import { wikiApi } from '@/api/index'
@@ -97,6 +105,7 @@ import { Link, SetUp } from '@element-plus/icons-vue'
 import PageHeader from './PageHeader.vue'
 import RelatedPagesPanel from './RelatedPagesPanel.vue'
 import CitationDrawer from './CitationDrawer.vue'
+import ImageLightbox from './ImageLightbox.vue'
 
 const { t } = useI18n()
 const store = useWikiStore()
@@ -107,6 +116,10 @@ const editContent = ref('')
 const backlinks = ref<WikiPage[]>([])
 const citationDrawerOpen = ref(false)
 const enrichToast = ref('')
+
+// Refs for the lightbox post-render binding step.
+const articleRef = ref<HTMLElement | null>(null)
+const lightboxRef = ref<{ attach: (el: HTMLElement | null) => void } | null>(null)
 
 // RFC-051 PR-8: protection state for delete-button gating + badge rendering.
 const isSystem = computed(() => store.currentPage?.pageType === 'system')
@@ -129,6 +142,15 @@ const renderedContent = computed(() => {
     return `<a class="wiki-link" data-slug="${slug}">${title}</a>`
   })
   return renderMarkdown(content)
+})
+
+// Bind the image lightbox to the rendered article on every content swap.
+// Awaits a microtask so v-html has a chance to repopulate the DOM, then
+// asks the lightbox to walk <img> tags and attach click handlers. Already-
+// bound elements are skipped by the lightbox itself.
+watch(renderedContent, async () => {
+  await nextTick()
+  lightboxRef.value?.attach(articleRef.value)
 })
 
 watch(() => store.currentPage, async (page) => {

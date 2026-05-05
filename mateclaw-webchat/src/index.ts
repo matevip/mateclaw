@@ -15,7 +15,7 @@ export interface WebChatConfig {
   server: string
   /** Widget position */
   position?: 'bottom-right' | 'bottom-left'
-  /** Primary color (hex) */
+  /** Primary color (CSS color). Defaults to MateClaw UI token. */
   primaryColor?: string
   /** Widget title */
   title?: string
@@ -30,7 +30,7 @@ interface Message {
 
 const DEFAULT_CONFIG: Partial<WebChatConfig> = {
   position: 'bottom-right',
-  primaryColor: '#409eff',
+  primaryColor: 'var(--mc-primary, #D97757)',
   title: 'MateClaw',
   placeholder: 'Type a message...',
 }
@@ -58,6 +58,13 @@ function generateId(): string {
 function injectStyles() {
   const style = document.createElement('style')
   style.textContent = `
+    .mc-webchat-bubble,
+    .mc-webchat-panel,
+    .mc-webchat-panel * {
+      box-sizing: border-box;
+      font-family: var(--mc-font-body, 'Inter', 'Avenir Next', 'SF Pro Display', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif);
+      letter-spacing: 0;
+    }
     .mc-webchat-bubble {
       position: fixed;
       ${config.position === 'bottom-left' ? 'left: 20px' : 'right: 20px'};
@@ -66,10 +73,10 @@ function injectStyles() {
       height: 56px;
       border-radius: 50%;
       background: ${config.primaryColor};
-      color: white;
+      color: var(--mc-text-inverse, #ffffff);
       border: none;
       cursor: pointer;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      box-shadow: var(--mc-shadow-medium, 0 18px 48px rgba(58, 32, 19, 0.12));
       display: flex;
       align-items: center;
       justify-content: center;
@@ -83,29 +90,31 @@ function injectStyles() {
       bottom: 88px;
       width: 380px;
       height: 520px;
-      background: white;
-      border-radius: 12px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+      background: var(--mc-bg-elevated, #ffffff);
+      color: var(--mc-text-primary, #1d1612);
+      border: 1px solid var(--mc-border-light, #ebe3db);
+      border-radius: var(--mc-radius-md, 12px);
+      box-shadow: var(--mc-shadow-strong, 0 24px 70px rgba(58, 32, 19, 0.16));
       display: flex;
       flex-direction: column;
       z-index: 99999;
       overflow: hidden;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
     .mc-webchat-header {
       padding: 14px 16px;
-      background: ${config.primaryColor};
-      color: white;
+      background: var(--mc-chat-header-bg, #ffffff);
+      color: var(--mc-text-primary, #1d1612);
       font-weight: 600;
       font-size: 15px;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      border-bottom: 1px solid var(--mc-border-light, #ebe3db);
     }
     .mc-webchat-close {
       background: none;
       border: none;
-      color: white;
+      color: var(--mc-text-secondary, #665245);
       cursor: pointer;
       font-size: 18px;
       padding: 0 4px;
@@ -119,40 +128,45 @@ function injectStyles() {
       display: flex;
       flex-direction: column;
       gap: 8px;
+      background: var(--mc-chat-bg, #FAFAF8);
     }
     .mc-webchat-msg {
       max-width: 85%;
       padding: 8px 12px;
-      border-radius: 12px;
-      font-size: 14px;
+      border-radius: var(--mc-radius-md, 12px);
+      font-size: var(--mc-text-sm, 13px);
       line-height: 1.5;
       word-break: break-word;
       white-space: pre-wrap;
     }
     .mc-webchat-msg--user {
       align-self: flex-end;
-      background: ${config.primaryColor};
-      color: white;
+      background: var(--mc-user-bubble-bg, ${config.primaryColor});
+      color: var(--mc-user-bubble-color, #ffffff);
       border-bottom-right-radius: 4px;
     }
     .mc-webchat-msg--assistant {
       align-self: flex-start;
-      background: #f0f2f5;
-      color: #333;
+      background: var(--mc-assistant-bubble-bg, #ffffff);
+      color: var(--mc-assistant-bubble-color, #1C1410);
+      border: 1px solid var(--mc-assistant-bubble-border, #DDD5CC);
       border-bottom-left-radius: 4px;
     }
     .mc-webchat-input-area {
       padding: 10px 12px;
-      border-top: 1px solid #eee;
+      border-top: 1px solid var(--mc-border-light, #ebe3db);
       display: flex;
       gap: 8px;
+      background: var(--mc-bg-elevated, #ffffff);
     }
     .mc-webchat-input {
       flex: 1;
       padding: 8px 12px;
-      border: 1px solid #ddd;
-      border-radius: 20px;
-      font-size: 14px;
+      border: 1px solid var(--mc-input-border, #DDD5CC);
+      border-radius: var(--mc-radius-full, 9999px);
+      background: var(--mc-input-bg, #FAFAF8);
+      color: var(--mc-input-text, #1C1410);
+      font-size: var(--mc-text-sm, 13px);
       outline: none;
     }
     .mc-webchat-input:focus { border-color: ${config.primaryColor}; }
@@ -161,7 +175,7 @@ function injectStyles() {
       height: 36px;
       border-radius: 50%;
       background: ${config.primaryColor};
-      color: white;
+      color: var(--mc-text-inverse, #ffffff);
       border: none;
       cursor: pointer;
       display: flex;

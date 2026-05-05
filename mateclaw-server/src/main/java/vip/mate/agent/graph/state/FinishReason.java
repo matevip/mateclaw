@@ -19,6 +19,12 @@ public enum FinishReason {
     /** 发生错误后降级回答 */
     ERROR_FALLBACK("error_fallback"),
 
+    /** 响应未完整完成，需要继续生成或重试 */
+    INCOMPLETE("incomplete"),
+
+    /** 最终回答引用了未被工具结果验证的源码事实 */
+    EVIDENCE_INSUFFICIENT("evidence_insufficient"),
+
     /** 用户主动停止 */
     STOPPED("stopped"),
 

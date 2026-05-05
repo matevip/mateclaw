@@ -206,9 +206,25 @@ public class BrowserLauncher {
             return null;
         }
 
+        // Issue #40 — On Windows (and macOS) Chrome refuses to spawn a second instance against
+        // the default user-data-dir if the user already has Chrome open: the new chrome.exe just
+        // forwards its argv to the running instance and exits, so stderr never prints
+        // "DevTools listening on ...". An isolated profile dir avoids that conflict and is also
+        // what the openfang launcher does.
+        Path userDataDir;
+        try {
+            userDataDir = Files.createTempDirectory("mateclaw-cdp-profile-");
+        } catch (Exception e) {
+            trace.add(Attempt.fail(Strategy.EXTERNAL_CDP, browserBin.toString(),
+                    System.currentTimeMillis() - t0,
+                    "failed to create isolated user-data-dir: " + e.getMessage()));
+            return null;
+        }
+
         List<String> command = new ArrayList<>();
         command.add(browserBin.toString());
         command.add("--remote-debugging-port=0");
+        command.add("--user-data-dir=" + userDataDir.toAbsolutePath());
         command.add("--no-first-run");
         command.add("--no-default-browser-check");
         command.add("--disable-extensions");
@@ -241,6 +257,7 @@ public class BrowserLauncher {
         try {
             proc = pb.start();
         } catch (Exception e) {
+            deleteQuietly(userDataDir);
             trace.add(Attempt.fail(Strategy.EXTERNAL_CDP, browserBin + " --remote-debugging-port",
                     System.currentTimeMillis() - t0, "spawn failed: " + e.getMessage()));
             return null;
@@ -251,6 +268,7 @@ public class BrowserLauncher {
             wsUrl = readDevToolsUrl(proc, props.getCdpTimeoutSeconds());
         } catch (Exception e) {
             proc.destroyForcibly();
+            deleteQuietly(userDataDir);
             trace.add(Attempt.fail(Strategy.EXTERNAL_CDP, browserBin.toString(),
                     System.currentTimeMillis() - t0, e.getMessage()));
             return null;
@@ -266,13 +284,51 @@ public class BrowserLauncher {
             Page page = context.pages().isEmpty() ? context.newPage() : context.pages().get(0);
             long elapsed = System.currentTimeMillis() - t0;
             trace.add(Attempt.ok(Strategy.EXTERNAL_CDP, browserBin + " + connectOverCDP(" + cdpBase + ")", elapsed));
-            return Result.success(browser, context, page, true, cdpBase, Strategy.EXTERNAL_CDP, trace);
+            // Hand ownership of `proc` and `userDataDir` to the caller — the session that
+            // consumes this Result is responsible for destroyForcibly() on the process and
+            // deleteQuietly() on the dir when it stops. Spring's @PreDestroy on BrowserUseTool
+            // closes every active session on shutdown, so a clean JVM exit will not leak.
+            return Result.successOwned(browser, context, page, cdpBase, Strategy.EXTERNAL_CDP, trace,
+                    userDataDir, proc);
         } catch (Exception e) {
             proc.destroyForcibly();
+            deleteQuietly(userDataDir);
             trace.add(Attempt.fail(Strategy.EXTERNAL_CDP, "connectOverCDP(" + cdpBase + ")",
                     System.currentTimeMillis() - t0, e.getMessage()));
             return null;
         }
+    }
+
+    /**
+     * Best-effort recursive delete with a single short retry. Per-file failures are
+     * swallowed so a single locked file (Windows: Chrome leaves lockfiles open briefly
+     * after exit) does not abort cleanup of the rest of the directory.
+     *
+     * <p>The retry is necessary because Chrome's GPU process and segmentation_platform
+     * DB take a few hundred milliseconds longer than the parent chrome.exe to flush
+     * and release file handles even after destroyForcibly() — without the retry,
+     * ~6 files (ShaderCache, ukm_db) are typically left on disk per session on Windows.
+     *
+     * <p>Public so {@code BrowserSession.close()} can reuse it without duplicating logic.
+     */
+    public static void deleteQuietly(Path dir) {
+        if (dir == null) return;
+        deleteOnce(dir);
+        if (!Files.exists(dir)) return;
+        // Second pass: give lingering Chrome subprocesses ~500ms to release locks.
+        try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+        deleteOnce(dir);
+    }
+
+    private static void deleteOnce(Path dir) {
+        try {
+            if (!Files.exists(dir)) return;
+            try (var stream = Files.walk(dir)) {
+                stream.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            }
+        } catch (Exception ignored) {}
     }
 
     // ==================== Helpers ====================
@@ -312,7 +368,7 @@ public class BrowserLauncher {
         return args;
     }
 
-    /** Platform-specific candidate paths — same list openfang uses. */
+    /** Platform-specific candidate paths — same list openfang uses, extended for issue #40. */
     public static List<Path> systemBrowserCandidates() {
         List<Path> paths = new ArrayList<>();
         if (IS_WINDOWS) {
@@ -328,6 +384,27 @@ public class BrowserLauncher {
             if (local != null && !local.isBlank()) {
                 paths.add(Path.of(local, "Google", "Chrome", "Application", "chrome.exe"));
                 paths.add(Path.of(local, "Microsoft", "Edge", "Application", "msedge.exe"));
+                // Chinese Chromium-based browsers — they ignore Playwright's "chrome" channel
+                // detection but launch fine via executablePath. They tend to install per-user.
+                paths.add(Path.of(local, "360ChromeX", "Chrome", "Application", "360ChromeX.exe"));
+                paths.add(Path.of(local, "360Chrome", "Chrome", "Application", "360chrome.exe"));
+                paths.add(Path.of(local, "360se6", "Application", "360se.exe"));
+                paths.add(Path.of(local, "Tencent", "QQBrowser", "QQBrowser.exe"));
+                paths.add(Path.of(local, "sogouexplorer", "SogouExplorer.exe"));
+            }
+            // Issue #40: many users install Chrome/Edge to a non-system drive (D:, E:, ...).
+            // Scan only mounted drives to avoid spurious 5s "no media" timeouts on empty letters.
+            for (java.io.File drive : java.io.File.listRoots()) {
+                String letter = drive.getPath();
+                if (letter == null || letter.isBlank()) continue;
+                if (!drive.exists()) continue;
+                String upper = letter.toUpperCase(Locale.ROOT);
+                if (upper.startsWith("C:")) continue; // already covered by ProgramFiles env vars
+                for (String pfDir : new String[]{"Program Files", "Program Files (x86)"}) {
+                    paths.add(Path.of(letter, pfDir, "Google", "Chrome", "Application", "chrome.exe"));
+                    paths.add(Path.of(letter, pfDir, "Microsoft", "Edge", "Application", "msedge.exe"));
+                    paths.add(Path.of(letter, pfDir, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"));
+                }
             }
         } else if (IS_MAC) {
             paths.add(Path.of("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"));
@@ -489,10 +566,25 @@ public class BrowserLauncher {
         private final List<Attempt> attempts;
         private final boolean success;
         private final String failureSummary;
+        /**
+         * Temp profile directory created for {@link Strategy#EXTERNAL_CDP}.
+         * Null for every other strategy (caller does not own the user data).
+         * The session that consumes this Result is responsible for deleting the
+         * directory after it stops the browser; {@link BrowserLauncher#deleteQuietly}
+         * is provided as the canonical implementation.
+         */
+        private final Path userDataDir;
+        /**
+         * The Chrome subprocess we spawned for {@link Strategy#EXTERNAL_CDP}.
+         * Null otherwise. The session must {@code destroyForcibly()} it on stop —
+         * closing the Playwright {@code Browser} only severs the CDP connection.
+         */
+        private final Process ownedProcess;
 
         private Result(Browser browser, BrowserContext context, Page page,
                        boolean connectedViaCdp, String cdpUrl, Strategy strategy,
-                       List<Attempt> attempts, boolean success, String failureSummary) {
+                       List<Attempt> attempts, boolean success, String failureSummary,
+                       Path userDataDir, Process ownedProcess) {
             this.browser = browser;
             this.context = context;
             this.page = page;
@@ -502,15 +594,24 @@ public class BrowserLauncher {
             this.attempts = attempts;
             this.success = success;
             this.failureSummary = failureSummary;
+            this.userDataDir = userDataDir;
+            this.ownedProcess = ownedProcess;
         }
 
         static Result success(Browser browser, BrowserContext context, Page page,
                               boolean cdp, String cdpUrl, Strategy strategy, List<Attempt> attempts) {
-            return new Result(browser, context, page, cdp, cdpUrl, strategy, attempts, true, null);
+            return new Result(browser, context, page, cdp, cdpUrl, strategy, attempts, true, null, null, null);
+        }
+
+        static Result successOwned(Browser browser, BrowserContext context, Page page,
+                                   String cdpUrl, Strategy strategy, List<Attempt> attempts,
+                                   Path userDataDir, Process ownedProcess) {
+            return new Result(browser, context, page, true, cdpUrl, strategy, attempts, true, null,
+                    userDataDir, ownedProcess);
         }
 
         static Result failure(List<Attempt> attempts, String summary) {
-            return new Result(null, null, null, false, null, null, attempts, false, summary);
+            return new Result(null, null, null, false, null, null, attempts, false, summary, null, null);
         }
     }
 }

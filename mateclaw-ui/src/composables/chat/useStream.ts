@@ -44,10 +44,31 @@ export type SSEEventType =
   | 'delegation_progress'
   | 'delegation_end'
   | 'delegation_child_complete'
+  // Stream lifecycle + per-iteration boundaries (single-turn UX overhaul).
+  // The parser handles arbitrary `event:` lines via parseEvent — these names
+  // exist in the union purely so TypeScript callers can register handlers
+  // with a typed `on(event, handler)` signature.
+  | 'stream_started'
+  | 'context_prepared'
+  | 'llm_request_sent'
+  | 'thinking_start'
+  | 'thinking_end'
+  | 'iteration_start'
+  | 'iteration_end'
+  | 'content_truncated'
+  | 'tool_result_chunk'
+  | 'delegation_batch'
 
 export interface SSEEvent {
   type: SSEEventType
   data: any
+  /**
+   * Server-assigned per-conversation monotonic id (the SSE protocol's
+   * native `id:` line). Frontend de-dupes by this value so a reconnect
+   * replay doesn't double-process events the client already saw.
+   * Absent on legacy events from servers that don't stamp ids.
+   */
+  id?: string
 }
 
 export interface UseStreamOptions {
@@ -70,6 +91,12 @@ export interface UseStreamReturn {
   isReceiving: import('vue').Ref<boolean>
   /** 当前错误 */
   error: import('vue').Ref<Error | null>
+  /**
+   * Highest SSE event id seen so far this connection. Pass back to the
+   * server as {@code lastEventId} on reconnect to skip already-delivered
+   * events and avoid duplicate handler dispatch.
+   */
+  lastEventId: import('vue').Ref<string | null>
   /** 连接流 */
   connect: (body?: any) => Promise<void>
   /** 断开连接 */
@@ -120,10 +147,11 @@ class SSEParser {
     let eventType: SSEEventType = 'content_delta'
     let data: any = {}
     let hasData = false
+    let eventId: string | undefined
 
     for (const line of lines) {
       if (!line.trim()) continue
-      
+
       const colonIndex = line.indexOf(':')
       if (colonIndex === -1) continue
 
@@ -132,6 +160,8 @@ class SSEParser {
 
       if (key === 'event') {
         eventType = value as SSEEventType
+      } else if (key === 'id') {
+        eventId = value
       } else if (key === 'data') {
         hasData = true
         try {
@@ -142,7 +172,10 @@ class SSEParser {
       }
     }
 
-    return hasData ? { type: eventType, data } : null
+    if (!hasData) return null
+    return eventId !== undefined
+      ? { type: eventType, data, id: eventId }
+      : { type: eventType, data }
   }
 }
 
@@ -163,8 +196,40 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
   const eventHandlers = new Map<SSEEventType, Set<(data: any) => void>>()
   const globalHandlers = new Set<(event: SSEEvent) => void>()
 
+  /**
+   * Largest server event id seen on this stream. Echoed back in the
+   * `lastEventId` request body field on reconnect so the server can
+   * skip events the client has already processed.
+   */
+  const lastEventId = ref<string | null>(null)
+
+  /**
+   * Set of event ids already dispatched to handlers this connection.
+   * Reconnect replays the same id'd events; without this set, handlers
+   * fire twice and `iteration_start` / `thinking_delta` end up with
+   * the wrong segment ordering. Cleared on connect() / disconnect().
+   */
+  const seenEventIds = new Set<string>()
+
   // 触发事件
   const emit = (event: SSEEvent) => {
+    // De-dup by server-assigned id. Events without an id (legacy / heartbeat)
+    // bypass — they're either idempotent or carry their own dedup logic.
+    if (event.id) {
+      if (seenEventIds.has(event.id)) {
+        return
+      }
+      seenEventIds.add(event.id)
+      // Track highest id for reconnect Last-Event-ID echo. String compare is
+      // fine because ids are zero-padded server-side... actually they're plain
+      // numbers, so coerce to BigInt-safe numeric compare.
+      const incoming = Number(event.id)
+      const current = lastEventId.value === null ? -1 : Number(lastEventId.value)
+      if (!Number.isNaN(incoming) && incoming > current) {
+        lastEventId.value = event.id
+      }
+    }
+
     // 全局处理器
     globalHandlers.forEach(handler => {
       try {
@@ -194,12 +259,55 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
   }
 
   // 连接流
+  // Conversation last seen by the dedup state. SSE ids are per-conversation
+  // on the server, so a lastEventId carried over from a different conv would
+  // mass-skip valid events on the new conv's reconnect (e.g. user processed
+  // events 1..1000 in conv A, then reconnects to conv B which has events
+  // 1..50 — the server filter `id <= 1000` would drop EVERY event in B).
+  let lastDedupConversationId: string | null = null
+
   const connect = async (body?: any) => {
     // 断开已有连接
     disconnect()
-    
+
     parser = new SSEParser()
     error.value = null
+
+    const incomingConv = body?.conversationId ?? null
+    const isReconnect = !!body?.reconnect
+    // Reset dedup state when:
+    //   - Fresh stream (not a reconnect) — always clears, matches the
+    //     pre-fix behavior for normal sends.
+    //   - Reconnect targeting a DIFFERENT conversation than the one whose
+    //     ids are in our state — the per-conversation server semantics
+    //     make a cross-conv lastEventId actively harmful.
+    // Reconnect to the SAME conversation preserves dedup state so the
+    // server can skip already-seen events on replay.
+    const sameConv = isReconnect && lastDedupConversationId === incomingConv
+    if (!sameConv) {
+      seenEventIds.clear()
+      lastEventId.value = null
+    }
+    lastDedupConversationId = incomingConv
+
+    // Own the lastEventId injection here. Callers must NOT put their own
+    // lastEventId in the body — connect() is the only layer that knows
+    // whether the dedup state still applies to this conversation. Reading
+    // a stale `stream.lastEventId.value` from outside (and embedding it
+    // in the body before this point) would fail to clear after a conv
+    // switch. We only inject when the dedup state is still relevant
+    // (sameConv) AND we actually have an id to echo.
+    if (sameConv && lastEventId.value !== null && body && body.reconnect) {
+      const numericId = Number(lastEventId.value)
+      if (!Number.isNaN(numericId)) {
+        body = { ...body, lastEventId: numericId }
+      }
+    } else if (body && 'lastEventId' in body) {
+      // Defensive: strip any caller-provided lastEventId so a refactor
+      // can't reintroduce the cross-conv bug.
+      const { lastEventId: _, ...rest } = body
+      body = rest
+    }
     
     try {
       abortController = new AbortController()
@@ -380,6 +488,7 @@ export function useStream(options: UseStreamOptions): UseStreamReturn {
     isConnected,
     isReceiving,
     error,
+    lastEventId,
     connect,
     disconnect,
     abort,

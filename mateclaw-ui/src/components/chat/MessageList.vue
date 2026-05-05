@@ -55,6 +55,14 @@
             v-if="isCompressionSummary(msg)"
             :message="msg"
           />
+          <!-- Cron-run 头部分隔卡（system 消息且以 📋 开头）—— 在
+               tasks_<wsId> / IM 镜像会话里把"这是哪个 cron 跑的"清晰标出来。
+               LLM 历史读取时会跳过 system 消息，所以不污染下次提示词。 -->
+          <div v-else-if="isCronHeader(msg)" class="cron-divider">
+            <div class="cron-divider__line"></div>
+            <span class="cron-divider__label">{{ msg.content }}</span>
+            <div class="cron-divider__line"></div>
+          </div>
           <!-- 普通消息气泡 -->
           <MessageBubble
             v-else
@@ -148,6 +156,13 @@ const isCompressionSummary = (msg: Message) => {
   } catch {
     return false
   }
+}
+
+// Cron-run header — system message inserted by CronJobLifecycleService.startRun
+// to label which job's run starts here. Pattern: leading "📋 ". Renders as a
+// labeled divider so users browsing tasks_<wsId> can distinguish runs.
+const isCronHeader = (msg: Message) => {
+  return msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith('📋 ')
 }
 
 // 智能滚动
@@ -422,5 +437,26 @@ watch(
   .suggestion-card {
     padding: 10px 12px;
   }
+}
+
+/* Cron-run header divider — labeled separator between runs in tasks_<wsId>. */
+.cron-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 24px 6px;
+  user-select: none;
+}
+.cron-divider__line {
+  flex: 1;
+  height: 1px;
+  background: var(--mc-border-light, rgba(0, 0, 0, 0.08));
+}
+.cron-divider__label {
+  font-size: 12px;
+  color: var(--mc-text-tertiary, #999);
+  white-space: nowrap;
+  font-weight: 500;
+  letter-spacing: 0.2px;
 }
 </style>

@@ -10,10 +10,13 @@ import vip.mate.skill.runtime.SkillFileAccessPolicy;
 import vip.mate.skill.runtime.SkillRuntimeService;
 import vip.mate.skill.runtime.SkillScriptExecutionService;
 import vip.mate.skill.runtime.model.ResolvedSkill;
+import vip.mate.skill.secret.SkillSecretService;
 
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 技能脚本执行工具
@@ -27,6 +30,7 @@ public class SkillScriptTool {
     private final SkillRuntimeService runtimeService;
     private final SkillFileAccessPolicy accessPolicy;
     private final SkillScriptExecutionService executionService;
+    private final SkillSecretService skillSecretService;
 
     @vip.mate.tool.ConcurrencyUnsafe("script execution can have arbitrary side effects on the host process and filesystem")
     @Tool(description = """
@@ -81,9 +85,17 @@ public class SkillScriptTool {
             argList = Arrays.asList(args.split(","));
         }
 
+        // RFC-091 settings bridge — pull this skill's stored secrets
+        // (e.g. AIRTABLE_API_KEY) and inject them as env vars for the
+        // subprocess. Decryption happens here, on the way to the child
+        // process; the plaintext never lives in the rendered SKILL.md.
+        Map<String, String> envVars = skill.getId() != null
+                ? skillSecretService.getDecrypted(skill.getId())
+                : Collections.emptyMap();
+
         // 执行脚本
         try {
-            SkillScriptExecutionService.ScriptResult result = executionService.execute(resolvedPath, argList);
+            SkillScriptExecutionService.ScriptResult result = executionService.execute(resolvedPath, argList, envVars);
             return formatResult(result);
 
         } catch (Exception e) {

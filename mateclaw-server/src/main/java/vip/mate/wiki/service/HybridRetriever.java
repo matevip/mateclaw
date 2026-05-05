@@ -5,14 +5,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import vip.mate.wiki.WikiProperties;
+import vip.mate.wiki.dto.ImageRef;
 import vip.mate.wiki.dto.PageSearchResult;
 import vip.mate.wiki.dto.RelatedPageResult;
 import vip.mate.wiki.dto.WikiPageLite;
+import vip.mate.wiki.metrics.WikiMetrics;
 import vip.mate.wiki.model.WikiChunkEntity;
 import vip.mate.wiki.model.WikiPageEntity;
 import vip.mate.wiki.repository.WikiPageMapper;
 import vip.mate.wiki.retrieval.SnippetExtractor;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -32,22 +35,32 @@ public class HybridRetriever {
     private final WikiEmbeddingService embeddingService;
     private final WikiProperties properties;
     private final WikiPageMapper pageMapper;
+    private final WikiMetrics metrics;
+    private final WikiContentNormalizer contentNormalizer;
 
     @Autowired(required = false)
     private WikiRelationService relationService;
 
     private static final double RELATION_BOOST = 0.15;
 
+    /** Cap how many image references one search hit carries — large pages can have
+     *  dozens; we only need a couple of thumbnails for the result panel. */
+    private static final int MAX_IMAGE_REFS_PER_HIT = 3;
+
     public HybridRetriever(WikiPageService pageService,
                             WikiChunkService chunkService,
                             WikiEmbeddingService embeddingService,
                             WikiProperties properties,
-                            WikiPageMapper pageMapper) {
+                            WikiPageMapper pageMapper,
+                            WikiMetrics metrics,
+                            WikiContentNormalizer contentNormalizer) {
         this.pageService = pageService;
         this.chunkService = chunkService;
         this.embeddingService = embeddingService;
         this.properties = properties;
         this.pageMapper = pageMapper;
+        this.metrics = metrics;
+        this.contentNormalizer = contentNormalizer;
     }
 
     public enum Mode { KEYWORD, SEMANTIC, HYBRID }
@@ -79,6 +92,8 @@ public class HybridRetriever {
     public List<PageSearchResult> search(Long kbId, String query, String modeStr, int topK) {
         Mode mode = parseMode(modeStr);
 
+        long startNanos = System.nanoTime();
+
         List<RankedItem> semantic = List.of();
         List<RankedItem> keyword = List.of();
 
@@ -107,7 +122,11 @@ public class HybridRetriever {
 
         // Batch-fetch page info (N+1 fix)
         List<Long> topIds = fused.stream().limit(topK).map(ri -> ri.pageId).toList();
-        if (topIds.isEmpty()) return List.of();
+        if (topIds.isEmpty()) {
+            metrics.recordRetrieval(mode.name().toLowerCase(),
+                    Duration.ofNanos(System.nanoTime() - startNanos), 0);
+            return List.of();
+        }
 
         Map<Long, WikiPageLite> liteMap = pageMapper.selectBatchLite(topIds)
             .stream().collect(Collectors.toMap(WikiPageLite::id, p -> p));
@@ -121,10 +140,17 @@ public class HybridRetriever {
             if (lite.isSystem()) continue;
 
             String snippet = null;
+            List<ImageRef> imageRefs = List.of();
             if (!ri.matchedBy.contains("relation_boost")) {
                 String content = pageMapper.selectContentById(ri.pageId);
                 if (content != null) {
                     snippet = SnippetExtractor.extract(content, query);
+                    // Surface up to N image references inline with the hit so the UI
+                    // can render thumbnails without re-fetching the page body.
+                    List<ImageRef> all = contentNormalizer.extractImageRefs(content);
+                    imageRefs = all.size() > MAX_IMAGE_REFS_PER_HIT
+                            ? all.subList(0, MAX_IMAGE_REFS_PER_HIT)
+                            : all;
                 }
             }
 
@@ -140,8 +166,10 @@ public class HybridRetriever {
             results.add(new PageSearchResult(
                 lite.slug(), lite.title(), lite.summary(),
                 snippet != null ? snippet : lite.summary(),
-                ri.matchedBy, reason, ri.score));
+                ri.matchedBy, reason, ri.score, imageRefs));
         }
+        metrics.recordRetrieval(mode.name().toLowerCase(),
+                Duration.ofNanos(System.nanoTime() - startNanos), results.size());
         return results;
     }
 

@@ -122,6 +122,12 @@ const sections = computed(() => [
     label: t('settings.sections.video'),
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>',
   },
+  {
+    id: 'model3d',
+    path: '/settings/model3d',
+    label: t('settings.sections.model3d'),
+    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 L21 7 L21 17 L12 22 L3 17 L3 7 Z"/><path d="M3 7 L12 12 L21 7"/><path d="M12 12 L12 22"/></svg>',
+  },
   // Divider: Workspace
   { id: 'divider-workspace', path: '', label: t('settings.sections.workspace', 'Workspace'), icon: '', isDivider: true },
   {
@@ -142,12 +148,7 @@ const sections = computed(() => [
     label: t('security.sections.members', 'Members'),
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   },
-  {
-    id: 'activity',
-    path: '/settings/activity',
-    label: t('security.sections.activity', 'Activity'),
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
-  },
+  // RFC-090 Phase 4: Activity 子项移除，提升至顶层 /activity
   // Divider: Advanced
   { id: 'divider-advanced', path: '', label: t('settings.sections.advanced'), icon: '', isDivider: true },
   {
@@ -165,14 +166,33 @@ const sections = computed(() => [
   {
     id: 'mcp-servers',
     path: '/settings/mcp-servers',
-    label: t('nav.mcpServers'),
+    label: t('nav.mcpConnections'),
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>',
+  },
+  {
+    id: 'tools',
+    path: '/settings/tools',
+    label: t('nav.toolsCatalog'),
+    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
+  },
+  // RFC-090 Phase 7: ACP endpoints
+  {
+    id: 'acp',
+    path: '/settings/acp',
+    label: t('nav.acpEndpoints'),
+    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
   },
   {
     id: 'token-usage',
     path: '/settings/token-usage',
     label: t('nav.tokenUsage'),
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
+  },
+  {
+    id: 'feature-flags',
+    path: '/settings/feature-flags',
+    label: t('settings.sections.featureFlags', 'Feature Flags'),
+    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21V4l12 4-12 4"/><path d="M4 12v9"/></svg>',
   },
   {
     id: 'about',

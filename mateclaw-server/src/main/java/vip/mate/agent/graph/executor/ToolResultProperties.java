@@ -29,6 +29,7 @@ import java.util.Set;
  *       per-result-threshold-chars: 16000
  *       per-turn-budget-chars: 32000
  *       preview-head-chars: 800
+ *       excluded-tool-inline-chars: 4000
  *       storage-base-dir:
  * </pre>
  */
@@ -40,9 +41,9 @@ public class ToolResultProperties {
 
     /**
      * Layer 2 — a single tool result larger than this is spilled to disk.
-     * Note: Layer 1 hard truncation ({@code MAX_TOOL_RESULT_CHARS=8000} in
-     * {@link ToolExecutionExecutor}) runs before this threshold is evaluated,
-     * so only results that survive Layer 1 can trigger a spill.
+     * The executor evaluates this against the raw result before applying the
+     * final inline cap, so oversized content is preserved before it is shortened
+     * for the model request.
      */
     private int perResultThresholdChars = 16000;  // was 4000 — prevents WebSearch spill-to-disk
 
@@ -55,6 +56,13 @@ public class ToolResultProperties {
 
     /** Number of leading characters kept inline as a preview after spilling. */
     private int previewHeadChars = 800;
+
+    /**
+     * Retrieval-style tools are not spilled, but their inline content still must
+     * fit the model context. When aggregate turn budget is exceeded and only
+     * excluded tools remain, their results are compacted to this size.
+     */
+    private int excludedToolInlineChars = 2500;
 
     /**
      * Optional absolute path to override the default spill location.
@@ -91,6 +99,11 @@ public class ToolResultProperties {
     public int getPreviewHeadChars() { return previewHeadChars; }
     public void setPreviewHeadChars(int previewHeadChars) {
         this.previewHeadChars = previewHeadChars;
+    }
+
+    public int getExcludedToolInlineChars() { return excludedToolInlineChars; }
+    public void setExcludedToolInlineChars(int excludedToolInlineChars) {
+        this.excludedToolInlineChars = excludedToolInlineChars;
     }
 
     public String getStorageBaseDir() { return storageBaseDir; }

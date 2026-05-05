@@ -88,6 +88,12 @@ public class MemorySummarizationService {
                     conversationId, messages.size());
             return;
         }
+        MemorySummarizationGate.Decision decision = MemorySummarizationGate.evaluate(messages);
+        if (!decision.shouldAnalyze()) {
+            log.info("[Memory] Conversation {} skipped by summarization gate: {}",
+                    conversationId, decision.reason());
+            return;
+        }
 
         // 2. 加载现有记忆文件内容
         String profileContent = readFileContentSafe(agentId, "PROFILE.md");

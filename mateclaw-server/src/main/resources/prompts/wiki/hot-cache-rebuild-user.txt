@@ -1,0 +1,21 @@
+## Previous hot cache (for continuity; may be empty)
+
+{previous_content}
+
+## Recent activity log excerpt (last {recent_window})
+
+{log_excerpt}
+
+## Recently created pages
+
+{recent_creates}
+
+## Recently updated pages
+
+{recent_updates}
+
+---
+
+Produce the rebuilt hot cache snapshot now, using the structure and
+constraints in the system prompt. Use the timestamp {iso_timestamp} in
+the frontmatter.

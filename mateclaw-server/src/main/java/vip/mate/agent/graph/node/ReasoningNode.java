@@ -25,6 +25,7 @@ import vip.mate.agent.context.RuntimeContextInjector;
 import vip.mate.agent.graph.state.FinishReason;
 import vip.mate.agent.graph.state.MateClawStateAccessor;
 import vip.mate.agent.graph.state.MateClawStateKeys;
+import vip.mate.agent.graph.state.SourceEvidenceLedger;
 
 import vip.mate.channel.web.ChatStreamTracker;
 
@@ -51,6 +52,10 @@ import static vip.mate.agent.graph.state.MateClawStateKeys.*;
 public class ReasoningNode implements NodeAction {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    private static MateClawStateAccessor.OutputBuilder reasonOutput() {
+        return MateClawStateAccessor.output();
+    }
 
     /**
      * 单次 LLM 调用的默认最大输出 token 数，防止退化输出无限生成。
@@ -211,7 +216,7 @@ public class ReasoningNode implements NodeAction {
                         .toolCalls(List.of(toolCall))
                         .build();
 
-                return MateClawStateAccessor.output()
+                return reasonOutput()
                         .needsToolCall(true)
                         .toolCalls(List.of(toolCall))
                         .messages(List.of((Message) syntheticMsg))
@@ -342,6 +347,9 @@ public class ReasoningNode implements NodeAction {
             }
         }
 
+        if (conversationWindowManager != null) {
+            messages = conversationWindowManager.pruneOldToolResultsForModelInput(messages);
+        }
         promptMessages.addAll(messages);
 
         // 请求级思考深度覆盖（ThinkingLevelHolder 由 AgentService 设置）
@@ -364,6 +372,17 @@ public class ReasoningNode implements NodeAction {
 
         GraphEventPublisher.GraphEvent phaseEvent = GraphEventPublisher.phase("reasoning",
                 Map.of("iteration", accessor.iterationCount()));
+        // Iteration boundary marker for the parent ReAct loop. Reason
+        // distinguishes the very first turn of the conversation from a
+        // mid-loop repeat for consumers grouping events into per-turn cards.
+        boolean iterationEventsOn = streamTracker == null || streamTracker.isIterationEventsEnabled();
+        GraphEventPublisher.GraphEvent iterStartEvent = iterationEventsOn
+                ? GraphEventPublisher.iterationStart(
+                        accessor.iterationCount(),
+                        accessor.iterationCount() == 0 ? "first_turn" : "react_step",
+                        "parent",
+                        null)
+                : null;
         pushPhase(conversationId, "reasoning", Map.of(
                 "iteration", accessor.iterationCount(),
                 "llmCallCount", nextLlmCallCount
@@ -403,7 +422,7 @@ public class ReasoningNode implements NodeAction {
             // 必须显式清零 needsToolCall/shouldSummarize，防止前一轮残留标志导致误路由。
             log.info("[ReasoningNode] CancellationException during LLM call (user stopped before first token), " +
                     "returning empty answer with STOPPED, llmCallCount={}", nextLlmCallCount);
-            return MateClawStateAccessor.output()
+            return reasonOutput()
                     .finalAnswer("")
                     .needsToolCall(false)
                     .shouldSummarize(false)
@@ -422,7 +441,7 @@ public class ReasoningNode implements NodeAction {
             String partialThinking = result.thinking() != null ? result.thinking() : "";
             log.info("[ReasoningNode] Stop with partial content ({} chars, thinking {} chars), flushing as final answer",
                     partialText.length(), partialThinking.length());
-            var builder = MateClawStateAccessor.output()
+            var builder = reasonOutput()
                     .finalAnswer(partialText)
                     .needsToolCall(false)
                     .shouldSummarize(false)
@@ -437,13 +456,46 @@ public class ReasoningNode implements NodeAction {
             return builder.build();
         }
 
+        // Order matters: the partial-truncation branch MUST sit before
+        // hasFatalError(). hasFatalError() is "no text + no tool calls + non-
+        // null errorMessage", which is also the shape of a thinking-only cap
+        // result (text is empty by definition). Without this ordering the
+        // soft cap would be re-promoted to ERROR_FALLBACK and we'd lose the
+        // INCOMPLETE semantics.
+
+        if (result.partial() && "thinking_only_no_content".equals(result.errorMessage())) {
+            // Soft thinking-only loop: the helper disposed the upstream stream
+            // because the model accumulated >= THINKING_ONLY_HARD_CAP_CHARS of
+            // reasoning_content without emitting any visible content or tool
+            // calls. Treat as INCOMPLETE rather than fatal — the thinking text
+            // has already been streamed and is preserved for the UI's collapse
+            // panel; the user gets a short fallback line they can retry from.
+            String partialThinking = result.thinking() != null ? result.thinking() : "";
+            log.warn("[ReasoningNode] Thinking-only soft cap hit ({} thinking chars, no content/tools); " +
+                            "INCOMPLETE",
+                    partialThinking.length());
+            var builder = reasonOutput()
+                    .needsToolCall(false)
+                    .shouldSummarize(false)
+                    .finalAnswer("（模型在思考阶段停留过久且未给出最终答案，请重试或拆分问题。）")
+                    .llmCallCount(nextLlmCallCount)
+                    .finishReason(FinishReason.INCOMPLETE)
+                    .contentStreamed(false)
+                    .thinkingStreamed(true)
+                    .mergeUsage(state, result);
+            if (!partialThinking.isEmpty()) {
+                builder.finalThinking(partialThinking);
+            }
+            return builder.build();
+        }
+
         // Fatal error：直接设置 finalAnswer 为错误文案 + ERROR_FALLBACK，
         // 不走 LimitExceededNode（后者会再发一次 LLM 调用，语义不对且对认证/配额错误会再失败）。
         // ReasoningDispatcher 看到 !needsToolCall && !shouldSummarize → finalAnswerNode，
         // FinalAnswerNode 检测到 existingAnswer 非空时直接使用，finishReason 保持 ERROR_FALLBACK。
         if (result.hasFatalError()) {
             log.error("[ReasoningNode] Fatal LLM error: {}", result.errorMessage());
-            return MateClawStateAccessor.output()
+            return reasonOutput()
                     .needsToolCall(false)
                     .shouldSummarize(false)
                     .finalAnswer("[错误] " + result.errorMessage())
@@ -456,7 +508,8 @@ public class ReasoningNode implements NodeAction {
         }
 
         if (result.partial()) {
-            log.warn("[ReasoningNode] Partial LLM result ({} chars), treating as final answer", result.text().length());
+            int partialChars = result.text() != null ? result.text().length() : 0;
+            log.warn("[ReasoningNode] Partial LLM result ({} chars), treating as final answer", partialChars);
         }
 
         if (result.hasToolCalls()) {
@@ -468,7 +521,7 @@ public class ReasoningNode implements NodeAction {
                     "toolCount", result.toolCalls().size()
             ));
 
-            return MateClawStateAccessor.output()
+            return reasonOutput()
                     .needsToolCall(true)
                     .shouldSummarize(false)
                     .toolCalls(result.toolCalls())
@@ -481,7 +534,7 @@ public class ReasoningNode implements NodeAction {
                     .thinkingStreamed(!result.thinking().isEmpty())
                     .llmCallCount(nextLlmCallCount)
                     .mergeUsage(state, result)
-                    .events(List.of(phaseEvent))
+                    .events(buildEvents(phaseEvent, iterStartEvent))
                     .build();
         } else {
             String content = result.text();
@@ -490,21 +543,47 @@ public class ReasoningNode implements NodeAction {
                     "iteration", accessor.iterationCount(),
                     "answerChars", content != null ? content.length() : 0
             ));
+            SourceEvidenceLedger.Validation validation =
+                    accessor.sourceEvidenceLedger().validateAnswer(content != null ? content : "");
+            boolean evidenceInsufficient = !validation.valid();
+            String finalAnswer = evidenceInsufficient
+                    ? evidenceWarning(validation.unsupportedReferences())
+                    : (content != null ? content : "");
+            if (evidenceInsufficient) {
+                log.warn("[ReasoningNode] Evidence insufficient for final answer, unsupportedReferences={}",
+                        validation.unsupportedReferences());
+            }
 
-            return MateClawStateAccessor.output()
+            // Final-answer path: iteration ends in this same node because
+            // ReAct never re-enters the loop afterwards.
+            GraphEventPublisher.GraphEvent iterEndEvent = iterationEventsOn
+                    ? GraphEventPublisher.iterationEnd(accessor.iterationCount(),
+                            "parent", null,
+                            content != null ? content.length() : 0,
+                            result.thinking() != null ? result.thinking().length() : 0)
+                    : null;
+            return reasonOutput()
                     .needsToolCall(false)
                     .shouldSummarize(false)
-                    .finalAnswer(content != null ? content : "")
+                    .finalAnswer(finalAnswer)
                     .finalThinking(result.thinking())
                     .messages(List.of((Message) result.assistantMessage()))
                     .currentPhase("reasoning")
-                    .contentStreamed(true)
+                    .streamedContent(evidenceInsufficient ? (content != null ? content : "") : "")
+                    .finishReason(evidenceInsufficient ? FinishReason.EVIDENCE_INSUFFICIENT : FinishReason.NORMAL)
+                    .contentStreamed(!evidenceInsufficient)
                     .thinkingStreamed(!result.thinking().isEmpty())
                     .llmCallCount(nextLlmCallCount)
                     .mergeUsage(state, result)
-                    .events(List.of(phaseEvent))
+                    .events(buildEvents(phaseEvent, iterStartEvent, iterEndEvent))
                     .build();
         }
+    }
+
+    private static String evidenceWarning(List<String> unsupportedReferences) {
+        return "\n\n[证据不足] 以下源码引用未出现在已读取/搜索到的工具证据中："
+                + String.join(", ", unsupportedReferences)
+                + "。请继续读取相关文件后再下结论。";
     }
 
     private AssistantMessage.ToolCall deserializeToolCall(String json) {
@@ -521,6 +600,19 @@ public class ReasoningNode implements NodeAction {
             log.error("[ReasoningNode] Failed to deserialize forced_tool_call: {}", e.getMessage());
             throw new RuntimeException("无法反序列化 forced_tool_call: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Compose the per-call event list, dropping any null entries so the
+     * iteration-boundary toggle ({@code mateclaw.stream.iteration-events})
+     * works without forcing every caller into branching code.
+     */
+    private static List<GraphEventPublisher.GraphEvent> buildEvents(GraphEventPublisher.GraphEvent... events) {
+        List<GraphEventPublisher.GraphEvent> out = new ArrayList<>(events.length);
+        for (GraphEventPublisher.GraphEvent ev : events) {
+            if (ev != null) out.add(ev);
+        }
+        return out;
     }
 
     private void pushPhase(String conversationId, String phase, Map<String, Object> extra) {

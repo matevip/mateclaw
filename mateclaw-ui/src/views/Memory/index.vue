@@ -17,7 +17,7 @@
           <!-- Agent selector (ChatConsole pattern) -->
           <div class="agent-selector">
             <button class="agent-select-trigger" @click="agentDropdownOpen = !agentDropdownOpen">
-              <span class="agent-select-trigger__icon">{{ currentAgent?.icon || '🧠' }}</span>
+              <span class="agent-select-trigger__icon"><SkillIcon :value="currentAgent?.icon" :size="24" :fallback="'🧠'" /></span>
               <span class="agent-select-trigger__name">{{ currentAgent?.name || t('memory.selectAgent') }}</span>
               <svg class="agent-select-trigger__arrow" :class="{ open: agentDropdownOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
@@ -33,7 +33,7 @@
                   :class="{ active: agent.id === selectedAgentId }"
                   @click="selectAgent(agent)"
                 >
-                  <span class="agent-dropdown-item__icon">{{ agent.icon || '🤖' }}</span>
+                  <span class="agent-dropdown-item__icon"><SkillIcon :value="agent.icon" :size="18" :fallback="'🤖'" /></span>
                   <div class="agent-dropdown-item__info">
                     <span class="agent-dropdown-item__name">{{ agent.name }}</span>
                     <span class="agent-dropdown-item__desc">{{ agent.description || agent.agentType }}</span>
@@ -184,6 +184,7 @@ import { ElMessage } from 'element-plus'
 import { http } from '@/api'
 import { useAgentStore } from '@/stores/useAgentStore'
 import { useMemoryStore, type DreamReportItem } from '@/stores/useMemoryStore'
+import SkillIcon from '@/components/common/SkillIcon.vue'
 import MorningCard from './components/MorningCard.vue'
 import FactList from './components/FactList.vue'
 import MemoryBrowser from './components/MemoryBrowser.vue'

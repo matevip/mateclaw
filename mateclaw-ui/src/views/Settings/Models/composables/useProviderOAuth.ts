@@ -1,4 +1,4 @@
-import { type Ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { claudeCodeOAuthApi, oauthApi } from '@/api'
@@ -15,6 +15,14 @@ interface ListDeps {
   providers: Ref<ProviderInfo[]>
 }
 
+export interface DeviceCodeDialogState {
+  visible: boolean
+  userCode: string
+  verificationUrl: string
+  verificationUrlComplete: string | null
+  expiresAt: number
+}
+
 /**
  * RFC-074 PR-1: OAuth flows. Two distinct shapes:
  *   - openai-chatgpt: pop a real authorize window, poll status, refresh on success.
@@ -24,6 +32,17 @@ interface ListDeps {
 export function useProviderOAuth(deps: FormDeps & ListDeps) {
   const { t } = useI18n()
 
+  const deviceCodeDialog = ref<DeviceCodeDialogState>({
+    visible: false,
+    userCode: '',
+    verificationUrl: '',
+    verificationUrlComplete: null,
+    expiresAt: 0,
+  })
+
+  let devicePollTimer: ReturnType<typeof setTimeout> | null = null
+  let activeDeviceAuthId: string | null = null
+
   /** After a load that may have changed OAuth state, keep the editing modal in sync. */
   async function reloadProvidersAndSync() {
     await deps.loadProviders()
@@ -31,6 +50,80 @@ export function useProviderOAuth(deps: FormDeps & ListDeps) {
       const updated = deps.providers.value.find(p => p.id === deps.editingProvider.value!.id)
       if (updated) deps.editingProvider.value = updated
     }
+  }
+
+  function stopDevicePolling() {
+    if (devicePollTimer != null) {
+      clearTimeout(devicePollTimer)
+      devicePollTimer = null
+    }
+  }
+
+  function closeDeviceCodeDialog() {
+    deviceCodeDialog.value.visible = false
+    stopDevicePolling()
+    if (activeDeviceAuthId) {
+      const id = activeDeviceAuthId
+      activeDeviceAuthId = null
+      oauthApi.deviceCancel(id).catch(() => { /* best-effort */ })
+    }
+  }
+
+  async function runDeviceCodeFlow() {
+    let start: any
+    try {
+      start = await oauthApi.deviceStart()
+    } catch (e: any) {
+      ElMessage.error(e.msg || 'Device code request failed')
+      return
+    }
+    const data = start.data
+    if (!data?.deviceAuthId || !data?.userCode) {
+      ElMessage.error('Device code response was incomplete')
+      return
+    }
+
+    activeDeviceAuthId = data.deviceAuthId
+    deviceCodeDialog.value = {
+      visible: true,
+      userCode: data.userCode,
+      verificationUrl: data.verificationUrl,
+      verificationUrlComplete: data.verificationUrlComplete ?? null,
+      expiresAt: Date.now() + (data.expiresInSeconds ?? 600) * 1000,
+    }
+
+    const intervalMs = Math.max((data.intervalSeconds ?? 5) * 1000, 3000)
+
+    const tick = async () => {
+      if (!activeDeviceAuthId || !deviceCodeDialog.value.visible) {
+        stopDevicePolling()
+        return
+      }
+      if (Date.now() > deviceCodeDialog.value.expiresAt) {
+        ElMessage.warning(t('settings.model.oauthDeviceExpired'))
+        closeDeviceCodeDialog()
+        return
+      }
+      try {
+        const res: any = await oauthApi.devicePoll(activeDeviceAuthId)
+        const status = res.data?.status
+        if (status === 'COMPLETED') {
+          activeDeviceAuthId = null
+          stopDevicePolling()
+          deviceCodeDialog.value.visible = false
+          ElMessage.success(t('settings.model.oauthLoginSuccess'))
+          await reloadProvidersAndSync()
+          return
+        }
+        if (status === 'EXPIRED') {
+          ElMessage.warning(t('settings.model.oauthDeviceExpired'))
+          closeDeviceCodeDialog()
+          return
+        }
+      } catch { /* transient — keep polling */ }
+      devicePollTimer = setTimeout(tick, intervalMs)
+    }
+    devicePollTimer = setTimeout(tick, intervalMs)
   }
 
   async function handleOAuthLogin(providerId?: string) {
@@ -50,7 +143,16 @@ export function useProviderOAuth(deps: FormDeps & ListDeps) {
     }
     try {
       const res: any = await oauthApi.authorize()
-      const { authorizeUrl } = res.data
+      const { authorizeUrl, mode } = res.data || {}
+
+      if (mode === 'DEVICE_CODE') {
+        await runDeviceCodeFlow()
+        return
+      }
+
+      // LOCAL / MANUAL_PASTE both produce an authorize URL the user opens; success
+      // is detected by polling /status (LOCAL completes via the loopback server,
+      // MANUAL_PASTE relies on the user pasting the URL back via callbackPaste).
       const authWindow = window.open(authorizeUrl, '_blank', 'width=600,height=700')
       const pollInterval = setInterval(async () => {
         try {
@@ -89,5 +191,7 @@ export function useProviderOAuth(deps: FormDeps & ListDeps) {
   return {
     handleOAuthLogin,
     handleOAuthRevoke,
+    deviceCodeDialog,
+    closeDeviceCodeDialog,
   }
 }

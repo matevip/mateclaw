@@ -235,7 +235,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import {
   ArrowDown,
   CircleCheckFilled,
@@ -410,7 +411,12 @@ async function testInModal() {
 }
 
 async function deleteDs(id: string | number) {
-  try { await ElMessageBox.confirm(t('datasources.messages.deleteConfirm'), t('datasources.messages.deleteTitle'), { type: 'warning' }) } catch { return }
+  const ok = await mcConfirm({
+    title: t('datasources.messages.deleteTitle'),
+    message: t('datasources.messages.deleteConfirm'),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await datasourceApi.delete(id)
     await loadDatasources()

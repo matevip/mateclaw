@@ -25,6 +25,19 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password:
+    # Issue #50: explicit Hikari sizing. Default of 10 was being exhausted
+    # by O(100) cron jobs firing on minute boundaries (each run holds 3-4
+    # connections sequentially) plus ChannelHealthMonitor's per-minute scan.
+    # 30 leaves headroom for HTTP / SSE / channel adapters even with the
+    # cron concurrency limiter (CronJobService.MAX_CONCURRENT_CRON_RUNS=8)
+    # at full saturation.
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 60000
 
   # SQL 初始化由 DatabaseBootstrapRunner 接管，关闭 Spring 自动执行
   sql:
@@ -40,6 +53,14 @@ spring:
       - classpath:db/migration/h2
     validate-on-migrate: true
     clean-disabled: true
+    # Disable Flyway's built-in ${...} placeholder substitution. Some migrations
+    # (e.g. V85 ckjia MCP seed) intentionally store ${ENV_VAR} literals so that
+    # mateclaw's runtime header parser (McpClientManager.parseHeaders) can
+    # expand them at request time. Flyway would otherwise try to resolve those
+    # tokens at migration time and fail with "No value provided for placeholder".
+    # Safe to disable globally because no migration in this project relies on
+    # Flyway-side ${...} substitution.
+    placeholder-replacement: false
 
   h2:
     console:
@@ -109,6 +130,8 @@ mateclaw:
     hub:
       base-url: https://clawhub.ai
       search-path: /api/v1/search
+      skills-path: /api/v1/skills
+      download-path: /api/v1/download
       http-timeout: 15
       http-retries: 3
   plugin:
@@ -177,6 +200,7 @@ mate:
       per-result-threshold-chars: 16000   # was 4000 — prevents WebSearch spill-to-disk
       per-turn-budget-chars: 32000        # was 16000 — headroom for multi-tool turns
       preview-head-chars: 800
+      excluded-tool-inline-chars: 2500
       storage-base-dir: ""
       # Retrieval-style tools that must NEVER be spilled. Spilling read_file's
       # output causes a recursion: the agent reads the spill path, that read also

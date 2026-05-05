@@ -180,6 +180,10 @@
             <div class="detail-label">{{ t('cronJobs.fields.triggerMessage') }}</div>
             <div class="detail-value detail-block">{{ detailJob.triggerMessage || '-' }}</div>
           </div>
+          <div class="detail-item detail-item-full" v-else-if="detailJob.taskType === 'reminder'">
+            <div class="detail-label">{{ t('cronJobs.fields.reminderText') }}</div>
+            <div class="detail-value detail-block">{{ detailJob.triggerMessage || '-' }}</div>
+          </div>
           <div class="detail-item detail-item-full" v-else>
             <div class="detail-label">{{ t('cronJobs.fields.requestBody') }}</div>
             <div class="detail-value detail-block">{{ detailJob.requestBody || '-' }}</div>
@@ -220,6 +224,10 @@
                 <input type="radio" v-model="form.taskType" value="text" />
                 {{ t('cronJobs.taskTypes.text') }}
               </label>
+              <label class="radio-option" :class="{ active: form.taskType === 'reminder' }">
+                <input type="radio" v-model="form.taskType" value="reminder" />
+                {{ t('cronJobs.taskTypes.reminder') }}
+              </label>
               <label class="radio-option" :class="{ active: form.taskType === 'agent' }">
                 <input type="radio" v-model="form.taskType" value="agent" />
                 {{ t('cronJobs.taskTypes.agent') }}
@@ -231,6 +239,11 @@
             <label class="form-label">{{ t('cronJobs.fields.triggerMessage') }} *</label>
             <textarea v-model="form.triggerMessage" class="form-textarea" rows="3"
               :placeholder="t('cronJobs.fields.triggerMessagePlaceholder')"></textarea>
+          </div>
+          <div v-else-if="form.taskType === 'reminder'" class="form-group">
+            <label class="form-label">{{ t('cronJobs.fields.reminderText') }} *</label>
+            <textarea v-model="form.triggerMessage" class="form-textarea" rows="3"
+              :placeholder="t('cronJobs.fields.reminderTextPlaceholder')"></textarea>
           </div>
           <div v-else class="form-group">
             <label class="form-label">{{ t('cronJobs.fields.requestBody') }} *</label>
@@ -302,7 +315,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { mcConfirm } from '@/components/common/useConfirm'
 import { useCronJobStore } from '@/stores/useCronJobStore'
 import { useAgentStore } from '@/stores/useAgentStore'
 import type { CronJob } from '@/types/index'
@@ -344,6 +358,7 @@ const form = ref<any>(defaultForm())
 const canSave = computed(() => {
   if (!form.value.name || !form.value.agentId) return false
   if (form.value.taskType === 'text' && !form.value.triggerMessage) return false
+  if (form.value.taskType === 'reminder' && !form.value.triggerMessage) return false
   if (form.value.taskType === 'agent' && !form.value.requestBody) return false
   if (cronType.value === 'custom' && !form.value.cronExpression?.trim()) return false
   return true
@@ -424,12 +439,12 @@ async function saveJob() {
 }
 
 async function handleDelete(job: CronJob) {
-  try {
-    await ElMessageBox.confirm(
-      t('cronJobs.messages.deleteConfirm', { name: job.name }),
-      { type: 'warning' },
-    )
-  } catch { return }
+  const ok = await mcConfirm({
+    title: t('common.delete'),
+    message: t('cronJobs.messages.deleteConfirm', { name: job.name }),
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await store.deleteJob(job.id)
     ElMessage.success(t('cronJobs.messages.deleteSuccess'))
@@ -668,6 +683,7 @@ function formatTime(datetime: string | undefined): string {
 }
 .type-badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .type-text { background: var(--mc-primary-bg); color: var(--mc-primary); }
+.type-reminder { background: var(--mc-warning-bg, var(--mc-primary-bg)); color: var(--mc-warning, var(--mc-primary-hover)); }
 .type-agent { background: var(--mc-success-bg, var(--mc-primary-bg)); color: var(--mc-success, var(--mc-primary-hover)); }
 .cron-code { display: inline-flex; background: var(--mc-bg-sunken); padding: 4px 8px; border-radius: 8px; font-size: 12px; color: var(--mc-text-primary); font-family: monospace; }
 .cron-readable { font-size: 12px; line-height: 1.45; color: var(--mc-text-tertiary); margin-top: 6px; }

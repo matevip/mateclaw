@@ -6,6 +6,14 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
+import vip.mate.wiki.dto.ImageRef;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * RFC-051 PR-1c: source-type-specific text normalization.
@@ -100,5 +108,35 @@ public class WikiContentNormalizer {
     private String collapseBlankLines(String text) {
         String unified = text.replace("\r\n", "\n").replace('\r', '\n');
         return unified.replaceAll("\n{3,}", "\n\n");
+    }
+
+    /** Markdown {@code ![alt](url)} pattern. {@code url} captures up to the first
+     *  whitespace or closing paren so titles like {@code ![alt](url "title")} stop
+     *  at the URL boundary; the title segment is intentionally discarded. */
+    private static final Pattern MD_IMAGE_REF = Pattern.compile("!\\[([^\\]]*)]\\(([^)\\s]+)\\)");
+
+    /**
+     * Extracts every {@code ![alt](url)} occurrence in the input as an
+     * {@link ImageRef}. URLs are deduplicated — the first occurrence wins
+     * so the alt text closest to the document start is preserved when the
+     * same image appears multiple times.
+     *
+     * @param markdown raw markdown body; null/blank input returns an empty list
+     * @return ordered, URL-deduplicated list of references, never null
+     */
+    public List<ImageRef> extractImageRefs(String markdown) {
+        if (markdown == null || markdown.isBlank()) {
+            return List.of();
+        }
+        List<ImageRef> refs = new ArrayList<>();
+        Set<String> seenUrls = new HashSet<>();
+        Matcher m = MD_IMAGE_REF.matcher(markdown);
+        while (m.find()) {
+            String url = m.group(2);
+            if (url == null || url.isBlank()) continue;
+            if (!seenUrls.add(url)) continue;
+            refs.add(new ImageRef(m.group(0), m.group(1), url));
+        }
+        return refs;
     }
 }

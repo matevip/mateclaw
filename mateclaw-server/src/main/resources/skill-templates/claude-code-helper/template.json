@@ -1,0 +1,44 @@
+{
+  "id": "claude-code-helper",
+  "name": "Claude Code Helper",
+  "nameZh": "Claude Code 编程助手",
+  "category": "system",
+  "type": "acp",
+  "icon": "🪄",
+  "description": "Delegate coding tasks to Anthropic's Claude Code agent via ACP. Requires the claude-code endpoint to be enabled in Settings ▸ ACP Endpoints (with ANTHROPIC_API_KEY or an active claude login session).",
+  "descriptionZh": "通过 ACP 协议把编码任务委派给 Anthropic Claude Code agent。需先在 Settings ▸ ACP Endpoints 启用 claude-code 端点，并配置 ANTHROPIC_API_KEY 或本机已登录 claude CLI。",
+  "fields": [
+    {
+      "key": "skill_name",
+      "label": "Skill 标识 (slug)",
+      "type": "text",
+      "required": true,
+      "placeholder": "team-claude-helper",
+      "hint": "小写英文 + 连字符；最终生成的工具名为 acp_claude-code_<slug>_prompt"
+    },
+    {
+      "key": "display_name_zh",
+      "label": "显示名 (中文)",
+      "type": "text",
+      "required": false,
+      "placeholder": "团队 Claude 编程助手"
+    },
+    {
+      "key": "system_prefix",
+      "label": "上游 system 前缀",
+      "type": "textarea",
+      "required": false,
+      "default": "你正在为一个 Java 17 + Spring Boot 3 + Vue 3 + TypeScript 的 monorepo 工作。所有代码注释用英文，commit message 用中英混合。",
+      "hint": "每次发送给 Claude Code 之前会自动拼到用户输入前面，用来固化项目惯例"
+    },
+    {
+      "key": "cwd_hint",
+      "label": "工作目录提示",
+      "type": "text",
+      "required": false,
+      "placeholder": "/path/to/project (留空使用当前 MateClaw workspace)",
+      "hint": "Claude Code 会用这个路径做 fs 操作的根。指错路径会让 read/write 工具找不到文件。"
+    }
+  ],
+  "skillMd": "---\nname: {{skill_name}}\ndescription: {{display_name_zh}} - 通过 ACP 委派给 Claude Code\ntype: acp\nicon: \"🪄\"\ncategory: system\nversion: 1.0.0\nauthor: skill-template-wizard\nacp:\n  endpoint: claude-code\n  system_prefix: |\n    {{system_prefix}}\n  cwd: {{cwd_hint}}\nself-evolution:\n  lessons_enabled: true\n  lessons_max_entries: 30\n---\n\n# {{display_name_zh}}\n\n这是一个 ACP 委派 skill。Agent 会把编码任务转发给 Anthropic Claude Code agent。\n\n## 使用前提\n\n1. Settings ▸ ACP Endpoints 启用 `claude-code` 端点（默认 disabled）\n2. 配置 `ANTHROPIC_API_KEY` 在 endpoint 的 env_json 里，**或** 在宿主机上 `claude login` 完成 OAuth\n3. npx 能拉到 `@zed-industries/claude-agent-acp`（首次会慢一点）\n4. 该 skill 暴露一个工具 `acp_claude-code_{{skill_name}}_prompt`，参数 `prompt: string`\n\n## 委派粒度建议\n\n- **单 PR 范围**：把 PR 描述 + diff 上下文 + 期望写成一段长 prompt 给 Claude\n- **单文件改动**：包含 file path + 关注的代码片段 + 改动意图\n- **探索性分析**：先让 Claude 读 / 列目录，根据它的输出再决定下一步\n\n## 跟 codex 的差异\n\n- Claude Code 上下文窗口更大，适合一次塞整个文件甚至几个相关文件的内容\n- Claude Code 通常更倾向于先解释再修改；Codex 更直接出代码\n- 工具调用 trace 走 ACP session/update，MateClaw 当前同步等待最终回复（streaming relay 待 Phase 7c）\n"
+}

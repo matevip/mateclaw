@@ -23,10 +23,26 @@
           <div class="segments-view">
             <!-- 计划步骤面板（始终显示在 segments 之上） -->
             <PlanStepsPanel v-if="planMeta" :plan="planMeta" :is-generating="isGenerating" />
-            <template v-for="(seg, index) in segments" :key="seg.id">
-              <ThinkingSegment v-if="seg.type === 'thinking'" :segment="seg" />
-              <ToolCallSegment v-if="seg.type === 'tool_call'" :segment="seg" />
-              <ContentSegment v-if="seg.type === 'content'" :segment="seg" :show-cursor="showCursor && seg.status === 'running'" />
+            <template v-for="iter in groupedIterations" :key="iter.key">
+              <!-- Iteration interrupted before any output landed — surface a chip
+                   so the user knows the agent moved on instead of silently
+                   skipping a turn. -->
+              <div v-if="iter.empty" class="iter-empty-chip">
+                <el-icon><WarningFilled /></el-icon>
+                <span>{{ $t('chat.iterationEmpty', { index: iter.index + 1 }) }}</span>
+              </div>
+              <template v-else>
+                <ThinkingSegment v-for="t in iter.thinkings" :key="t.id" :segment="t" />
+                <ToolCallSegment v-for="tool in iter.tools" :key="tool.id" :segment="tool" />
+                <template v-for="c in iter.contents" :key="c.id">
+                  <div v-if="c.repetitionWarning" class="repetition-warning">
+                    <el-icon><WarningFilled /></el-icon>
+                    <span class="repetition-warning__text">{{ $t('chat.contentRepetitionWarning') }}</span>
+                    <span v-if="c.truncatedChars" class="repetition-warning__meta">({{ c.truncatedChars }} chars)</span>
+                  </div>
+                  <ContentSegment :segment="c" :show-cursor="showCursor && c.status === 'running'" />
+                </template>
+              </template>
             </template>
           </div>
         </template>
@@ -168,6 +184,43 @@
 
         </template><!-- /传统合并渲染模式 -->
 
+        <!--
+          INCOMPLETE banner: graph emitted finishReason=incomplete after
+          the thinking-only soft cap stopped the stream.
+          Lives outside the segmented/traditional fork so both rendering
+          modes show it. Click "regenerate" reuses the existing emit path
+          that the error-card already relies on.
+        -->
+        <div v-if="isIncomplete" class="incomplete-card">
+          <div class="incomplete-card__header">
+            <el-icon class="incomplete-card__icon"><WarningFilled /></el-icon>
+            <span class="incomplete-card__title">{{ $t('chat.incompleteTitle') }}</span>
+          </div>
+          <p class="incomplete-card__description">{{ $t('chat.incompleteDescription') }}</p>
+          <div class="incomplete-card__footer">
+            <button class="incomplete-card__retry" type="button" @click="$emit('regenerate')">
+              <el-icon><RefreshRight /></el-icon>
+              {{ $t('chat.incompleteRetry') }}
+            </button>
+          </div>
+        </div>
+
+        <!--
+          EVIDENCE_INSUFFICIENT banner (info color, not warning). Run completed
+          fully — the answer text is preserved above; the model just cited
+          source files / classes it didn't actually open. Without an explicit
+          card the trailing "[证据不足] …" line reads like a mid-answer cut.
+          No regenerate button: the user typically wants to either accept
+          the gap or follow up asking the model to read the listed files.
+        -->
+        <div v-if="isEvidenceInsufficient" class="evidence-card">
+          <div class="evidence-card__header">
+            <el-icon class="evidence-card__icon"><InfoFilled /></el-icon>
+            <span class="evidence-card__title">{{ $t('chat.evidenceTitle') }}</span>
+          </div>
+          <p class="evidence-card__description">{{ $t('chat.evidenceDescription') }}</p>
+        </div>
+
         <!-- 附件列表 -->
         <div v-if="attachments?.length" class="message-attachments">
           <div
@@ -195,6 +248,37 @@
               playsinline
             />
             <span class="message-attachment-video__name">{{ attachment.name }}</span>
+          </div>
+          <div
+            v-for="attachment in audioAttachments"
+            :key="'audio-' + attachment.storedName"
+            class="message-attachment-audio"
+          >
+            <audio
+              :src="getDisplayUrl(attachment)"
+              controls
+              preload="metadata"
+            />
+            <span class="message-attachment-audio__name">{{ attachment.name }}</span>
+          </div>
+          <!-- 3D model preview via @google/model-viewer Web Component
+               (registered globally in src/main.ts; renders &lt;model-viewer&gt;
+               as a custom HTML element). -->
+          <div
+            v-for="attachment in model3dAttachments"
+            :key="'model3d-' + attachment.storedName"
+            class="message-attachment-model3d"
+          >
+            <model-viewer
+              :src="getDisplayUrl(attachment)"
+              camera-controls
+              auto-rotate
+              shadow-intensity="1"
+              exposure="1"
+              alt="Generated 3D model"
+              class="message-attachment-model3d__viewer"
+            />
+            <span class="message-attachment-model3d__name">{{ attachment.name }}</span>
           </div>
           <button
             v-for="attachment in fileAttachments"
@@ -268,6 +352,7 @@ import {
   CloseBold,
   CopyDocument,
   Document,
+  InfoFilled,
   Loading,
   Microphone,
   Opportunity,
@@ -295,7 +380,7 @@ import type { ChatErrorInfo } from '@/types/chatError'
 const { renderMarkdown } = useMarkdownRenderer()
 const { t } = useI18n()
 const { getToolLabel } = useToolLabel()
-const { blobUrls, loadAllImages, loadAllVideos, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
+const { blobUrls, loadAllImages, loadAllVideos, loadAllAudios, loadAllModels, downloadFile, openImage, getDisplayUrl, revokeAll } = useAuthenticatedAttachment()
 
 interface Props {
   message: Message
@@ -545,19 +630,74 @@ onBeforeUnmount(() => {
 })
 
 // --- 附件 ---
-const attachments = computed(() => props.message.attachments || [])
+// MessageContentPart media (image/audio/video produced by generation tools) live
+// in `contentParts` rather than `attachments`. Synthesize virtual attachment
+// entries so the existing render + auth-blob loader works for them too.
+//
+// Dedup against `props.message.attachments` by URL — user-uploaded images often
+// land in BOTH lists (the upload endpoint registers them as ChatAttachment AND
+// the message persistence echoes them back as a `type: 'image'` MessageContentPart).
+// Without this guard each user image shows twice in the bubble.
+const mediaPartAttachments = computed<ChatAttachment[]>(() => {
+  const parts = (props.message as any).contentParts as Array<any> | undefined
+  if (!parts || !parts.length) return []
+  const existingUrls = new Set(
+    (props.message.attachments || []).map(a => a.url).filter(Boolean)
+  )
+  const out: ChatAttachment[] = []
+  const seen = new Set<string>()
+  for (const p of parts) {
+    if (!p || !p.fileUrl) continue
+    if (p.type !== 'image' && p.type !== 'audio' && p.type !== 'video' && p.type !== 'model3d') continue
+    if (existingUrls.has(p.fileUrl) || seen.has(p.fileUrl)) continue
+    seen.add(p.fileUrl)
+    const fileName = p.fileName || p.fileUrl.split('/').pop() || `${p.type}-${out.length}`
+    const ct = p.contentType
+        || (p.type === 'image' ? 'image/png'
+            : p.type === 'audio' ? 'audio/mpeg'
+            : p.type === 'video' ? 'video/mp4'
+            : 'model/gltf-binary')
+    out.push({
+      name: fileName,
+      size: 0,
+      url: p.fileUrl,
+      storedName: fileName,
+      path: p.fileUrl,
+      contentType: ct,
+    })
+  }
+  return out
+})
+
+const attachments = computed(() => [
+  ...(props.message.attachments || []),
+  ...mediaPartAttachments.value,
+])
 const imageAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('image/')))
 const videoAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('video/')))
+const audioAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('audio/')))
+const model3dAttachments = computed(() => attachments.value.filter(a => a.contentType?.startsWith('model/')))
 const fileAttachments = computed(() => attachments.value.filter(a =>
-  !a.contentType?.startsWith('image/') && !a.contentType?.startsWith('video/')
+  !a.contentType?.startsWith('image/')
+    && !a.contentType?.startsWith('video/')
+    && !a.contentType?.startsWith('audio/')
+    && !a.contentType?.startsWith('model/')
 ))
 
-// 增量加载图片/视频附件的鉴权 blob URL（watch 覆盖首次 + 后续变化）
+// 增量加载图片/视频/音频附件的鉴权 blob URL（watch 覆盖首次 + 后续变化）
 watch(imageAttachments, (atts) => {
   if (atts.length > 0) loadAllImages(atts)
 }, { immediate: true })
 watch(videoAttachments, (atts) => {
   if (atts.length > 0) loadAllVideos(atts)
+}, { immediate: true })
+watch(audioAttachments, (atts) => {
+  if (atts.length > 0) loadAllAudios(atts)
+}, { immediate: true })
+// 3D models also need the auth-blob loader — <model-viewer src> doesn't carry
+// the Authorization header any more than <img>/<audio> do.
+watch(model3dAttachments, (atts) => {
+  if (atts.length > 0) loadAllModels(atts)
 }, { immediate: true })
 
 // --- 时间 ---
@@ -611,7 +751,13 @@ const segments = computed<MessageSegment[]>(() => {
     if (!hasThinking) {
       const thinkingPart = props.message.contentParts?.find(p => p.type === 'thinking')
       if (thinkingPart?.text) {
-        segs.unshift({ id: 'th-fb', type: 'thinking', status: 'completed', thinkingText: thinkingPart.text })
+        // Tag with iterationIndex=0 so groupedIterations puts it in the FIRST
+        // iteration's thinking bucket instead of the default-zero bucket
+        // colliding with later iteration content. Without this, the fallback
+        // thinking renders below the answer for any conversation that has
+        // multi-iteration RFC-22 segments tagged elsewhere.
+        const firstIter = segs.find(s => typeof s.iterationIndex === 'number')?.iterationIndex ?? 0
+        segs.unshift({ id: 'th-fb', type: 'thinking', status: 'completed', thinkingText: thinkingPart.text, iterationIndex: firstIter })
       }
     }
 
@@ -665,8 +811,73 @@ const segments = computed<MessageSegment[]>(() => {
 /** 是否使用分段模式渲染（有 segments 数据且包含多个分段） */
 const useSegmentedView = computed(() => segments.value.length > 1)
 
+/**
+ * Group segments by iterationIndex so each ReAct iteration renders as its own
+ * thinking/tool-calls/content cluster. Falls back to a single ungrouped bucket
+ * for legacy messages (no iterationIndex tagged) so historical conversations
+ * keep rendering as before — including the existing "single-thinking reorder"
+ * normalization done in the `segments` computed above.
+ */
+const groupedIterations = computed(() => {
+  const segs = segments.value || []
+  const anyTagged = segs.some(s => typeof s.iterationIndex === 'number')
+  if (!anyTagged) {
+    return [{
+      key: 'all',
+      index: 0,
+      empty: false,
+      thinkings: segs.filter(s => s.type === 'thinking'),
+      tools: segs.filter(s => s.type === 'tool_call'),
+      contents: segs.filter(s => s.type === 'content'),
+    }]
+  }
+  const buckets = new Map<number, { thinkings: MessageSegment[]; tools: MessageSegment[]; contents: MessageSegment[] }>()
+  for (const s of segs) {
+    const idx = s.iterationIndex ?? 0
+    if (!buckets.has(idx)) buckets.set(idx, { thinkings: [], tools: [], contents: [] })
+    const b = buckets.get(idx)!
+    if (s.type === 'thinking') b.thinkings.push(s)
+    else if (s.type === 'tool_call') b.tools.push(s)
+    else if (s.type === 'content') b.contents.push(s)
+  }
+  return [...buckets.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([index, b]) => ({
+      key: `iter-${index}`,
+      index,
+      empty: b.thinkings.length === 0 && b.tools.length === 0 && b.contents.length === 0,
+      ...b,
+    }))
+})
+
 const toolCallsMeta = computed<ToolCallMeta[]>(() => {
   return parsedMetadata.value?.toolCalls || []
+})
+
+/**
+ * True when the assistant turn was auto-truncated by the backend's
+ * thinking-only soft-cap and ended in INCOMPLETE.
+ * Surfaced as a banner with a "continue / regenerate" affordance so the
+ * user knows the answer ended early on purpose, not silently skipped.
+ *
+ * Reads `metadata.finishReason` set by the graph's FinalAnswerNode via
+ * the finish_reason GraphEvent → StreamDelta → accumulator pipeline.
+ */
+const isIncomplete = computed<boolean>(() => {
+  if (props.message.role !== 'assistant') return false
+  return parsedMetadata.value?.finishReason === 'incomplete'
+})
+
+/**
+ * True when the graph completed normally but {@code SourceEvidenceLedger}
+ * found unsupported references. The visible answer is full and persisted;
+ * the trailing "[证据不足] …" line just lists which file/class citations
+ * were never confirmed by an actual tool result. Without this banner the
+ * user often misreads that single line as a mid-answer cut.
+ */
+const isEvidenceInsufficient = computed<boolean>(() => {
+  if (props.message.role !== 'assistant') return false
+  return parsedMetadata.value?.finishReason === 'evidence_insufficient'
 })
 
 const browserActionsMeta = computed<BrowserAction[]>(() => {
@@ -771,6 +982,43 @@ watch(isGenerating, (generating) => {
   flex-direction: column;
   gap: 2px;
   padding: 4px 0;
+}
+
+/* Iteration "no output" chip (interrupted iteration). */
+.iter-empty-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  margin: 4px 0;
+  font-size: 12px;
+  color: var(--mc-text-tertiary, #94a3b8);
+  background: var(--mc-bg-elevated, #f8fafc);
+  border: 1px dashed var(--mc-border, #e2e8f0);
+  border-radius: 12px;
+}
+
+/* Inline informational banner shown when the backend trimmed a repetitive
+   tail off a content segment. Amber, not red — this is informational. */
+.repetition-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin: 6px 0 2px;
+  font-size: 12px;
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.08);
+  border-left: 3px solid var(--mc-warning, #f59e0b);
+  border-radius: 4px;
+}
+.repetition-warning__text {
+  flex: 1;
+}
+.repetition-warning__meta {
+  color: var(--mc-text-tertiary, #94a3b8);
+  font-size: 11px;
 }
 
 .message-wrapper {
@@ -1322,6 +1570,105 @@ watch(isGenerating, (generating) => {
   border-color: color-mix(in srgb, var(--mc-danger) 50%, transparent);
 }
 
+/* ==================== INCOMPLETE 截断卡片（重复检测 / thinking-only 软上限） ==================== */
+.incomplete-card {
+  margin-top: 8px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--mc-warning, #d97706) 8%, var(--mc-bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--mc-warning, #d97706) 30%, transparent);
+  font-size: 13px;
+  max-width: 480px;
+  line-height: 1.5;
+}
+
+.incomplete-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.incomplete-card__icon {
+  flex-shrink: 0;
+  color: var(--mc-warning, #d97706);
+}
+
+.incomplete-card__title {
+  font-weight: 600;
+  color: var(--mc-warning, #d97706);
+  font-size: 14px;
+}
+
+.incomplete-card__description {
+  margin: 4px 0 8px;
+  color: var(--mc-text-primary);
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+.incomplete-card__footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.incomplete-card__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--mc-warning, #d97706) 35%, transparent);
+  background: color-mix(in srgb, var(--mc-warning, #d97706) 10%, var(--mc-bg-elevated));
+  color: var(--mc-warning, #d97706);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.incomplete-card__retry:hover {
+  background: color-mix(in srgb, var(--mc-warning, #d97706) 18%, var(--mc-bg-elevated));
+  border-color: color-mix(in srgb, var(--mc-warning, #d97706) 55%, transparent);
+}
+
+/* ==================== EVIDENCE_INSUFFICIENT 提示卡（info 调，非警告） ==================== */
+.evidence-card {
+  margin-top: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--mc-info, #0891b2) 6%, var(--mc-bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--mc-info, #0891b2) 25%, transparent);
+  font-size: 12.5px;
+  max-width: 480px;
+  line-height: 1.5;
+}
+
+.evidence-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.evidence-card__icon {
+  flex-shrink: 0;
+  color: var(--mc-info, #0891b2);
+}
+
+.evidence-card__title {
+  font-weight: 600;
+  color: var(--mc-info, #0891b2);
+  font-size: 13.5px;
+}
+
+.evidence-card__description {
+  margin: 4px 0 0;
+  color: var(--mc-text-primary);
+  font-size: 12.5px;
+  opacity: 0.85;
+}
+
 /* ==================== 附件 ==================== */
 .message-attachments {
   display: flex;
@@ -1365,6 +1712,54 @@ watch(isGenerating, (generating) => {
 }
 
 .message-attachment-video__name {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.76;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-attachment-audio {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.message-attachment-audio audio {
+  width: 100%;
+  max-width: 400px;
+  display: block;
+}
+
+.message-attachment-audio__name {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.76;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-attachment-model3d {
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-soft, #f5f5f5);
+}
+
+.message-attachment-model3d__viewer {
+  width: 100%;
+  max-width: 480px;
+  height: 360px;
+  display: block;
+  border-radius: 12px;
+  /* model-viewer renders nothing until the .glb finishes loading;
+     keep the box sized so layout doesn't jump. */
+  background: linear-gradient(135deg, #fafafa, #ececec);
+}
+
+.message-attachment-model3d__name {
   display: block;
   margin-top: 4px;
   font-size: 12px;

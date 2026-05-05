@@ -28,6 +28,12 @@ const router = createRouter({
           meta: { title: 'Agents' },
         },
         {
+          path: 'backstage',
+          name: 'Backstage',
+          component: () => import('@/views/Backstage.vue'),
+          meta: { title: 'Backstage', requireAdmin: true },
+        },
+        {
           path: 'wiki',
           name: 'Wiki',
           component: () => import('@/views/Wiki/index.vue'),
@@ -55,11 +61,20 @@ const router = createRouter({
           component: () => import('@/views/SkillMarket.vue'),
           meta: { title: 'Skills' },
         },
+        // Tools 顶层入口已降级到 Settings ▸ Tools (Catalog) (RFC-090 Phase 1)
+        // 旧路径 /tools 由下方 redirect 兼容
         {
-          path: 'tools',
-          name: 'Tools',
-          component: () => import('@/views/Tools.vue'),
-          meta: { title: 'Tools' },
+          path: 'activity',
+          name: 'Activity',
+          component: () => import('@/views/Security/Activity/index.vue'),
+          meta: { title: 'Activity' },
+        },
+        // RFC-091: Skill 模板库 + 创作向导
+        {
+          path: 'skills/templates',
+          name: 'SkillTemplates',
+          component: () => import('@/views/SkillTemplates.vue'),
+          meta: { title: 'Skill Templates' },
         },
         {
           path: 'plugins',
@@ -115,6 +130,12 @@ const router = createRouter({
               component: () => import('@/views/Settings/Video/index.vue'),
               meta: { title: 'Settings - Video' },
             },
+            {
+              path: 'model3d',
+              name: 'SettingsModel3D',
+              component: () => import('@/views/Settings/Model3D/index.vue'),
+              meta: { title: 'Settings - 3D Model' },
+            },
             // Workspace management
             {
               path: 'workspaces',
@@ -128,12 +149,8 @@ const router = createRouter({
               component: () => import('@/views/Security/Members/index.vue'),
               meta: { title: 'Settings - Members' },
             },
-            {
-              path: 'activity',
-              name: 'SettingsActivity',
-              component: () => import('@/views/Security/Activity/index.vue'),
-              meta: { title: 'Settings - Activity' },
-            },
+            // RFC-090 Phase 4: Activity 提升到顶层 /activity（下方 children-out
+            // 的 settings/activity redirect 兼容旧链接，此处不再注册子路由）
             // Advanced (absorbed from top-level nav)
             {
               path: 'agent-context',
@@ -157,13 +174,32 @@ const router = createRouter({
               path: 'mcp-servers',
               name: 'SettingsMcpServers',
               component: () => import('@/views/McpServers.vue'),
-              meta: { title: 'Settings - MCP Servers' },
+              meta: { title: 'Settings - MCP Connections' },
+            },
+            {
+              path: 'tools',
+              name: 'SettingsTools',
+              component: () => import('@/views/Tools.vue'),
+              meta: { title: 'Settings - Tools Catalog' },
+            },
+            // RFC-090 Phase 7: ACP endpoints (External coding agents)
+            {
+              path: 'acp',
+              name: 'SettingsAcpEndpoints',
+              component: () => import('@/views/AcpEndpoints.vue'),
+              meta: { title: 'Settings - ACP Endpoints' },
             },
             {
               path: 'token-usage',
               name: 'SettingsTokenUsage',
               component: () => import('@/views/TokenUsage.vue'),
               meta: { title: 'Settings - Token Usage' },
+            },
+            {
+              path: 'feature-flags',
+              name: 'SettingsFeatureFlags',
+              component: () => import('@/views/Settings/FeatureFlags/index.vue'),
+              meta: { title: 'Settings - Feature Flags' },
             },
             {
               path: 'about',
@@ -204,11 +240,15 @@ const router = createRouter({
         { path: 'workspace', redirect: '/settings/agent-context' },
         { path: 'security/workspaces', redirect: '/settings/workspaces' },
         { path: 'security/members', redirect: '/settings/members' },
-        { path: 'security/activity', redirect: '/settings/activity' },
+        // RFC-090 Phase 4: Activity 提升到顶层
+        { path: 'security/activity', redirect: '/activity' },
+        { path: 'settings/activity', redirect: '/activity' },
         { path: 'cron-jobs', redirect: '/settings/cron-jobs' },
         { path: 'datasources', redirect: '/settings/datasources' },
         { path: 'mcp-servers', redirect: '/settings/mcp-servers' },
         { path: 'token-usage', redirect: '/settings/token-usage' },
+        // RFC-090 Phase 1: Tools 顶层降级到 Settings
+        { path: 'tools', redirect: '/settings/tools' },
       ],
     },
     {
