@@ -96,9 +96,12 @@ export function useStickToBottom(
       
       // 等待滚动完成
       await new Promise<void>((resolve) => {
+        const startedAt = performance.now()
         const checkScrollEnd = () => {
-          if (Math.abs(element.scrollTop - targetScrollTop) < 1) {
+          if (!isScrolling || Math.abs(element.scrollTop - targetScrollTop) < 1
+              || performance.now() - startedAt > opts.duration * 2) {
             isScrolling = false
+            lastScrollTop = element.scrollTop
             resolve()
           } else {
             requestAnimationFrame(checkScrollEnd)
@@ -110,6 +113,7 @@ export function useStickToBottom(
       // 直接滚动
       element.scrollTop = targetScrollTop
       isScrolling = false
+      lastScrollTop = element.scrollTop
     }
 
     isAtBottom.value = true
@@ -123,7 +127,11 @@ export function useStickToBottom(
 
   // 处理滚动事件
   const handleScroll = () => {
-    if (!scrollRef.value || isScrolling) return
+    if (!scrollRef.value) return
+    if (isScrolling) {
+      lastScrollTop = scrollRef.value.scrollTop
+      return
+    }
 
     const element = scrollRef.value
     const currentScrollTop = element.scrollTop
@@ -141,7 +149,7 @@ export function useStickToBottom(
     }
 
     // 向下滚动到底部，恢复自动滚动
-    if (isScrollingDown && isNearBottom.value) {
+    if ((isScrollingDown || checkIsAtBottom()) && isNearBottom.value) {
       escapedFromLock.value = false
       isAtBottom.value = true
     }
@@ -149,11 +157,13 @@ export function useStickToBottom(
 
   // 处理鼠标滚轮
   const handleWheel = (e: WheelEvent) => {
-    if (!scrollRef.value || !escapedFromLock.value) return
+    if (!scrollRef.value) return
     
     // 如果用户向上滚动，确保我们记录这个行为
     if (e.deltaY < 0) {
+      isScrolling = false
       escapedFromLock.value = true
+      isAtBottom.value = false
     }
   }
 
