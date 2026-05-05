@@ -37,12 +37,17 @@ public class ChatGPTResponsesClient {
     /**
      * 流式调用结果 — 包含文本增量和 tool call 事件
      */
-    public record StreamEvent(String type, String content, String toolCallId, String toolName, String toolArgsDelta) {
-        public static StreamEvent text(String delta) { return new StreamEvent("text", delta, null, null, null); }
-        public static StreamEvent toolCallStart(String callId, String name) { return new StreamEvent("tool_call_start", null, callId, name, null); }
-        public static StreamEvent toolCallArgsDelta(String callId, String delta) { return new StreamEvent("tool_call_args_delta", null, callId, null, delta); }
-        public static StreamEvent toolCallDone(String callId, String args) { return new StreamEvent("tool_call_done", null, callId, null, args); }
-        public static StreamEvent done() { return new StreamEvent("done", null, null, null, null); }
+    public record StreamEvent(String type, String content, String toolCallId, String toolName, String toolArgsDelta,
+                              Integer inputTokens, Integer outputTokens, Integer totalTokens) {
+        public static StreamEvent text(String delta) { return new StreamEvent("text", delta, null, null, null, null, null, null); }
+        public static StreamEvent toolCallStart(String callId, String name) { return new StreamEvent("tool_call_start", null, callId, name, null, null, null, null); }
+        public static StreamEvent toolCallArgsDelta(String callId, String delta) { return new StreamEvent("tool_call_args_delta", null, callId, null, delta, null, null, null); }
+        public static StreamEvent toolCallDone(String callId, String args) { return new StreamEvent("tool_call_done", null, callId, null, args, null, null, null); }
+        public static StreamEvent done() { return new StreamEvent("done", null, null, null, null, null, null, null); }
+        /** Done event carrying token usage extracted from {@code response.completed.response.usage}. */
+        public static StreamEvent done(Integer in, Integer out, Integer total) {
+            return new StreamEvent("done", null, null, null, null, in, out, total);
+        }
     }
 
     /**
@@ -281,8 +286,25 @@ public class ChatGPTResponsesClient {
                 return StreamEvent.toolCallDone(callId, args);
             }
 
-            // 完成/结束
+            // 完成/结束 — extract usage from response.completed so the agent
+            // pipeline can record per-turn token counts (otherwise OAuth turns
+            // get logged as 0/0/0). Field shape mirrors the upstream client:
+            // input_tokens → prompt, output_tokens → completion, total_tokens
+            // falls back to (input + output) when the API omits it.
             if (type.startsWith("response.completed") || type.startsWith("response.done")) {
+                JsonNode usage = node.path("response").path("usage");
+                if (!usage.isMissingNode() && !usage.isNull()) {
+                    Integer in = usage.has("input_tokens") ? usage.get("input_tokens").asInt() : null;
+                    Integer out = usage.has("output_tokens") ? usage.get("output_tokens").asInt() : null;
+                    Integer total = usage.has("total_tokens")
+                            ? usage.get("total_tokens").asInt()
+                            : (in != null && out != null ? in + out : null);
+                    if (in != null || out != null || total != null) {
+                        log.debug("[ChatGPT] Usage in response.completed: input={}, output={}, total={}",
+                                in, out, total);
+                        return StreamEvent.done(in, out, total);
+                    }
+                }
                 return StreamEvent.done();
             }
 
