@@ -40,14 +40,30 @@ public class McpToolCallbackProvider implements ToolCallbackProvider {
                         callbacks.size(), mcpClientManager.getActiveCount());
             }
 
-            // RFC-052: opt-in returnDirect wrapping. The decorator only changes
+            // Opt-in returnDirect wrapping. The decorator only changes
             // ToolMetadata.returnDirect(); guard/approval/observability still
             // see the original callback through the wrapper.
+            //
+            // Names registered by the manager are now prefixed
+            // (mcp_<serverId>_<slug>_<hash6>) — but operators have been
+            // configuring the return-direct list with raw upstream names
+            // (e.g. `query_employee_salary`) since long before the prefix
+            // existed. Match on EITHER form so an existing deployment's
+            // sensitive-tool isolation doesn't silently regress when this
+            // change rolls out: a tool counts as return-direct if its
+            // configured token equals (a) the prefixed callback name OR
+            // (b) the underlying raw tool name visible through the
+            // PrefixedNameToolCallback wrapper.
             List<ToolCallback> wrapped = new ArrayList<>(callbacks.size());
             for (ToolCallback cb : callbacks) {
-                String name = cb.getToolDefinition() != null ? cb.getToolDefinition().name() : null;
-                if (returnDirectProperties.isReturnDirect(name)) {
-                    log.info("[McpToolCallbackProvider] wrapping MCP tool '{}' as returnDirect (RFC-052)", name);
+                String prefixed = cb.getToolDefinition() != null ? cb.getToolDefinition().name() : null;
+                String raw = (cb instanceof PrefixedNameToolCallback w && w.getDelegate() != null
+                        && w.getDelegate().getToolDefinition() != null)
+                        ? w.getDelegate().getToolDefinition().name()
+                        : null;
+                if (returnDirectProperties.matches(prefixed, raw)) {
+                    log.info("[McpToolCallbackProvider] wrapping MCP tool as returnDirect (prefixed='{}', raw='{}')",
+                            prefixed, raw);
                     wrapped.add(new ReturnDirectMcpToolCallback(cb));
                 } else {
                     wrapped.add(cb);

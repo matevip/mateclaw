@@ -12,8 +12,11 @@ import vip.mate.agent.binding.model.AgentToolBinding;
 import vip.mate.agent.binding.repository.AgentProviderPreferenceMapper;
 import vip.mate.agent.binding.repository.AgentSkillBindingMapper;
 import vip.mate.agent.binding.repository.AgentToolBindingMapper;
+import vip.mate.exception.MateClawException;
 import vip.mate.skill.runtime.SkillRuntimeService;
 import vip.mate.skill.runtime.model.ResolvedSkill;
+import vip.mate.tool.model.AvailableToolDTO;
+import vip.mate.tool.service.AvailableToolService;
 
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -43,16 +46,25 @@ public class AgentBindingService {
      * graph when SkillRuntimeService initializes after binding.
      */
     private final SkillRuntimeService skillRuntimeService;
+    /**
+     * Source of truth for what the picker can offer (built-in + MCP). Used
+     * by {@link #setToolBindings} to refuse new tool names that the runtime
+     * couldn't resolve anyway — closes the gap where a UI-disabled row
+     * could still be saved by hitting the API directly.
+     */
+    private final AvailableToolService availableToolService;
 
     @Autowired
     public AgentBindingService(AgentSkillBindingMapper skillBindingMapper,
                                AgentToolBindingMapper toolBindingMapper,
                                AgentProviderPreferenceMapper providerPreferenceMapper,
-                               @Lazy SkillRuntimeService skillRuntimeService) {
+                               @Lazy SkillRuntimeService skillRuntimeService,
+                               AvailableToolService availableToolService) {
         this.skillBindingMapper = skillBindingMapper;
         this.toolBindingMapper = toolBindingMapper;
         this.providerPreferenceMapper = providerPreferenceMapper;
         this.skillRuntimeService = skillRuntimeService;
+        this.availableToolService = availableToolService;
     }
 
     // ==================== Skill Bindings ====================
@@ -335,9 +347,27 @@ public class AgentBindingService {
     }
 
     /**
-     * 批量设置 Agent 的 tool 绑定（替换模式）
+     * Replace the agent's tool binding set.
+     *
+     * <p>Validation rule for each incoming name:
+     * <ul>
+     *   <li><b>Already in the existing binding</b> → always allowed (so the
+     *       user can keep a previously-bound tool whose upstream MCP server
+     *       is currently stale or even removed; the client just keeps what
+     *       it already had).</li>
+     *   <li><b>New addition (not in existing binding)</b> → must appear in
+     *       {@link AvailableToolService#listAvailable()} with
+     *       {@code available == true}. Names that are unknown
+     *       (typos / legacy unprefixed MCP names / hand-crafted strings) or
+     *       that the picker marked unavailable (hash collision, etc.) are
+     *       rejected — saving them would put a {@code mate_agent_tool} row
+     *       in the database that the runtime can never resolve, which then
+     *       silently drops the tool when the agent runs.</li>
+     * </ul>
      */
     public void setToolBindings(Long agentId, List<String> toolNames) {
+        validateNewToolBindings(agentId, toolNames);
+
         toolBindingMapper.delete(
                 new LambdaQueryWrapper<AgentToolBinding>()
                         .eq(AgentToolBinding::getAgentId, agentId));
@@ -349,6 +379,56 @@ public class AgentBindingService {
                 binding.setEnabled(true);
                 toolBindingMapper.insert(binding);
             }
+        }
+    }
+
+    /**
+     * Refuse the save when any *newly-added* tool name doesn't resolve to
+     * an {@code available=true} row in the picker. Names already in the
+     * existing binding are exempt so that subsequent edits (especially
+     * "remove this stale tool") still succeed even if upstream state has
+     * drifted.
+     */
+    private void validateNewToolBindings(Long agentId, List<String> incoming) {
+        if (incoming == null || incoming.isEmpty()) {
+            return;
+        }
+        Set<String> existing = listToolBindings(agentId).stream()
+                .map(AgentToolBinding::getToolName)
+                .collect(Collectors.toSet());
+        Set<String> bindable;
+        try {
+            bindable = availableToolService.listAvailable().stream()
+                    .filter(AvailableToolDTO::isAvailable)
+                    .map(AvailableToolDTO::getName)
+                    .collect(Collectors.toSet());
+        } catch (Exception e) {
+            // The picker source briefly failing must not block the user
+            // from saving a binding that's still in their existing set.
+            // Re-validate everything against just the existing set —
+            // strictly conservative: only allow keeps, refuse adds.
+            log.warn("AvailableToolService unavailable during binding validation, falling back to existing-only: {}",
+                    e.getMessage());
+            bindable = Set.of();
+        }
+
+        List<String> rejected = new java.util.ArrayList<>();
+        for (String name : incoming) {
+            if (name == null || name.isBlank()) {
+                rejected.add("<blank>");
+                continue;
+            }
+            if (existing.contains(name)) continue; // keeps are always allowed
+            if (!bindable.contains(name)) rejected.add(name);
+        }
+        if (!rejected.isEmpty()) {
+            String preview = rejected.size() <= 5
+                    ? String.join(", ", rejected)
+                    : String.join(", ", rejected.subList(0, 5)) + " (+" + (rejected.size() - 5) + " more)";
+            throw new MateClawException("err.agent.tool_binding_unbindable",
+                    "Tool name(s) cannot be bound: " + preview
+                            + ". Either the name is unknown or the picker marked it unavailable "
+                            + "(e.g. hash collision, upstream server removed).");
         }
     }
 
