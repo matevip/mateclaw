@@ -138,15 +138,26 @@
             <span class="raw-item-type">{{ raw.sourceType }}</span>
           </div>
           <div class="raw-item-meta">
-            <span class="status-badge" :class="raw.processingStatus">
-              {{ t(`wiki.status.${raw.processingStatus}`) }}
+            <span
+              class="status-badge"
+              :class="cancellingIds.has(raw.id) && raw.processingStatus === 'processing' ? 'cancelling' : raw.processingStatus"
+            >
+              {{ cancellingIds.has(raw.id) && raw.processingStatus === 'processing'
+                ? t('wiki.status.cancelling')
+                : t(`wiki.status.${raw.processingStatus}`) }}
             </span>
             <span v-if="raw.pageCount != null && raw.pageCount > 0" class="page-count-chip">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
               {{ raw.pageCount }}
             </span>
             <span
-              v-if="raw.errorMessage && (raw.processingStatus === 'failed' || raw.processingStatus === 'partial')"
+              v-if="raw.processingStatus === 'cancelled'"
+              class="error-hint" :title="raw.errorMessage || ''"
+            >
+              {{ t('wiki.cancelledHint') }}
+            </span>
+            <span
+              v-else-if="raw.errorMessage && (raw.processingStatus === 'failed' || raw.processingStatus === 'partial')"
               class="error-hint" :title="raw.errorMessage"
             >
               {{ raw.errorMessage }}
@@ -154,7 +165,25 @@
           </div>
           <div class="raw-item-actions">
             <button
-              v-if="raw.processingStatus === 'partial'"
+              v-if="raw.processingStatus === 'processing' && !cancellingIds.has(raw.id)"
+              class="btn-icon btn-icon-danger" :title="t('wiki.cancel')"
+              @click="cancelRaw(raw.id)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                <line x1="6" y1="6" x2="18" y2="18"/>
+                <line x1="6" y1="18" x2="18" y2="6"/>
+              </svg>
+            </button>
+            <button
+              v-else-if="raw.processingStatus === 'processing' && cancellingIds.has(raw.id)"
+              class="btn-icon btn-icon-cancelling" :title="t('wiki.cancelling')" disabled
+            >
+              <svg class="spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                <path d="M21 12a9 9 0 1 1-6.22-8.56"/>
+              </svg>
+            </button>
+            <button
+              v-else-if="raw.processingStatus === 'partial'"
               class="btn-icon btn-icon-resume" :title="t('wiki.resume')"
               @click="reprocess(raw.id)"
             >
@@ -163,7 +192,7 @@
               </svg>
             </button>
             <button
-              v-else-if="raw.processingStatus === 'failed' || raw.processingStatus === 'completed'"
+              v-else-if="raw.processingStatus === 'failed' || raw.processingStatus === 'completed' || raw.processingStatus === 'cancelled'"
               class="btn-icon" :title="t('wiki.reprocess')"
               @click="reprocess(raw.id)"
             >
@@ -388,6 +417,14 @@ let jobPoller: ReturnType<typeof setTimeout> | null = null
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'partial', 'cancelled'])
 
+// Local optimistic state: rows the user has just clicked "cancel" on.
+// Backend cancellation is observed at the next abort checkpoint (which can
+// take 10+ seconds while a route-phase LLM call is in flight), so without
+// this set the click looks unresponsive — the button stays the same and
+// the badge keeps reading "处理中". Cleared as soon as the row's status
+// transitions out of "processing" via the next fetchRawMaterials.
+const cancellingIds = ref(new Set<number>())
+
 async function pollJobs() {
   if (!store.currentKB) return
   const kbId = store.currentKB.id
@@ -425,6 +462,22 @@ watch(hasProcessing, (active) => {
   if (active) pollJobs()
   else if (jobPoller) { clearTimeout(jobPoller); jobPoller = null }
 }, { immediate: true })
+
+// Clear the optimistic "cancelling" flag for any row that has left the
+// 'processing' state — the backend has written the terminal status, so
+// the badge and action buttons can now reflect reality.
+watch(() => store.rawMaterials, (rows) => {
+  if (cancellingIds.value.size === 0) return
+  const next = new Set(cancellingIds.value)
+  for (const r of rows) {
+    if (r.processingStatus !== 'processing' && next.has(r.id)) {
+      next.delete(r.id)
+    }
+  }
+  if (next.size !== cancellingIds.value.size) {
+    cancellingIds.value = next
+  }
+}, { deep: true })
 
 async function handleLocalRepair(rawId: number) {
   if (!store.currentKB) return
@@ -554,6 +607,30 @@ async function deleteRaw(rawId: number) {
   if (!store.currentKB) return
   await wikiApi.deleteRaw(store.currentKB.id, rawId)
   await store.fetchRawMaterials(store.currentKB.id)
+}
+
+async function cancelRaw(rawId: number) {
+  if (!store.currentKB) return
+  const kbId = store.currentKB.id
+  // Optimistic flag — drives the spinner button and "正在取消…" badge text
+  // so the click is visibly registered even if the pipeline is currently
+  // mid-LLM call and won't reach its next abort checkpoint for several seconds.
+  cancellingIds.value.add(rawId)
+  try {
+    await wikiApi.cancelRaw(kbId, rawId)
+  } catch (e) {
+    // Roll back the optimistic state if the call itself failed (auth /
+    // network error). Without this the button would stay stuck in the
+    // cancelling state forever.
+    cancellingIds.value.delete(rawId)
+    throw e
+  }
+  // Re-fetch periodically so the row's status flips from 'processing' to
+  // 'cancelled' as soon as the pipeline observes the flag and writes its
+  // terminal status — at which point the watch below clears the flag.
+  await store.fetchRawMaterials(kbId)
+  setTimeout(() => { store.fetchRawMaterials(kbId) }, 5000)
+  setTimeout(() => { store.fetchRawMaterials(kbId) }, 15000)
 }
 
 async function downloadRaw(raw: { id: number; title?: string }) {
@@ -738,6 +815,12 @@ async function handleScanDir() {
 .status-badge.completed { background: rgba(90, 138, 90, 0.15); color: var(--mc-success); }
 .status-badge.partial { background: rgba(217, 119, 87, 0.15); color: var(--mc-primary); }
 .status-badge.failed { background: var(--mc-danger-bg); color: var(--mc-danger); }
+.status-badge.cancelled { background: var(--mc-bg-sunken); color: var(--mc-text-tertiary); }
+.status-badge.cancelling { background: var(--mc-bg-sunken); color: var(--mc-text-secondary); }
+
+.btn-icon.btn-icon-cancelling { cursor: default; opacity: 0.7; }
+.btn-icon.btn-icon-cancelling .spinner { animation: rmp-spin 0.9s linear infinite; }
+@keyframes rmp-spin { to { transform: rotate(360deg); } }
 
 /* Process button */
 .process-btn { width: 100%; justify-content: center; margin-top: 16px; }

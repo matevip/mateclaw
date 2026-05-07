@@ -46,8 +46,17 @@ public class WikiRawMaterialEntity {
     /** 文件大小（字节） */
     private Long fileSize;
 
-    /** 处理状态：pending / processing / completed / failed */
+    /** 处理状态：pending / processing / completed / failed / partial / cancelled */
     private String processingStatus;
+
+    /**
+     * User-requested cancellation flag. Set to {@code true} via the cancel
+     * endpoint while a raw material is in {@code processing}. The pipeline
+     * observes the flag at its abort checkpoints and exits early with
+     * {@code processingStatus = "cancelled"}; the flag is cleared on the
+     * next successful claim for processing.
+     */
+    private Boolean cancelRequested;
 
     /** 上次处理时间 */
     private LocalDateTime lastProcessedAt;
