@@ -317,6 +317,7 @@ import { mcConfirm } from '@/components/common/useConfirm'
 import { ChatDotRound, Delete, Plus, Setting, UploadFilled } from '@element-plus/icons-vue'
 import { conversationApi, agentApi, modelApi, chatApi, cronJobApi } from '@/api/index'
 import { channelIconUrl } from '@/utils/channelSource'
+import { copyToClipboard } from '@/utils/clipboard'
 import { useChat } from '@/composables/chat/useChat'
 import { reconstructErrorInfo } from '@/types/chatError'
 import { reconcileMessages, extractMessages } from '@/utils/messageReconcile'
@@ -1741,7 +1742,7 @@ function handleCodeCopy(e: MouseEvent) {
   const encoded = btn.getAttribute('data-code')
   if (!encoded) return
   const code = decodeURIComponent(encoded)
-  navigator.clipboard.writeText(code).then(() => {
+  copyToClipboard(code).then(() => {
     btn.classList.add('copied')
     const textEl = btn.querySelector('.code-block__copy-text')
     if (textEl) textEl.textContent = t('chat.copied')
