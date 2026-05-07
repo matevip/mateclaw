@@ -356,22 +356,56 @@
               </summary>
               <p class="binding-hint">{{ t('agents.binding.toolsHint') }}</p>
               <p class="binding-hint advanced-tools-note">{{ t('agents.binding.advancedToolsHint') }}</p>
-              <div v-if="availableTools.length === 0" class="binding-empty">{{ t('agents.binding.noTools') }}</div>
+              <p class="binding-hint advanced-tools-note">{{ t('agents.binding.toolUnionHint') }}</p>
+              <!-- Render the empty state only when there is genuinely
+                   nothing to show. availableTools can be empty while
+                   availableToolGroups still contains a synthesized
+                   orphan group (saved bindings whose tools dropped out
+                   of the catalog) — that case must reach the list so
+                   the user can clean those orphans up. -->
+              <div v-if="availableToolGroups.length === 0" class="binding-empty">{{ t('agents.binding.noTools') }}</div>
               <div v-else class="binding-list">
-                <label
-                  v-for="tool in availableTools"
-                  :key="tool.name"
-                  class="binding-item"
-                  :class="{ selected: selectedToolNames.includes(tool.name) }"
-                >
-                  <input type="checkbox" :value="tool.name" v-model="selectedToolNames" class="binding-checkbox" />
-                  <span class="binding-icon"><SkillIcon :value="tool.icon" :size="20" :fallback="'🔧'" /></span>
-                  <div class="binding-info">
-                    <span class="binding-name">{{ tool.displayName || tool.name }}</span>
-                    <span v-if="tool.description" class="binding-desc">{{ tool.description?.slice(0, 80) }}</span>
-                  </div>
-                  <span class="binding-type-badge">{{ tool.toolType }}</span>
-                </label>
+                <template v-for="group in availableToolGroups" :key="group.groupId">
+                  <div class="binding-group-header">{{ group.label }}</div>
+                  <label
+                    v-for="tool in group.tools"
+                    :key="tool.rowId || `${group.groupId}#${tool.rawName}#${tool.name}`"
+                    class="binding-item"
+                    :class="{
+                      selected: tool._isSelected,
+                      'binding-item--stale': tool.stale,
+                      'binding-item--unavailable': !tool.available,
+                    }"
+                    :title="!tool.available
+                      ? t('agents.binding.toolUnavailableTooltip', { reason: tool.unavailableReason || '' })
+                      : (tool.stale ? t('agents.binding.toolStaleTooltip') : tool.name)"
+                  >
+                    <!-- Manual checkbox state. Two rows can share the
+                         same tool.name (hash-collision twin or
+                         duplicate-raw twin); v-model would auto-sync
+                         both, so we drive each row's checked flag from
+                         the pre-computed _isSelected derived in
+                         availableToolGroups, which considers whether
+                         this row's name is owned by a bindable twin. -->
+                    <input
+                      type="checkbox"
+                      class="binding-checkbox"
+                      :checked="tool._isSelected"
+                      :disabled="tool._isDisabled"
+                      @change="onToolToggle(tool.name, $event)"
+                    />
+                    <span class="binding-icon">
+                      <SkillIcon :value="tool.source === 'mcp' ? '🔌' : '🔧'" :size="20" :fallback="'🔧'" />
+                    </span>
+                    <div class="binding-info">
+                      <span class="binding-name">{{ tool.rawName || tool.name }}</span>
+                      <span v-if="tool.description" class="binding-desc">{{ tool.description?.slice(0, 80) }}</span>
+                    </div>
+                    <span v-if="tool.stale" class="binding-stale-badge">{{ t('agents.binding.toolStaleBadge') }}</span>
+                    <span v-if="!tool.available" class="binding-unavailable-badge">{{ t('agents.binding.toolUnavailableBadge') }}</span>
+                    <span v-else class="binding-type-badge">{{ tool.source }}</span>
+                  </label>
+                </template>
               </div>
             </details>
           </div>
@@ -456,6 +490,116 @@ const advancedToolsOpen = ref(false)
 // Binding state
 const availableSkills = ref<any[]>([])
 const availableTools = ref<any[]>([])
+
+/**
+ * Group the flat /tools/available payload by source so the picker
+ * renders one section per origin (built-in, MCP per server). Groups
+ * are stable in insertion order — built-in first because the API
+ * returns them first, then MCP groups in server discovery order.
+ *
+ * <p>For each row we also pre-compute {@code _isSelected} /
+ * {@code _isDisabled} so the template doesn't have to derive them from
+ * {@code tool.name} alone. With hash-collision and duplicate-raw rows
+ * sharing the same {@code name} as the bindable twin, naively using
+ * {@code selectedToolNames.includes(tool.name)} would mark both checked
+ * and let the user uncheck the unavailable one — the unchecked twin
+ * would silently mutate the bound name. The pre-computed flags decouple
+ * each row's UI state from any sibling row that shares its prefixed
+ * name.
+ */
+const availableToolGroups = computed(() => {
+  const groups: Record<string, { groupId: string; label: string; tools: any[] }> = {}
+  const order: string[] = []
+
+  // Names that any available row claims. Unavailable rows whose name is
+  // also held by an available row are "shadowed" — they must never look
+  // selected and must never accept a click. Unavailable rows whose name
+  // ISN'T in this set are orphans (e.g. a saved binding whose tool got
+  // removed upstream); the user must still be able to uncheck them.
+  const bindableNames = new Set<string>()
+  // Names that appear anywhere in availableTools (with either flag). Any
+  // entry in selectedToolNames whose name is not in this set is a
+  // "catalog-orphan" — saved before the upstream catalog dropped it —
+  // and needs a synthesized row so the user can uncheck it.
+  const knownNames = new Set<string>()
+  for (const t of availableTools.value) {
+    knownNames.add(t.name)
+    if (t.available) bindableNames.add(t.name)
+  }
+
+  for (const t of availableTools.value) {
+    const key = t.groupId || (t.source === 'mcp' ? `mcp:${t.providerId}` : 'builtin')
+    if (!groups[key]) {
+      const label = t.group || (t.source === 'mcp' ? `MCP · ${t.providerName ?? ''}` : t.source || 'tools')
+      groups[key] = { groupId: key, label, tools: [] }
+      order.push(key)
+    }
+
+    const inSelection = selectedToolNames.value.includes(t.name)
+    const isOrphanUnavailable = !t.available && !bindableNames.has(t.name)
+    // selected: only the bindable row owns the name; orphan unavailable
+    // rows reflect their own selection state so the user can clean them up.
+    const _isSelected = (t.available || isOrphanUnavailable) && inSelection
+    // disabled: shadowed rows are hard-disabled (let the bindable twin
+    // own the click); orphan unavailable rows allow only "uncheck"
+    // (currently-selected → enabled; not selected → disabled).
+    const _isDisabled = !t.available && !(isOrphanUnavailable && inSelection)
+    groups[key].tools.push({ ...t, _isSelected, _isDisabled, _isOrphanUnavailable: isOrphanUnavailable })
+  }
+
+  // Catalog-orphan synthesis: any name in the existing binding that
+  // /tools/available no longer returns at all. The backend save path
+  // permits removing such names ("keeps" don't validate), but without a
+  // visible row the user has no way to trigger the removal. Render them
+  // in their own group; uncheck removes them from selectedToolNames and
+  // the synthesized row vanishes on the next computed pass (the name is
+  // no longer in selectedToolNames).
+  const orphanNames = selectedToolNames.value.filter((n) => !knownNames.has(n))
+  if (orphanNames.length > 0) {
+    const orphanGroupId = 'orphan'
+    groups[orphanGroupId] = {
+      groupId: orphanGroupId,
+      label: t('agents.binding.toolOrphanGroup'),
+      tools: orphanNames.map((n) => ({
+        rowId: `orphan#${n}`,
+        source: 'orphan',
+        providerId: null,
+        providerName: null,
+        name: n,
+        rawName: n,
+        description: t('agents.binding.toolOrphanDescription'),
+        group: t('agents.binding.toolOrphanGroup'),
+        groupId: orphanGroupId,
+        stale: false,
+        available: false,
+        unavailableReason: 'NOT_IN_CATALOG',
+        // Always selected (it is, by definition, in selectedToolNames)
+        // and always uncheckable so the user can remove it.
+        _isSelected: true,
+        _isDisabled: false,
+        _isOrphanUnavailable: true,
+      })),
+    }
+    order.push(orphanGroupId)
+  }
+  return order.map((k) => groups[k])
+})
+
+/**
+ * Manual checkbox handler — replaces v-model on the picker row so that
+ * two rows sharing a tool name (collision/duplicate twins) don't drag
+ * each other's selection state via Vue's v-model auto-sync.
+ */
+function onToolToggle(toolName: string, event: Event) {
+  const target = event.target as HTMLInputElement
+  if (target.checked) {
+    if (!selectedToolNames.value.includes(toolName)) {
+      selectedToolNames.value.push(toolName)
+    }
+  } else {
+    selectedToolNames.value = selectedToolNames.value.filter((n) => n !== toolName)
+  }
+}
 const selectedSkillIds = ref<number[]>([])
 const selectedToolNames = ref<string[]>([])
 // RFC-009 PR-3: per-agent provider preference order
@@ -679,7 +823,10 @@ async function openEditModal(agent: Agent) {
       // RFC-042: /skills is now paginated; binding dropdown only needs enabled skills,
       // so listEnabled() is both semantically correct and shape-stable (returns array).
       skillApi.listEnabled(),
-      toolApi.list(),
+      // /tools/available aggregates built-in tools + every MCP-discovered
+      // tool grouped by server, with stale/available flags so the picker
+      // matches the runtime callback set exactly.
+      toolApi.listAvailable(),
       modelApi.listProviders(),
       agentBindingApi.listSkills(agent.id),
       agentBindingApi.listTools(agent.id),

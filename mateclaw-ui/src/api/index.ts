@@ -318,6 +318,12 @@ export const datasourceApi = {
 export const toolApi = {
   list: () => http.get('/tools'),
   listEnabled: () => http.get('/tools/enabled'),
+  /**
+   * Unified picker source for the agent edit tool tab — returns built-in
+   * tools plus every MCP-discovered tool grouped by server. The `name`
+   * field is what gets saved into mate_agent_tool.tool_name.
+   */
+  listAvailable: () => http.get('/tools/available'),
   get: (id: string | number) => http.get(`/tools/${id}`),
   create: (data: any) => http.post('/tools', data),
   update: (id: string | number, data: any) => http.put(`/tools/${id}`, data),
