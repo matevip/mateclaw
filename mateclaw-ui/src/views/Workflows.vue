@@ -50,28 +50,64 @@
                 <button class="btn-danger" :disabled="busy" @click="remove">{{ t('workflows.actions.delete') }}</button>
               </div>
             </header>
-            <div class="editor-toolbar">
-              <label class="template-picker">
-                <span>{{ t('workflows.templates.label') }}</span>
-                <select v-model="templateChoice" @change="insertTemplate">
-                  <option value="">{{ t('workflows.templates.placeholder') }}</option>
-                  <option value="sequential">{{ t('workflows.templates.sequential') }}</option>
-                  <option value="fan_out">{{ t('workflows.templates.fan_out') }}</option>
-                  <option value="collect">{{ t('workflows.templates.collect') }}</option>
-                  <option value="conditional">{{ t('workflows.templates.conditional') }}</option>
-                  <option value="await_approval">{{ t('workflows.templates.await_approval') }}</option>
-                  <option value="dispatch_channel">{{ t('workflows.templates.dispatch_channel') }}</option>
-                  <option value="write_memory">{{ t('workflows.templates.write_memory') }}</option>
-                </select>
-              </label>
-              <span class="json-hint" :class="jsonHintKind">{{ jsonHint }}</span>
+
+            <div class="editor-tabs">
+              <button class="tab-btn" :class="{ active: editorTab === 'canvas' }" @click="editorTab = 'canvas'">
+                {{ t('workflows.tabs.canvas') }}
+              </button>
+              <button class="tab-btn" :class="{ active: editorTab === 'json' }" @click="editorTab = 'json'">
+                {{ t('workflows.tabs.json') }}
+              </button>
             </div>
-            <textarea
-              v-model="draftJson"
-              class="editor-body"
-              spellcheck="false"
-              :placeholder="t('workflows.bodyPlaceholder')"
-            />
+
+            <div v-if="editorTab === 'canvas'" class="canvas-pane">
+              <WorkflowCanvas
+                v-model="canvasModel"
+                :canvas-id="`wf-${selected.id}`"
+                @select-step="onCanvasSelect"
+              />
+              <aside v-if="canvasSelection" class="canvas-inspector">
+                <header>{{ t('workflows.canvas.inspector.title') }}</header>
+                <dl class="inspector-grid">
+                  <dt>{{ t('workflows.dialogs.fieldName') }}</dt><dd>{{ canvasSelection.name }}</dd>
+                  <dt>mode</dt><dd>{{ canvasSelection.modeType }}</dd>
+                  <dt v-if="canvasSelection.agentName">{{ t('workflows.canvas.nodeAgent') }}</dt>
+                  <dd v-if="canvasSelection.agentName">{{ canvasSelection.agentName }}</dd>
+                  <dt v-if="canvasSelection.expression">{{ t('workflows.canvas.nodeExpression') }}</dt>
+                  <dd v-if="canvasSelection.expression"><code>{{ canvasSelection.expression }}</code></dd>
+                </dl>
+                <details>
+                  <summary>{{ t('workflows.canvas.inspector.rawHeader') }}</summary>
+                  <pre class="inspector-raw">{{ inspectorJson }}</pre>
+                </details>
+              </aside>
+            </div>
+
+            <div v-else class="json-pane">
+              <div class="editor-toolbar">
+                <label class="template-picker">
+                  <span>{{ t('workflows.templates.label') }}</span>
+                  <select v-model="templateChoice" @change="insertTemplate">
+                    <option value="">{{ t('workflows.templates.placeholder') }}</option>
+                    <option value="sequential">{{ t('workflows.templates.sequential') }}</option>
+                    <option value="fan_out">{{ t('workflows.templates.fan_out') }}</option>
+                    <option value="collect">{{ t('workflows.templates.collect') }}</option>
+                    <option value="conditional">{{ t('workflows.templates.conditional') }}</option>
+                    <option value="await_approval">{{ t('workflows.templates.await_approval') }}</option>
+                    <option value="dispatch_channel">{{ t('workflows.templates.dispatch_channel') }}</option>
+                    <option value="write_memory">{{ t('workflows.templates.write_memory') }}</option>
+                  </select>
+                </label>
+                <span class="json-hint" :class="jsonHintKind">{{ jsonHint }}</span>
+              </div>
+              <textarea
+                v-model="draftJson"
+                class="editor-body"
+                spellcheck="false"
+                :placeholder="t('workflows.bodyPlaceholder')"
+              />
+            </div>
+
             <div v-if="compileErrors.length" class="errors-panel">
               <div class="errors-title">{{ t('workflows.compileErrorsTitle', { count: compileErrors.length }) }}</div>
               <ul>
@@ -126,12 +162,16 @@
         </div>
       </div>
     </div>
+
+    <CreateWorkflowDialog v-model="createDialogOpen" :loading="busy" @submit="onCreateSubmit" />
+    <PublishDialog v-model="publishDialogOpen" :loading="busy" @submit="onPublishSubmit" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { ElMessageBox } from 'element-plus'
 import {
   workflowApi,
   type WorkflowSummary,
@@ -141,6 +181,10 @@ import {
   type WorkflowCompileFailure,
 } from '@/api'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
+import WorkflowCanvas from '@/components/workflow/WorkflowCanvas.vue'
+import CreateWorkflowDialog from '@/components/workflow/CreateWorkflowDialog.vue'
+import PublishDialog from '@/components/workflow/PublishDialog.vue'
+import type { StepNodeData } from '@/composables/useWorkflowGraph'
 
 const { t } = useI18n()
 const workspaceStore = useWorkspaceStore()
@@ -159,6 +203,36 @@ const runs = ref<WorkflowRun[]>([])
 const runDetail = ref<{ run: WorkflowRun; steps: WorkflowRunStep[] } | null>(null)
 
 const templateChoice = ref('')
+
+// View-mode toggle between the canvas (read-only graph derived from
+// the JSON) and the raw JSON editor. Canvas is the default — most
+// authors visit the page to make sense of an existing flow rather
+// than to type fresh JSON.
+const editorTab = ref<'canvas' | 'json'>('canvas')
+
+// The canvas reads from `draftJson` directly. We keep the model write
+// path on the JSON editor only — the canvas is purely a derived view
+// to avoid two sources of truth drifting apart.
+const canvasModel = computed({
+  get: () => draftJson.value,
+  set: (v: string) => { draftJson.value = v },
+})
+
+const canvasSelection = ref<StepNodeData | null>(null)
+function onCanvasSelect(payload: StepNodeData | null) {
+  canvasSelection.value = payload
+}
+const inspectorJson = computed(() => {
+  if (!canvasSelection.value) return ''
+  try {
+    return JSON.stringify(canvasSelection.value.raw, null, 2)
+  } catch {
+    return ''
+  }
+})
+
+const createDialogOpen = ref(false)
+const publishDialogOpen = ref(false)
 
 // Live JSON-syntax check on the textarea so the operator sees parse errors
 // immediately, instead of waiting for compile to round-trip.
@@ -292,18 +366,23 @@ async function loadRun(runId: number) {
   }
 }
 
-async function openCreate() {
+function openCreate() {
   if (!workspaceId.value) return
-  const name = window.prompt(t('workflows.prompts.newName'), t('workflows.prompts.defaultName'))
-  if (!name) return
+  createDialogOpen.value = true
+}
+
+async function onCreateSubmit(payload: { name: string; description: string }) {
+  if (!workspaceId.value) return
   busy.value = true
   try {
     const res = await workflowApi.create({
       workspaceId: workspaceId.value,
-      name,
+      name: payload.name,
+      description: payload.description || undefined,
       enabled: true,
     })
     const created = res.data as unknown as WorkflowSummary
+    createDialogOpen.value = false
     await reload()
     if (created?.id) await select(created.id)
   } catch (e) {
@@ -359,14 +438,19 @@ async function compile() {
   }
 }
 
-async function publish() {
+function publish() {
+  if (!selected.value) return
+  publishDialogOpen.value = true
+}
+
+async function onPublishSubmit(payload: { note: string }) {
   if (!selected.value) return
   busy.value = true
   compileErrors.value = []
   try {
     await workflowApi.saveDraft(selected.value.id, draftJson.value)
-    const note = window.prompt(t('workflows.prompts.publishNote'), '') ?? undefined
-    await workflowApi.publish(selected.value.id, note)
+    await workflowApi.publish(selected.value.id, payload.note || undefined)
+    publishDialogOpen.value = false
     setStatus(t('workflows.status.published'), 'ok')
     await reload()
   } catch (e) {
@@ -378,7 +462,21 @@ async function publish() {
 
 async function remove() {
   if (!selected.value) return
-  if (!window.confirm(t('workflows.prompts.deleteConfirm', { name: selected.value.name ?? '' }))) return
+  const name = selected.value.name ?? ''
+  try {
+    await ElMessageBox.confirm(
+      t('workflows.dialogs.deleteContent', { name }),
+      t('workflows.dialogs.deleteTitle'),
+      {
+        confirmButtonText: t('workflows.actions.delete'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning',
+      }
+    )
+  } catch {
+    // user cancelled — nothing to do
+    return
+  }
   busy.value = true
   try {
     await workflowApi.delete(selected.value.id)
@@ -471,7 +569,7 @@ watch(workspaceId, reload)
 }
 .list-row:hover,
 .run-row:hover {
-  background: var(--mc-surface-hover, rgba(0, 0, 0, 0.05));
+  background: var(--mc-bg-muted, rgba(0, 0, 0, 0.05));
 }
 .list-row.active {
   background: var(--mc-primary-bg, rgba(64, 132, 255, 0.18));
@@ -493,7 +591,7 @@ watch(workspaceId, reload)
   border-radius: 999px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  background: var(--mc-surface-hover, rgba(0, 0, 0, 0.06));
+  background: var(--mc-bg-muted, rgba(0, 0, 0, 0.06));
 }
 .badge.published {
   background: #2ecc71;
@@ -574,7 +672,7 @@ watch(workspaceId, reload)
   padding: 12px;
   border: 1px solid var(--mc-border, rgba(0, 0, 0, 0.1));
   border-radius: 6px;
-  background: var(--mc-surface, rgba(0, 0, 0, 0.02));
+  background: var(--mc-bg-sunken, rgba(0, 0, 0, 0.02));
   color: inherit;
   resize: vertical;
   min-height: 320px;
@@ -655,7 +753,7 @@ watch(workspaceId, reload)
   margin-top: 12px;
   padding: 10px;
   border-radius: 6px;
-  background: var(--mc-surface, rgba(0, 0, 0, 0.04));
+  background: var(--mc-bg-sunken, rgba(0, 0, 0, 0.04));
 }
 .run-detail-title {
   font-weight: 600;
@@ -711,9 +809,136 @@ button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.editor-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px 0 8px;
+  border-bottom: 1px solid var(--mc-border, rgba(0, 0, 0, 0.06));
+  margin-bottom: 8px;
+}
+.tab-btn {
+  padding: 6px 14px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 6px;
+  opacity: 0.7;
+}
+.tab-btn:hover {
+  background: var(--mc-bg-muted, rgba(0, 0, 0, 0.04));
+  opacity: 1;
+}
+.tab-btn.active {
+  opacity: 1;
+  background: var(--mc-primary-bg, rgba(64, 132, 255, 0.14));
+  color: var(--mc-primary, #4084ff);
+}
+.canvas-pane {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 240px;
+  gap: 12px;
+  min-height: 360px;
+}
+.canvas-inspector {
+  background: var(--mc-bg-elevated, rgba(0, 0, 0, 0.02));
+  border: 1px solid var(--mc-border, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+.canvas-inspector header {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.inspector-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  margin: 0;
+  font-size: 12px;
+}
+.inspector-grid dt {
+  opacity: 0.6;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  align-self: center;
+}
+.inspector-grid dd {
+  margin: 0;
+  word-break: break-word;
+}
+.inspector-grid code {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 11px;
+}
+.inspector-raw {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 10.5px;
+  background: var(--mc-bg-sunken, rgba(0, 0, 0, 0.04));
+  border-radius: 6px;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  margin-top: 6px;
+}
+.json-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 360px;
+}
+
+/* Responsive: collapse to a single column below 1100px so the editor
+   can breathe on tablets, and stack everything vertically below 720px
+   so the page is usable on a phone. The runs panel becomes a
+   collapsible details element on small screens. */
 @media (max-width: 1100px) {
   .workflows-grid {
     grid-template-columns: 1fr;
+  }
+  .canvas-pane {
+    grid-template-columns: 1fr;
+  }
+  .canvas-inspector {
+    max-height: 240px;
+  }
+}
+@media (max-width: 720px) {
+  .mc-page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .editor-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .editor-name,
+  .editor-desc {
+    flex: none;
+    width: 100%;
+  }
+  .editor-actions {
+    justify-content: flex-end;
+  }
+  .editor-body {
+    min-height: 240px;
+  }
+  .canvas-pane {
+    min-height: 320px;
   }
 }
 </style>

@@ -309,7 +309,7 @@ watch(workspaceId, reload)
 }
 .triggers-table th {
   font-weight: 600;
-  background: var(--mc-surface, rgba(0, 0, 0, 0.04));
+  background: var(--mc-bg-sunken, rgba(0, 0, 0, 0.04));
 }
 .pattern-detail {
   font-family: 'JetBrains Mono', Consolas, monospace;
@@ -410,5 +410,34 @@ watch(workspaceId, reload)
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Mobile / tablet: the trigger table has 9 columns and breaks on
+   phones. Wrap it in a horizontal-scroll container, collapse the
+   form to one column, and stack the page header. */
+@media (max-width: 900px) {
+  .triggers-table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .triggers-table thead,
+  .triggers-table tbody,
+  .triggers-table tr {
+    display: table;
+    width: 100%;
+    table-layout: auto;
+  }
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .form-grid .span-2 {
+    grid-column: span 1;
+  }
+  .mc-page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
 }
 </style>

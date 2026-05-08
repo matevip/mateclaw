@@ -140,6 +140,11 @@
   --mc-scrollbar-thumb: #C4B5A8;
   --mc-scrollbar-thumb-hover: #A08070;
 
+  /* workflow canvas — vue-flow surfaces */
+  --mc-canvas-dot: rgba(0, 0, 0, 0.18);
+  --mc-edge: #c2b3a5;
+  --mc-edge-strong: #8a7261;
+
   /* Element Plus light override */
   --el-color-primary: #D97757;
   --el-font-family: var(--mc-font-body);
@@ -260,7 +265,49 @@ html.dark {
   --mc-scrollbar-thumb: #5A4438;
   --mc-scrollbar-thumb-hover: #7A6050;
 
+  /* workflow canvas — darker dots + softer edge color so they read on
+     the dark background without overpowering the node card. */
+  --mc-canvas-dot: rgba(255, 255, 255, 0.14);
+  --mc-edge: #5a4a3e;
+  --mc-edge-strong: #8c7361;
+
   color-scheme: dark;
+}
+
+/* Vue Flow theme bridge — its default stylesheet ships hard-coded
+   light colors for handles / mini-map / control buttons. Map them to
+   our theme tokens so dark mode inherits cleanly. */
+.vue-flow__handle {
+  background: var(--mc-edge-strong, #777);
+  border-color: var(--mc-bg-elevated, #fff);
+}
+.vue-flow__edge-path {
+  stroke: var(--mc-edge, #999);
+}
+.vue-flow__edge-text {
+  fill: var(--mc-text-secondary, #555);
+  font-size: 11px;
+}
+.vue-flow__edge-textbg {
+  fill: var(--mc-bg-elevated, #fff);
+}
+.vue-flow__minimap {
+  background: var(--mc-bg-sunken, rgba(0, 0, 0, 0.04)) !important;
+  border: 1px solid var(--mc-border-light, rgba(0, 0, 0, 0.08));
+}
+.vue-flow__minimap-mask {
+  fill: var(--mc-bg-muted, rgba(0, 0, 0, 0.06));
+}
+.vue-flow__controls {
+  box-shadow: var(--mc-shadow-soft, 0 2px 6px rgba(0, 0, 0, 0.1));
+}
+.vue-flow__controls-button {
+  background: var(--mc-bg-elevated, #fff);
+  border-bottom-color: var(--mc-border-light, rgba(0, 0, 0, 0.08));
+  fill: var(--mc-text-primary, #333);
+}
+.vue-flow__controls-button:hover {
+  background: var(--mc-bg-muted, rgba(0, 0, 0, 0.05));
 }
 
 /* ================================================================
