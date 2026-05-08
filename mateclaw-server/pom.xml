@@ -458,6 +458,17 @@
             <artifactId>pdfbox</artifactId>
             <version>3.0.3</version>
         </dependency>
+
+        <!-- Expression language used by the workflow compiler to evaluate
+             conditional step expressions and template variable references.
+             Restricted to a small subset (~20 operators / filters) at the
+             evaluator wrapper layer; arbitrary template includes / extends
+             are blocked. -->
+        <dependency>
+            <groupId>io.pebbletemplates</groupId>
+            <artifactId>pebble</artifactId>
+            <version>3.2.2</version>
+        </dependency>
     </dependencies>
 
     <build>
