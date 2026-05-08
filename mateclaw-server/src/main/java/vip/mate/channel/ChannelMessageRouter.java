@@ -1,6 +1,8 @@
 package vip.mate.channel;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import vip.mate.agent.AgentService;
@@ -8,6 +10,7 @@ import vip.mate.agent.context.ChatOrigin;
 import vip.mate.approval.ApprovalWorkflowService;
 import vip.mate.approval.ResolveOutcome;
 import vip.mate.approval.PendingApproval;
+import vip.mate.channel.event.ChannelMessageReceivedEvent;
 import vip.mate.channel.model.ChannelEntity;
 import vip.mate.channel.notification.ApprovalNotificationService;
 import vip.mate.channel.service.ChannelService;
@@ -59,6 +62,11 @@ public class ChannelMessageRouter {
     private final ChatStreamTracker streamTracker;
     private final ChannelChatOriginFactory chatOriginFactory;
     private final ChannelErrorClassifier errorClassifier;
+    /** Field-injected (rather than constructor) to avoid a signature
+     *  change that would ripple through every test that constructs the
+     *  router directly. Spring's stock publisher is always available. */
+    @Autowired(required = false)
+    private ApplicationEventPublisher events;
 
     /** 队列条目：封装消息及其路由上下文 */
     private record QueueEntry(ChannelMessage message, ChannelAdapter adapter, ChannelEntity channelEntity) {}
@@ -189,6 +197,14 @@ public class ChannelMessageRouter {
      * @param channelEntity 渠道配置（含关联 agentId）
      */
     public void enqueue(ChannelMessage message, ChannelAdapter adapter, ChannelEntity channelEntity) {
+        // Fan out to the trigger pipeline FIRST — channel_message and
+        // content_match triggers fire on every received message regardless
+        // of whether the channel has an agent attached. If we returned
+        // early on a missing agent below without publishing, the workflow
+        // side would silently lose every channel-event that doesn't also
+        // route to a chat agent.
+        publishChannelEvent(message, adapter, channelEntity);
+
         Long agentId = channelEntity.getAgentId();
         if (agentId == null) {
             log.warn("Channel {} has no associated agent, ignoring message from {}",
@@ -228,6 +244,43 @@ public class ChannelMessageRouter {
             pendingMessages.put(conversationId, pending);
             pending.timer = debounceScheduler.schedule(
                     () -> flushPending(conversationId), DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    /**
+     * Publish a {@link ChannelMessageReceivedEvent} so the trigger module's
+     * bridge can fan the message out to channel_message + content_match
+     * triggers. Best-effort — a publish failure must never block the
+     * primary chat-routing path. {@code messageId} is used as the dedup
+     * key downstream so repeated webhook deliveries can't double-fire
+     * the same trigger.
+     */
+    private void publishChannelEvent(ChannelMessage message, ChannelAdapter adapter,
+                                     ChannelEntity channelEntity) {
+        if (events == null || message == null || adapter == null || channelEntity == null) return;
+        try {
+            long ws = channelEntity.getWorkspaceId() == null ? 0L : channelEntity.getWorkspaceId();
+            String channelType = adapter.getChannelType();
+            // messageId may be null for adapters that don't surface one;
+            // fall back to a sender+timestamp composite so the dedup key
+            // is at least deterministic-ish per webhook delivery.
+            String messageId = message.getMessageId();
+            if (messageId == null || messageId.isBlank()) {
+                messageId = channelType + ":" + message.getSenderId() + ":"
+                        + (message.getTimestamp() == null ? System.currentTimeMillis()
+                                                          : message.getTimestamp());
+            }
+            events.publishEvent(new ChannelMessageReceivedEvent(
+                    ws,
+                    channelType,
+                    messageId,
+                    message.getSenderId(),
+                    message.getSenderName(),
+                    message.getChatId(),
+                    message.getContent()));
+        } catch (Exception e) {
+            log.warn("[ChannelMessageRouter] event publish failed for sender {}: {}",
+                    message.getSenderId(), e.getMessage());
         }
     }
 

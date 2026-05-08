@@ -58,8 +58,13 @@ const selectStep = inject<(data: StepNodeData | null) => void>(
   'selectStepCallback',
   () => {}
 )
-function handleClick() {
+function handleClick(event: MouseEvent) {
   selectStep(props.data as StepNodeData)
+  const root = event.currentTarget as HTMLElement | null
+  const canvasId = root?.closest('.workflow-canvas')?.getAttribute('data-canvas-id') ?? undefined
+  window.dispatchEvent(new CustomEvent('mateclaw:workflow-step-select', {
+    detail: { canvasId, data: props.data as StepNodeData },
+  }))
 }
 
 // Position values come from the parent canvas (LR or TB orientation);

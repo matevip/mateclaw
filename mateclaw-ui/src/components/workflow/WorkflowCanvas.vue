@@ -1,5 +1,5 @@
 <template>
-  <div class="workflow-canvas" :class="{ fullscreen }">
+  <div class="workflow-canvas" :class="{ fullscreen }" :data-canvas-id="canvasId">
     <div class="canvas-toolbar">
       <div class="canvas-toolbar-group">
         <button class="canvas-btn" :class="{ active: direction === 'LR' }" @click="direction = 'LR'">
@@ -75,6 +75,10 @@
         zoomable
       />
     </VueFlow>
+
+    <div v-if="$slots.panel" class="canvas-panel-slot">
+      <slot name="panel" />
+    </div>
   </div>
 </template>
 
@@ -155,7 +159,13 @@ function selectStep(data: StepNodeData | null) {
 provide('selectStepCallback', selectStep)
 
 const flow = useVueFlow(props.canvasId)
+function handleDomStepSelect(event: Event) {
+  const detail = (event as CustomEvent<{ canvasId?: string; data?: StepNodeData }>).detail
+  if (!detail?.data || detail.canvasId !== props.canvasId) return
+  selectStep(detail.data)
+}
 onMounted(() => {
+  window.addEventListener('mateclaw:workflow-step-select', handleDomStepSelect as EventListener)
   flow.onNodeClick((evt) => {
     const data = (evt?.node as Node<StepNodeData> | undefined)?.data
     if (data) selectStep(data)
@@ -198,6 +208,7 @@ watch(fullscreen, (on) => {
   }
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('mateclaw:workflow-step-select', handleDomStepSelect as EventListener)
   document.removeEventListener('keydown', handleEsc)
   document.body.style.overflow = ''
 })
@@ -321,5 +332,41 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   min-height: 280px;
+}
+.canvas-flow :deep(.vue-flow__edge-path) {
+  stroke: var(--mc-edge, rgba(74, 85, 104, 0.78));
+  stroke-width: 2;
+}
+.canvas-flow :deep(.vue-flow__edge-textbg) {
+  fill: var(--mc-bg-elevated, #ffffff);
+}
+.canvas-flow :deep(.vue-flow__edge-text) {
+  fill: var(--mc-text-secondary, #666666);
+  font-size: 11px;
+}
+.canvas-panel-slot {
+  position: absolute;
+  top: 56px;
+  right: 14px;
+  bottom: 14px;
+  width: min(340px, calc(100% - 28px));
+  z-index: 12;
+  pointer-events: none;
+}
+.canvas-panel-slot :deep(.step-panel) {
+  height: 100%;
+  max-height: none;
+  pointer-events: auto;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+}
+@media (max-width: 760px) {
+  .canvas-panel-slot {
+    top: auto;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    width: auto;
+    height: min(56vh, 420px);
+  }
 }
 </style>

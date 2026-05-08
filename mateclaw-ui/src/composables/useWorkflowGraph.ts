@@ -124,6 +124,15 @@ export function buildGraph(json: string): { nodes: Node<StepNodeData>[]; edges: 
   //   mergePoint: the node id whose output the next non-fan_out step should consume
   //   fanGroup:   the ids of fan_out steps in the most recent open group, ready to be joined by a collect
   const edges: Edge[] = []
+  const pushEdge = (source: string, target: string, extra: Partial<Edge> = {}) => {
+    edges.push({
+      id: `edge-${edges.length + 1}`,
+      source,
+      target,
+      animated: false,
+      ...extra,
+    })
+  }
   let mergePoint: string | null = null
   let fanGroup: string[] = []
   let prevModeWasFanOut = false
@@ -135,12 +144,7 @@ export function buildGraph(json: string): { nodes: Node<StepNodeData>[]; edges: 
       if (!prevModeWasFanOut) fanGroup = []
       fanGroup.push(node.id)
       if (mergePoint) {
-        edges.push({
-          id: `e-${mergePoint}->${node.id}`,
-          source: mergePoint,
-          target: node.id,
-          animated: false,
-        })
+        pushEdge(mergePoint, node.id)
       }
       prevModeWasFanOut = true
     } else if (mode === 'collect') {
@@ -150,12 +154,7 @@ export function buildGraph(json: string): { nodes: Node<StepNodeData>[]; edges: 
       // canvas surfaces the orphan visually.
       const sources = fanGroup.length ? fanGroup : (mergePoint ? [mergePoint] : [])
       for (const src of sources) {
-        edges.push({
-          id: `e-${src}->${node.id}`,
-          source: src,
-          target: node.id,
-          animated: false,
-        })
+        pushEdge(src, node.id)
       }
       fanGroup = []
       mergePoint = node.id
@@ -164,16 +163,11 @@ export function buildGraph(json: string): { nodes: Node<StepNodeData>[]; edges: 
       // Sequential / conditional / await_approval / dispatch_channel / write_memory
       // all attach to the current merge point and become the next merge point.
       if (mergePoint) {
-        const edge: Edge = {
-          id: `e-${mergePoint}->${node.id}`,
-          source: mergePoint,
-          target: node.id,
-          animated: false,
-        }
+        const edge: Partial<Edge> = {}
         if (mode === 'conditional' && node.data?.expression) {
           edge.label = `if ${node.data.expression}`
         }
-        edges.push(edge)
+        pushEdge(mergePoint, node.id, edge)
       }
       mergePoint = node.id
       fanGroup = []

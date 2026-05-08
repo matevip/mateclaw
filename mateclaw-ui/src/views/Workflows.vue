@@ -65,15 +65,17 @@
                 v-model="canvasModel"
                 :canvas-id="`wf-${selected.id}`"
                 @select-step="onCanvasSelect"
-              />
-              <StepPropertyPanel
-                v-if="canvasSelection"
-                :step="selectedStep"
-                :index="canvasSelection.index"
-                @patch="onStepPatch"
-                @duplicate="onStepDuplicate"
-                @delete="onStepDelete"
-              />
+              >
+                <template v-if="canvasSelection" #panel>
+                  <StepPropertyPanel
+                    :step="selectedStep"
+                    :index="canvasSelection.index"
+                    @patch="onStepPatch"
+                    @duplicate="onStepDuplicate"
+                    @delete="onStepDelete"
+                  />
+                </template>
+              </WorkflowCanvas>
             </div>
 
             <div v-else class="json-pane">
