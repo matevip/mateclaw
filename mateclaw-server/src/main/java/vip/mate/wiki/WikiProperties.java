@@ -130,6 +130,21 @@ public class WikiProperties {
      */
     private int embeddingMaxChars = 6000;
 
+    /**
+     * Circuit-breaker threshold: abort an embedding pass after this many
+     * consecutive batch failures (auth / rate-limit / network errors that
+     * cause an entire batch to embed zero chunks). Without it, a broken
+     * provider would silently iterate through every pending chunk in the
+     * KB, producing only log noise and wasted wall-clock time before the
+     * user can intervene.
+     * <p>
+     * Set too low and a transient blip aborts a healthy pass; set too
+     * high and the user waits forever on a clearly-broken provider.
+     * Default 5 covers most real outages while tolerating a couple of
+     * isolated 5xx hiccups.
+     */
+    private int embeddingConsecutiveFailureThreshold = 5;
+
     /** 混合搜索默认模式：keyword / semantic / hybrid */
     private String searchDefaultMode = "hybrid";
 

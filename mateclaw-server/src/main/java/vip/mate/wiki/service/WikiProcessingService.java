@@ -436,6 +436,12 @@ public class WikiProcessingService {
                         if (embedded > 0) {
                             log.info("[Wiki] Async embedding completed: kbId={}, embedded={}", fKbId, embedded);
                         }
+                    } catch (vip.mate.wiki.job.WikiEmbeddingProviderFailingException ex) {
+                        // Circuit-breaker tripped — the provider has consistently failed.
+                        // The exception's own log line in WikiEmbeddingService is enough;
+                        // emit a calmer notice here instead of a generic failure log.
+                        log.warn("[Wiki] Async embedding aborted by circuit-breaker for kbId={}: {}",
+                                fKbId, ex.getMessage());
                     } catch (Exception ex) {
                         log.warn("[Wiki] Async embedding failed for kbId={}: {}", fKbId, ex.getMessage());
                     }
@@ -2306,6 +2312,9 @@ public class WikiProcessingService {
                     if (embedded > 0) {
                         log.info("[Wiki] Lazy async embedding completed: kbId={}, embedded={}", fKbId, embedded);
                     }
+                } catch (vip.mate.wiki.job.WikiEmbeddingProviderFailingException ex) {
+                    log.warn("[Wiki] Lazy async embedding aborted by circuit-breaker for kbId={}: {}",
+                            fKbId, ex.getMessage());
                 } catch (Exception ex) {
                     log.warn("[Wiki] Lazy async embedding failed for kbId={}: {}", fKbId, ex.getMessage());
                 }
