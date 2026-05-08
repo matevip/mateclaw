@@ -208,6 +208,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { mcConfirm } from '@/components/common/useConfirm'
 import { agentApi, agentContextApi } from '@/api/index'
+import { copyToClipboard } from '@/utils/clipboard'
 import type { Agent, WorkspaceFile } from '@/types/index'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { plainTextIcon } from '@/composables/usePixelarticons'
@@ -330,7 +331,7 @@ function handlePreviewClick(e: MouseEvent) {
   const encoded = btn.getAttribute('data-code')
   if (!encoded) return
   const code = decodeURIComponent(encoded)
-  navigator.clipboard.writeText(code).then(() => {
+  copyToClipboard(code).then(() => {
     btn.classList.add('copied')
     const textEl = btn.querySelector('.code-block__copy-text')
     if (textEl) textEl.textContent = t('chat.copied') || 'Copied'
