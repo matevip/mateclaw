@@ -179,8 +179,29 @@ const customRenderer = {
 
     // Mermaid: ship raw source through a placeholder div for the
     // useMermaidRenderer post-mount step. Skip syntax highlighting entirely.
+    // The header (lang label + Copy + Download SVG) is part of the placeholder
+    // so users can copy the diagram source even before render completes; the
+    // composable paints the SVG into `.mermaid-block__body`.
     if (infoStr === 'mermaid') {
-      return `<div class="mermaid-block" data-mermaid="${encodeURIComponent(rawCode)}"></div>`
+      const encoded = encodeURIComponent(rawCode)
+      const copySvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`
+      const downloadSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`
+      return `<div class="mermaid-block" data-mermaid="${encoded}">`
+        + `<div class="mermaid-block__header">`
+        + `<span class="mermaid-block__lang">Mermaid</span>`
+        + `<span class="mermaid-block__actions">`
+        + `<button class="code-block__copy" type="button" data-code="${encoded}" aria-label="Copy diagram source">`
+        + copySvg
+        + `<span class="code-block__copy-text">Copy</span>`
+        + `</button>`
+        + `<button class="mermaid-block__download" type="button" data-mermaid-download="1" aria-label="Download SVG">`
+        + downloadSvg
+        + `<span class="mermaid-block__download-text">SVG</span>`
+        + `</button>`
+        + `</span>`
+        + `</div>`
+        + `<div class="mermaid-block__body"></div>`
+        + `</div>`
     }
 
     // ECharts: same pattern, mounted by useEChartsRenderer.
@@ -298,7 +319,8 @@ const purifyConfig = {
   ADD_ATTR: [
     'target', 'rel', 'class',
     'data-code', 'data-echarts-option', 'data-wiki-title', 'data-slug',
-    'data-tex', 'data-mermaid',
+    'data-tex', 'data-mermaid', 'data-mermaid-download',
+    'x1', 'y1', 'x2', 'y2',
     'aria-label', 'open',
     'type', 'viewBox', 'fill', 'stroke', 'stroke-width', 'd',
     'x', 'y', 'width', 'height', 'rx', 'ry', 'points',

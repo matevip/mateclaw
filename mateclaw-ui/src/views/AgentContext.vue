@@ -211,6 +211,7 @@ import { agentApi, agentContextApi } from '@/api/index'
 import { copyToClipboard } from '@/utils/clipboard'
 import type { Agent, WorkspaceFile } from '@/types/index'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
+import { handleMermaidDownload } from '@/composables/useMermaidRenderer'
 import { plainTextIcon } from '@/composables/usePixelarticons'
 
 const { renderMarkdown } = useMarkdownRenderer()
@@ -321,6 +322,7 @@ async function fetchPromptFiles() {
 }
 
 function handlePreviewClick(e: MouseEvent) {
+  if (handleMermaidDownload(e)) return
   const btn = (e.target as HTMLElement).closest('.code-block__copy') as HTMLElement | null
   if (!btn) return
   // Same as ChatConsole: the copy button now lives inside <details><summary>

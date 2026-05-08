@@ -1958,25 +1958,125 @@ watch(isGenerating, (generating) => {
 /* ===== Mermaid block ===== */
 .markdown-body :deep(.mermaid-block) {
   margin: 14px 0;
-  padding: 16px;
   border-radius: 12px;
   background: var(--mc-mermaid-bg, #f8fafc);
   border: 1px solid var(--mc-mermaid-border, #e2e8f0);
+  overflow: hidden;
+}
+.markdown-body :deep(.mermaid-block__header) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 38px;
+  padding: 0 14px;
+  background: var(--mc-code-header-bg);
+  border-bottom: 1px solid var(--mc-mermaid-border, #e2e8f0);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--mc-code-lang-color);
+  /* Prevent the header label/buttons from being swept into a text selection
+     that starts in the surrounding markdown — the highlighted-grey selection
+     band would otherwise extend across the whole header row. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.markdown-body :deep(.mermaid-block__lang) {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.markdown-body :deep(.mermaid-block__actions) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.markdown-body :deep(.mermaid-block__download) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--mc-code-copy-color);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.markdown-body :deep(.mermaid-block__download:hover) {
+  background: var(--mc-code-copy-hover-bg);
+  color: var(--mc-code-copy-hover-color);
+}
+/* Pin EVERY icon inside the header to 14×14. Without this, DOMPurify can
+   normalise away the `width="14" height="14"` attrs from the markdown HTML,
+   leaving the SVG to fall back to the UA default 300×150. The button is
+   inline-flex so it grows to fit the icon, and `:hover` then paints a
+   gigantic grey rectangle (which is what user issue #67's follow-up screen-
+   shot showed). Same defence-in-depth as `.code-block__header svg`. */
+.markdown-body :deep(.mermaid-block__header svg) {
+  width: 14px !important;
+  height: 14px !important;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: middle;
+}
+.markdown-body :deep(.mermaid-block__header > *) {
+  flex-shrink: 0;
+  min-width: 0;
+}
+.markdown-body :deep(.mermaid-block__body) {
+  padding: 16px;
   text-align: center;
   overflow-x: auto;
+  /* Reserve a stable height so the box doesn't collapse to 0px before the
+     SVG paints — keeps layout stable across the streaming cache-miss →
+     render cycle. */
+  min-height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.markdown-body :deep(.mermaid-block svg) {
+.markdown-body :deep(.mermaid-block__body svg) {
   max-width: 100%;
   height: auto;
 }
-.markdown-body :deep(.mermaid-block.mermaid-error) {
+.markdown-body :deep(.mermaid-block.mermaid-error .mermaid-block__body) {
   background: #fef2f2;
-  border-color: #fecaca;
   color: #b91c1c;
   text-align: left;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   white-space: pre-wrap;
+  display: block;
+}
+/* Streaming placeholder: three pulsing dots inside the empty body. The dots
+   render the same DOM string on every v-html update (stable innerHTML) so
+   the box stops "shaking" during streaming. Once the async render fires
+   after stream end, this gets replaced with the actual SVG. */
+.markdown-body :deep(.mermaid-block__loader) {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.markdown-body :deep(.mermaid-block__loader-dot) {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mc-mermaid-border, #cbd5e1);
+  animation: mc-mermaid-pulse 1.4s ease-in-out infinite;
+}
+.markdown-body :deep(.mermaid-block__loader-dot:nth-child(2)) {
+  animation-delay: 0.2s;
+}
+.markdown-body :deep(.mermaid-block__loader-dot:nth-child(3)) {
+  animation-delay: 0.4s;
+}
+@keyframes mc-mermaid-pulse {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
+  40% { opacity: 1; transform: scale(1); }
+}
+.markdown-body :deep(.mermaid-block__download.is-flash) {
+  background: var(--mc-warning-bg, rgba(255, 159, 67, 0.15));
+  color: var(--mc-warning, #f59e0b);
 }
 
 /* ===== KaTeX inline / block ===== */

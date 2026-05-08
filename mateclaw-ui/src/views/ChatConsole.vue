@@ -334,7 +334,7 @@ import TalkMode from '@/components/chat/TalkMode.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import { useEChartsRenderer } from '@/composables/useEChartsRenderer'
 import { useKatexRenderer } from '@/composables/useKatexRenderer'
-import { useMermaidRenderer } from '@/composables/useMermaidRenderer'
+import { useMermaidRenderer, handleMermaidDownload } from '@/composables/useMermaidRenderer'
 
 // ============ Talk Mode ============
 const showTalkMode = ref(false)
@@ -1731,6 +1731,10 @@ function formatConversationTime(time?: string) {
 }
 
 function handleCodeCopy(e: MouseEvent) {
+  // Mermaid download button shares the same global click delegation. Handle
+  // it first so the SVG export beats the copy-button selector below if the
+  // user happens to click in an area where both ancestors are reachable.
+  if (handleMermaidDownload(e)) return
   const btn = (e.target as HTMLElement).closest('.code-block__copy') as HTMLElement | null
   if (!btn) return
   // The copy button now sits inside <details><summary> for collapsible code
