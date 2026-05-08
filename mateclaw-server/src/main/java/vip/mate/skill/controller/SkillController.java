@@ -249,13 +249,54 @@ public class SkillController {
     @Operation(summary = "重新扫描单个技能（RFC-042 §2.3.4）")
     @PostMapping("/{id}/rescan")
     public R<SkillEntity> rescan(@PathVariable Long id) {
+        rejectVirtualSkillMutation(id);
         return R.ok(skillService.rescanSecurity(id));
+    }
+
+    /**
+     * Mutation paths refuse virtual MCP/ACP skill ids upfront. The bridge
+     * synthesizes those rows on the fly from the upstream connection
+     * config; persisting an update against {@code mate_skill} would
+     * either silently no-op (no row to update) or — as users have hit —
+     * throw "技能不存在" because the lookup precedes the update. Sending
+     * a clear 4xx with a redirect hint is the right shape: the user
+     * wants the icon / display name / etc. to stick, and the only place
+     * those fields persist for an MCP entry is the MCP connection page.
+     */
+    private void rejectVirtualSkillMutation(Long id) {
+        if (vip.mate.skill.mcp.McpSkillBridge.isVirtualMcpSkillId(id)
+                || vip.mate.skill.acp.AcpSkillBridge.isVirtualAcpSkillId(id)) {
+            throw new vip.mate.exception.MateClawException(
+                    "err.skill.virtual_readonly",
+                    "MCP/ACP 衍生技能不可在此编辑——请到 Settings ▸ MCP/ACP 连接页修改");
+        }
     }
 
     @Operation(summary = "获取已启用技能列表")
     @GetMapping("/enabled")
     public R<List<SkillEntity>> listEnabled() {
-        return R.ok(skillService.listEnabledSkills());
+        // Mirror the merging the paginated /skills endpoint does so the agent
+        // edit picker (which calls this endpoint) sees MCP- and ACP-derived
+        // virtual skills alongside the persisted ones. The shadow base must
+        // include all real skill names — including disabled ones — so a
+        // disabled real skill correctly suppresses its same-named virtual
+        // twin, matching /skills and /counts.
+        List<SkillEntity> result = new ArrayList<>(skillService.listEnabledSkills());
+        Set<String> realNames = realSkillNames();
+
+        try {
+            result.addAll(filterShadowedVirtualSkills(
+                    mcpSkillBridge.listMcpDerivedSkillEntities(), realNames));
+        } catch (Exception e) {
+            // Bridge failure must not 500 the picker — same defensive stance as /counts.
+        }
+        try {
+            result.addAll(filterShadowedVirtualSkills(
+                    acpSkillBridge.listAcpDerivedSkillEntities(), realNames));
+        } catch (Exception e) {
+            // Bridge failure must not 500 the picker — same defensive stance as /counts.
+        }
+        return R.ok(result);
     }
 
     @Operation(summary = "按类型获取技能列表")
@@ -300,6 +341,7 @@ public class SkillController {
     @Operation(summary = "更新技能")
     @PutMapping("/{id}")
     public R<SkillEntity> update(@PathVariable Long id, @RequestBody SkillEntity skill) {
+        rejectVirtualSkillMutation(id);
         skill.setId(id);
         return R.ok(skillService.updateSkill(skill));
     }
@@ -316,6 +358,7 @@ public class SkillController {
     @Operation(summary = "硬删除技能 (admin only — 物理删除 + 工作区清空)")
     @DeleteMapping("/{id}")
     public R<Void> delete(@PathVariable Long id) {
+        rejectVirtualSkillMutation(id);
         skillService.hardDeleteSkill(id);
         return R.ok();
     }
@@ -323,6 +366,7 @@ public class SkillController {
     @Operation(summary = "启用/禁用技能")
     @PutMapping("/{id}/toggle")
     public R<SkillEntity> toggle(@PathVariable Long id, @RequestParam boolean enabled) {
+        rejectVirtualSkillMutation(id);
         return R.ok(skillService.toggleSkill(id, enabled));
     }
 

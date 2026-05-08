@@ -3,12 +3,15 @@ package vip.mate.agent;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import vip.mate.agent.context.ChatOrigin;
 import vip.mate.agent.context.ChatOriginHolder;
+import vip.mate.agent.event.AgentLifecycleEvent;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.exception.MateClawException;
@@ -43,6 +46,11 @@ public class AgentService {
     private final MemoryLifecycleMediator lifecycleMediator;
     private final MemoryProperties memoryProperties;
 
+    /** Field-injected publisher for agent_lifecycle trigger events; the
+     *  trigger module's bridge listens and forwards into ingest. */
+    @Autowired(required = false)
+    private ApplicationEventPublisher events;
+
     /** 运行时 Agent 实例缓存（agentId -> BaseAgent） */
     private final Map<Long, BaseAgent> agentInstances = new ConcurrentHashMap<>();
 
@@ -76,18 +84,51 @@ public class AgentService {
             agent.setAgentType("react");
         }
         agentMapper.insert(agent);
+        publishLifecycle(agent, "spawned");
         return agent;
     }
 
     public AgentEntity updateAgent(AgentEntity agent) {
+        // Detect enabled-flag flip so the lifecycle event reflects the
+        // intent rather than every metadata edit. Reading the prior row
+        // is cheap and gives us a clean diff source.
+        AgentEntity prior = agentMapper.selectById(agent.getId());
         agentMapper.updateById(agent);
         agentInstances.remove(agent.getId());
+        if (prior != null && prior.getEnabled() != null
+                && !prior.getEnabled().equals(agent.getEnabled())) {
+            publishLifecycle(agent,
+                    Boolean.TRUE.equals(agent.getEnabled()) ? "enabled" : "disabled");
+        }
         return agent;
     }
 
     public void deleteAgent(Long id) {
+        AgentEntity prior = agentMapper.selectById(id);
         agentMapper.deleteById(id);
         agentInstances.remove(id);
+        if (prior != null) publishLifecycle(prior, "terminated");
+    }
+
+    /**
+     * Best-effort publish of an {@link AgentLifecycleEvent}. A publish
+     * failure must never roll back the agent CRUD that just succeeded —
+     * the agent_lifecycle trigger surface is observability, not the
+     * canonical record.
+     */
+    private void publishLifecycle(AgentEntity agent, String phase) {
+        if (events == null || agent == null) return;
+        try {
+            events.publishEvent(new AgentLifecycleEvent(
+                    agent.getWorkspaceId() == null ? 0L : agent.getWorkspaceId(),
+                    agent.getId() == null ? 0L : agent.getId(),
+                    agent.getName(),
+                    phase,
+                    System.currentTimeMillis()));
+        } catch (Exception e) {
+            log.warn("[AgentService] lifecycle publish failed for agent {} ({}): {}",
+                    agent.getId(), phase, e.getMessage());
+        }
     }
 
     /**

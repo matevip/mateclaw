@@ -33,8 +33,8 @@
   <!-- ===== Center: Agent Core ===== -->
   <circle cx="480" cy="280" r="72" fill="url(#warm)" stroke="#d96d46" stroke-width="2" filter="url(#glow)"/>
   <circle cx="480" cy="280" r="56" fill="#f6e2d7" stroke="#ebb08f" stroke-width="1"/>
-  <text x="480" y="268" text-anchor="middle" font-size="16" font-weight="800" fill="#d96d46">智能体</text>
-  <text x="480" y="288" text-anchor="middle" font-size="11" font-weight="500" fill="#665245">推理 · 规划 · 执行</text>
+  <text x="480" y="268" text-anchor="middle" font-size="16" font-weight="800" fill="#d96d46">数字员工</text>
+  <text x="480" y="288" text-anchor="middle" font-size="11" font-weight="500" fill="#665245">角色 · 目标 · 背景故事</text>
   <text x="480" y="304" text-anchor="middle" font-size="9" fill="#9b7d6c">ReAct + Plan-Execute</text>
 
   <!-- ===== Top: User Surfaces (5 items) ===== -->
@@ -66,9 +66,9 @@
   <!-- ===== Right Top: Tools & Skills ===== -->
   <rect x="720" y="210" width="200" height="65" rx="14" fill="url(#warm)" stroke="#d9cec2" stroke-width="1" filter="url(#shadow)"/>
   <rect x="916" y="210" width="4" height="65" rx="2" fill="url(#primary)"/>
-  <text x="820" y="232" text-anchor="middle" font-size="13" font-weight="700" fill="#d96d46">工具与技能</text>
-  <text x="820" y="252" text-anchor="middle" font-size="10" fill="#665245">内置 + MCP + 技能包</text>
-  <text x="820" y="266" text-anchor="middle" font-size="9" fill="#9b7d6c">ClawHub 市场扩展</text>
+  <text x="820" y="232" text-anchor="middle" font-size="13" font-weight="700" fill="#d96d46">技能 · MCP · ACP</text>
+  <text x="820" y="252" text-anchor="middle" font-size="10" fill="#665245">SKILL.md + LESSONS</text>
+  <text x="820" y="266" text-anchor="middle" font-size="9" fill="#9b7d6c">Claude Code 也来当员工</text>
   <!-- Arrow to Tools -->
   <line x1="552" y1="242" x2="720" y2="242" stroke="#d96d46" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.5"/>
   <polygon points="554,237 546,242 554,247" fill="#d96d46" opacity="0.6"/>

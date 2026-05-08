@@ -5,7 +5,9 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
+import vip.mate.tool.model.AvailableToolDTO;
 import vip.mate.tool.model.ToolEntity;
+import vip.mate.tool.service.AvailableToolService;
 import vip.mate.tool.service.ToolService;
 
 import java.util.List;
@@ -22,6 +24,7 @@ import java.util.List;
 public class ToolController {
 
     private final ToolService toolService;
+    private final AvailableToolService availableToolService;
 
     @Operation(summary = "获取工具列表")
     @GetMapping
@@ -33,6 +36,12 @@ public class ToolController {
     @GetMapping("/enabled")
     public R<List<ToolEntity>> listEnabled() {
         return R.ok(toolService.listEnabledTools());
+    }
+
+    @Operation(summary = "获取员工可绑定的全部原子工具（含 MCP）")
+    @GetMapping("/available")
+    public R<List<AvailableToolDTO>> listAvailable() {
+        return R.ok(availableToolService.listAvailable());
     }
 
     @Operation(summary = "获取工具详情")

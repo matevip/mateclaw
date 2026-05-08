@@ -21,6 +21,13 @@ public class TemplateDTO {
     private String agentType;
     private String tags;
     private Integer maxIterations;
+    /**
+     * Optional pre-rendered system prompt seeded into the new agent. Templates
+     * use H2 sections (## Role / ## Goal / ## Backstory / ## Additional
+     * Instructions) so the editor UI can split the prompt into structured
+     * fields and derive a one-line tagline for the agent card.
+     */
+    private String systemPrompt;
     private List<WorkspaceFileTemplate> workspaceFiles;
 
     @Data

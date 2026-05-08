@@ -6,7 +6,7 @@
 
     <groupId>vip.mate</groupId>
     <artifactId>mateclaw-server</artifactId>
-    <version>1.2.0-SNAPSHOT</version>
+    <version>1.3.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <name>MateClaw Server</name>
@@ -351,6 +351,51 @@
             <version>3.0.0</version>
         </dependency>
 
+        <!-- ===== Markdown -> PDF rendering =====
+             Flying Saucer 9.13 ships a single `flying-saucer-pdf` artifact that
+             writes PDF via OpenPDF (LGPL fork of iText 5). It does NOT depend on
+             PDFBox, so it sidesteps a version conflict with the existing
+             pdfbox:3.0.3 dependency. CSS3 paged-media features (@page,
+             counter(page), counter(pages), @top-center / @bottom-center) are
+             supported, which the cover / header / footer rendering relies on.
+
+             commonmark-java is the reference CommonMark implementation,
+             actively maintained on a monthly cadence (vs. flexmark, whose
+             upstream stalled at 0.64.8 in 2023). It parses markdown into the
+             XHTML Flying Saucer consumes. The alternative LibreOffice path in
+             PdfRenderTool reuses MarkdownDocxRenderer + a soffice subprocess
+             and adds no dependencies of its own. -->
+        <dependency>
+            <groupId>org.xhtmlrenderer</groupId>
+            <artifactId>flying-saucer-pdf</artifactId>
+            <version>9.13.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.commonmark</groupId>
+            <artifactId>commonmark</artifactId>
+            <version>0.28.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.commonmark</groupId>
+            <artifactId>commonmark-ext-gfm-tables</artifactId>
+            <version>0.28.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.commonmark</groupId>
+            <artifactId>commonmark-ext-yaml-front-matter</artifactId>
+            <version>0.28.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.commonmark</groupId>
+            <artifactId>commonmark-ext-gfm-strikethrough</artifactId>
+            <version>0.28.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.commonmark</groupId>
+            <artifactId>commonmark-ext-autolink</artifactId>
+            <version>0.28.0</version>
+        </dependency>
+
         <!-- ===== Database Migration (Flyway) ===== -->
         <dependency>
             <groupId>org.flywaydb</groupId>
@@ -412,6 +457,17 @@
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>
             <version>3.0.3</version>
+        </dependency>
+
+        <!-- Expression language used by the workflow compiler to evaluate
+             conditional step expressions and template variable references.
+             Restricted to a small subset (~20 operators / filters) at the
+             evaluator wrapper layer; arbitrary template includes / extends
+             are blocked. -->
+        <dependency>
+            <groupId>io.pebbletemplates</groupId>
+            <artifactId>pebble</artifactId>
+            <version>3.2.2</version>
         </dependency>
     </dependencies>
 

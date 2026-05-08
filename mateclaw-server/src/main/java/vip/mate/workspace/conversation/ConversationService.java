@@ -1,16 +1,27 @@
 package vip.mate.workspace.conversation;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.approval.ApprovalPlaceholderUtil;
 import vip.mate.approval.MetadataDecision;
 import vip.mate.agent.repository.AgentMapper;
+import vip.mate.approval.model.ToolApprovalEntity;
+import vip.mate.approval.repository.ToolApprovalMapper;
+import vip.mate.channel.model.ChannelSessionEntity;
+import vip.mate.channel.repository.ChannelSessionMapper;
+import vip.mate.task.model.AsyncTaskEntity;
+import vip.mate.task.repository.AsyncTaskMapper;
+import vip.mate.workspace.conversation.event.ConversationDeletedEvent;
 import vip.mate.workspace.conversation.model.ConversationEntity;
 import vip.mate.workspace.conversation.model.MessageContentPart;
 import vip.mate.workspace.conversation.model.MessageEntity;
@@ -49,6 +60,10 @@ public class ConversationService {
     private final MessageMapper messageMapper;
     private final AgentMapper agentMapper;
     private final ObjectMapper objectMapper;
+    private final ToolApprovalMapper toolApprovalMapper;
+    private final AsyncTaskMapper asyncTaskMapper;
+    private final ChannelSessionMapper channelSessionMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * 获取用户的会话列表（返回 VO，包含 agentName/agentIcon/status）
@@ -308,6 +323,30 @@ public class ConversationService {
     }
 
     /**
+     * Persist an assistant placeholder marker only when the last message is a
+     * user turn (i.e., the assistant never got to reply). Used by the admin
+     * force-recycle path so a torn-down turn leaves a visible "已被用户中止"
+     * marker instead of an empty conversation. Idempotent: if the previous
+     * emergency-save path already wrote an assistant row, this is a no-op.
+     *
+     * @return the saved message, or {@code null} if the marker was not needed
+     */
+    @Transactional
+    public MessageEntity saveStopMarkerIfDangling(String conversationId, String markerText, String status) {
+        List<MessageEntity> recent = messageMapper.selectList(
+                new LambdaQueryWrapper<MessageEntity>()
+                        .eq(MessageEntity::getConversationId, conversationId)
+                        .orderByDesc(MessageEntity::getCreateTime)
+                        .orderByDesc(MessageEntity::getId)
+                        .last("LIMIT 1"));
+        if (recent.isEmpty()) return null;
+        MessageEntity last = recent.get(0);
+        if (!"user".equals(last.getRole())) return null;
+        return saveMessage(conversationId, "assistant", markerText, null,
+                status != null ? status : "stopped");
+    }
+
+    /**
      * 获取会话最后一条消息内容（用于 rate limit 防护等场景）
      */
     public String getLastMessage(String conversationId) {
@@ -397,15 +436,78 @@ public class ConversationService {
     }
 
     /**
-     * 删除会话（同时删除消息和附件文件）
+     * Delete a conversation and cascade-clean every row that referenced it.
+     * <p>
+     * Tables cleaned in the same transaction:
+     * <ul>
+     *   <li>{@code mate_message} — chat history</li>
+     *   <li>{@code mate_tool_approval} — pending approvals would otherwise
+     *       point to a non-existent conversation and surface as ghost items
+     *       in the approvals list</li>
+     *   <li>{@code mate_async_task} — long-running task records keyed on
+     *       this conversation</li>
+     *   <li>{@code mate_channel_session} — channel-side session row (the
+     *       column is UNIQUE; leaving it would block reuse of the same id)</li>
+     *   <li>{@code mate_conversation} — the conversation itself</li>
+     * </ul>
+     * Child conversations (delegated turns) have their
+     * {@code parent_conversation_id} set to NULL rather than cascade-deleted,
+     * so the user keeps independent access to delegated work.
+     * <p>
+     * Audit / history tables ({@code mate_tool_guard_audit_log},
+     * {@code mate_cron_job_run}, {@code mate_skill.source_conversation_id},
+     * {@code mate_skill_usage_stat}) are intentionally left alone — those
+     * are append-only records that should outlive their source conversation.
+     * <p>
+     * Attachment file cleanup is registered as an after-commit hook so it
+     * runs only when the DB cascade actually persists, and an IO failure
+     * cannot roll back the database deletes.
      */
     @Transactional
     public void deleteConversation(String conversationId) {
-        conversationMapper.delete(new LambdaQueryWrapper<ConversationEntity>()
-                .eq(ConversationEntity::getConversationId, conversationId));
-        messageMapper.delete(new LambdaQueryWrapper<MessageEntity>()
+        int messages = messageMapper.delete(new LambdaQueryWrapper<MessageEntity>()
                 .eq(MessageEntity::getConversationId, conversationId));
-        cleanAttachmentFiles(conversationId);
+        int approvals = toolApprovalMapper.delete(new LambdaQueryWrapper<ToolApprovalEntity>()
+                .eq(ToolApprovalEntity::getConversationId, conversationId));
+        int asyncTasks = asyncTaskMapper.delete(new LambdaQueryWrapper<AsyncTaskEntity>()
+                .eq(AsyncTaskEntity::getConversationId, conversationId));
+        int channelSessions = channelSessionMapper.delete(new LambdaQueryWrapper<ChannelSessionEntity>()
+                .eq(ChannelSessionEntity::getConversationId, conversationId));
+        int childrenUnlinked = conversationMapper.update(null, new LambdaUpdateWrapper<ConversationEntity>()
+                .set(ConversationEntity::getParentConversationId, null)
+                .eq(ConversationEntity::getParentConversationId, conversationId));
+        int conversations = conversationMapper.delete(new LambdaQueryWrapper<ConversationEntity>()
+                .eq(ConversationEntity::getConversationId, conversationId));
+
+        log.info("[Conversation] Deleted {}: messages={}, approvals={}, asyncTasks={},"
+                        + " channelSessions={}, childrenUnlinked={}, conversationRow={}",
+                conversationId, messages, approvals, asyncTasks,
+                channelSessions, childrenUnlinked, conversations);
+
+        registerPostCommitCleanup(conversationId);
+    }
+
+    /**
+     * After-commit cleanup: file IO and the {@link ConversationDeletedEvent}
+     * fan-out both run only if the cascade actually persists, and an IO
+     * failure cannot roll back the DB cascade. The event lets approval and
+     * async-task modules drop their in-memory state (pendingMap, active
+     * pollers, canceled-conv set) so workers cannot resurrect orphan rows
+     * after the conversation row is gone.
+     */
+    private void registerPostCommitCleanup(String conversationId) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    cleanAttachmentFiles(conversationId);
+                    eventPublisher.publishEvent(new ConversationDeletedEvent(conversationId));
+                }
+            });
+        } else {
+            cleanAttachmentFiles(conversationId);
+            eventPublisher.publishEvent(new ConversationDeletedEvent(conversationId));
+        }
     }
 
     /**
@@ -454,6 +556,7 @@ public class ConversationService {
                 case "text" -> appendSegment(text, part.getText());
                 case "thinking", "tool_call", "parse_error" -> { /* skip — frontend reads these from contentParts directly */ }
                 case "file" -> appendSegment(text, renderFilePart(part));
+                case "image", "video", "audio", "model3d" -> appendSegment(text, renderMediaPart(part));
                 default -> appendSegment(text, part.getText());
             }
         }
@@ -510,6 +613,36 @@ public class ConversationService {
             return "[附件] " + name;
         }
         return "[附件] " + name + "（路径: " + path + "）";
+    }
+
+    /**
+     * Render an image/video/audio/3D-model content part for the LLM prompt.
+     * <p>
+     * Without this marker, media parts are invisible in the rendered text — the LLM
+     * sees only the user's accompanying text and has no idea an attachment was sent.
+     * That fails closed when the multimodal Media injection in {@code BaseAgent} is
+     * upstream-stripped (model heuristic claims vision but the actual provider drops
+     * the image), leaving the agent to ask "which image?" for an attachment the user
+     * already uploaded. The path lets file-reading tools ({@code read_file},
+     * {@code extract_document_text}, {@code detect_file_type}) work as a fallback.
+     */
+    private String renderMediaPart(MessageContentPart part) {
+        String label = switch (part.getType()) {
+            case "image" -> "[图片]";
+            case "video" -> "[视频]";
+            case "audio" -> "[音频]";
+            case "model3d" -> "[3D 模型]";
+            default -> "[附件]";
+        };
+        String name = safe(part.getFileName());
+        if (name.isBlank()) {
+            name = "未命名";
+        }
+        String path = safe(part.getPath());
+        if (path.isBlank()) {
+            return label + " " + name;
+        }
+        return label + " " + name + "（路径: " + path + "）";
     }
 
     private void appendSegment(StringBuilder builder, String text) {

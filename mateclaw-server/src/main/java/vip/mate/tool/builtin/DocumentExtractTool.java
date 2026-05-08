@@ -19,13 +19,15 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * 文档文本提取工具
- * 支持 PDF、DOCX、XLSX、PPTX 等 Office 文档的文本提取
- * 实现 fallback 链：系统命令 -> Java 实现 -> 结构化错误
+ * Document text extraction tool.
+ * Supports PDF, DOCX, XLSX, PPTX with format-specific fallback chains.
  *
- * 实现策略：
- * - PDF: pdftotext -> pypdf/pdfplumber (Java 实现)
- * - DOCX: textutil/pandoc -> ZIP XML 解析
+ * Strategy by format:
+ * - PDF:       pdftotext -> pdfplumber/pypdf -> pdfbox -> OCR (scanned) -> Tika
+ * - DOCX:      textutil / pandoc / libreoffice -> ZIP+XML -> Tika
+ * - XLSX/PPTX: Tika directly (POI-based; correctly resolves the shared-strings
+ *              indirection table and walks SmartArt / chart / grouped-shape
+ *              text that a naive ZIP+XML scan misses).
  */
 @Slf4j
 @Component
@@ -45,12 +47,11 @@ public class DocumentExtractTool {
         - Excel (.xlsx, .xls) - 提取为文本表格
         - PowerPoint (.pptx, .ppt)
 
-        提取策略（默认自动选择最优方式）：
-        1. 优先使用系统命令（pdftotext, textutil, pandoc 等）
-        2. 系统命令不可用时使用纯 Java 实现
-        3. PDF 扫描版进入 OCR
-        4. 全部失败前用 Apache Tika 兜底（覆盖 SmartArt、共享字符串表等盲区）
-        5. 返回详细的提取过程和元数据
+        提取策略（按格式分链）：
+        - PDF:       pdftotext → pdfplumber/pypdf → pdfbox → OCR（扫描版） → Tika
+        - DOCX:      textutil / pandoc / libreoffice → ZIP-XML → Tika
+        - XLSX/PPTX: 直接走 Tika（基于 POI，正确解析 sharedStrings 表与 SmartArt / 图表文本）
+        - 返回详细的提取过程和元数据
 
         参数 options 可包含：
         - pages: 指定页码范围（如 "1-5" 或 "1,3,5"）
@@ -743,90 +744,51 @@ public class DocumentExtractTool {
     // ==================== XLSX 提取 ====================
 
     private ExtractedContent extractXlsx(Path path, String options, List<String> attempts) throws Exception {
-        StringBuilder text = new StringBuilder();
-
-        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(path))) {
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
-                if (entry.getName().startsWith("xl/worksheets/sheet") && entry.getName().endsWith(".xml")) {
-                    String xml = new String(zis.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                    text.append("--- ").append(entry.getName()).append(" ---\n");
-                    text.append(extractTextFromXlsxXml(xml)).append("\n");
-                }
-            }
+        long t = System.currentTimeMillis();
+        String text = TikaExtractor.extract(path);
+        long elapsed = System.currentTimeMillis() - t;
+        if (text != null && !text.isBlank()) {
+            attempts.add("tika: 成功 (" + elapsed + "ms)");
+            return new ExtractedContent(text, "tika", 0);
         }
-
-        // Our ZIP-XML extractor only reads <v> tags and skips the shared-strings table,
-        // so cells full of text labels look "empty". When that happens, fall through to
-        // Tika which knows how to resolve the shared-strings indirection.
-        if (text.toString().replaceAll("---.*?---", "").strip().isEmpty()) {
-            String fallback = TikaExtractor.extract(path);
-            if (fallback != null && !fallback.isBlank()) {
-                attempts.add("tika: 成功（ZIP-XML 仅有数字 / 共享字符串未解析）");
-                return new ExtractedContent(fallback, "tika", 0);
-            }
-        }
-
-        attempts.add("java_zip_xml: 成功");
-        return new ExtractedContent(text.toString(), "java_zip_xml", 0);
-    }
-
-    private String extractTextFromXlsxXml(String xml) {
-        StringBuilder text = new StringBuilder();
-        int start = 0;
-        while ((start = xml.indexOf("<v>", start)) != -1) {
-            int end = xml.indexOf("</v>", start);
-            if (end == -1) break;
-            String value = xml.substring(start + 3, end);
-            text.append(value).append("\t");
-            start = end + 4;
-        }
-        return text.toString();
+        attempts.add("tika: 失败或不可用 (" + elapsed + "ms)");
+        throw new Exception("XLSX 提取失败：Tika 无法解析（文件可能损坏、加密或非标准格式）");
     }
 
     // ==================== PPTX 提取 ====================
 
     private ExtractedContent extractPptx(Path path, String options, List<String> attempts) throws Exception {
-        StringBuilder text = new StringBuilder();
-        int slideNum = 1;
-
-        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(path))) {
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
-                if (entry.getName().startsWith("ppt/slides/slide") && entry.getName().endsWith(".xml")) {
-                    String xml = new String(zis.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                    text.append("--- Slide ").append(slideNum++).append(" ---\n");
-                    text.append(extractTextFromPptxXml(xml)).append("\n\n");
-                }
-            }
+        long t = System.currentTimeMillis();
+        String text = TikaExtractor.extract(path);
+        long elapsed = System.currentTimeMillis() - t;
+        if (text != null && !text.isBlank()) {
+            attempts.add("tika: 成功 (" + elapsed + "ms)");
+            int slides = countPptxSlides(path);
+            return new ExtractedContent(text, "tika", slides);
         }
-
-        // Slide layouts with text inside SmartArt / charts / grouped shapes don't surface
-        // through the simple <a:t> grep — Tika walks the full DrawingML graph and pulls
-        // them out. Only invoke when our walker produced nothing useful.
-        if (text.toString().replaceAll("---.*?---", "").strip().isEmpty()) {
-            String fallback = TikaExtractor.extract(path);
-            if (fallback != null && !fallback.isBlank()) {
-                attempts.add("tika: 成功（ZIP-XML 未抓到正文，可能是 SmartArt / 图表）");
-                return new ExtractedContent(fallback, "tika", Math.max(0, slideNum - 1));
-            }
-        }
-
-        attempts.add("java_zip_xml: 成功");
-        return new ExtractedContent(text.toString(), "java_zip_xml", Math.max(0, slideNum - 1));
+        attempts.add("tika: 失败或不可用 (" + elapsed + "ms)");
+        throw new Exception("PPTX 提取失败：Tika 无法解析（文件可能损坏、加密或非标准格式）");
     }
 
-    private String extractTextFromPptxXml(String xml) {
-        StringBuilder text = new StringBuilder();
-        int start = 0;
-        while ((start = xml.indexOf("<a:t>", start)) != -1) {
-            int end = xml.indexOf("</a:t>", start);
-            if (end == -1) break;
-            String txt = xml.substring(start + 5, end);
-            text.append(txt).append(" ");
-            start = end + 6;
+    /**
+     * Cheap slide count for the result metadata. Counts {@code ppt/slides/slideN.xml}
+     * entries in the OOXML zip without parsing the slide content. Returns 0 if the
+     * file isn't a readable zip.
+     */
+    private int countPptxSlides(Path path) {
+        int count = 0;
+        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(path))) {
+            ZipEntry e;
+            while ((e = zis.getNextEntry()) != null) {
+                String name = e.getName();
+                if (name.startsWith("ppt/slides/slide") && name.endsWith(".xml")) {
+                    count++;
+                }
+            }
+        } catch (IOException ignored) {
+            // Slide count is best-effort metadata; never fail the extract on this.
         }
-        return text.toString().trim();
+        return count;
     }
 
     // ==================== 工具方法 ====================

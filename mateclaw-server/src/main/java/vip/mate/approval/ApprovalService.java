@@ -93,6 +93,34 @@ public class ApprovalService {
     }
 
     /**
+     * INTERNAL — drop every map entry tied to the given conversation in one pass.
+     * Used by {@link ApprovalWorkflowService}'s {@code ConversationDeletedEvent}
+     * listener to clear residue once the {@code mate_tool_approval} rows for the
+     * conversation have already been deleted by the cascade. Without this, a
+     * still-PENDING entry (or any not yet GC'd resolved entry) would survive in
+     * the map until TTL eviction, and {@code findPendingByConversation} would
+     * keep handing out a ghost approval that points at a non-existent
+     * conversation row.
+     * <p>
+     * Only {@code ApprovalWorkflowService} should call this.
+     *
+     * @return number of entries removed
+     */
+    int removeAllByConversation(String conversationId) {
+        if (conversationId == null) return 0;
+        int removed = 0;
+        var iter = pendingMap.entrySet().iterator();
+        while (iter.hasNext()) {
+            var entry = iter.next();
+            if (conversationId.equals(entry.getValue().getConversationId())) {
+                iter.remove();
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    /**
      * INTERNAL — register a {@link PendingApproval} reconstructed from DB during JVM startup.
      * Bypasses id generation and pre-existing-entry checks; the snapshot's {@code pendingId}
      * must already match the DB row. Idempotent: if the same id already lives in the map

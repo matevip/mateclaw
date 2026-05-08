@@ -193,6 +193,10 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             AtomicBoolean finalAnswerEmitted = new AtomicBoolean(false);
             AtomicBoolean finalThinkingEmitted = new AtomicBoolean(false);
             AtomicReference<String> lastEmittedStreamedContent = new AtomicReference<>("");
+            // Silent-termination guard (mirrors chatStructuredStream)
+            AtomicInteger lastIteration = new AtomicInteger(0);
+            AtomicInteger lastSoftCap = new AtomicInteger(0);
+            AtomicBoolean sawLegitimateExit = new AtomicBoolean(false);
 
             return compiledGraph.stream(inputs, config)
                     .flatMapIterable(output -> {
@@ -239,6 +243,14 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                         finalModelName.set(output.state().value(RUNTIME_MODEL_NAME, ""));
                         finalProviderId.set(output.state().value(RUNTIME_PROVIDER_ID, ""));
 
+                        lastIteration.set(output.state().value(CURRENT_ITERATION, 0));
+                        lastSoftCap.set(output.state().value(MAX_ITERATIONS, 0));
+                        if (hasFinalAnswer(output)
+                                || Boolean.TRUE.equals(output.state().value(LIMIT_EXCEEDED, false))
+                                || !output.state().<String>value(FINISH_REASON).orElse("").isBlank()) {
+                            sawLegitimateExit.set(true);
+                        }
+
                         return deltas;
                     })
                     .concatWith(Mono.fromSupplier(() -> {
@@ -252,7 +264,15 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                         }
                         return null;
                     }).flatMapMany(d -> d != null ? Flux.just(d) : Flux.empty()))
-                    .doOnComplete(() -> setState(AgentState.IDLE))
+                    .doOnComplete(() -> {
+                        setState(AgentState.IDLE);
+                        if (!sawLegitimateExit.get()) {
+                            log.error("[{}] StateGraph replay stream completed WITHOUT a final answer / "
+                                            + "limit_exceeded / finish_reason — likely framework-level silent "
+                                            + "termination. conversationId={}, lastIteration={}, softCap={}",
+                                    agentName, conversationId, lastIteration.get(), lastSoftCap.get());
+                        }
+                    })
                     .doOnError(e -> {
                         log.error("[{}] StateGraph replay stream error: {}", agentName, e.getMessage());
                         setState(AgentState.ERROR);
@@ -294,6 +314,17 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             // STREAMED_CONTENT 是 REPLACE 策略（每轮 ReasoningNode/SummarizingNode 覆写），
             // 用 lastEmitted 跟踪已发送的值，避免在 ActionNode/ObservationNode 的 NodeOutput 上重复发送同一段内容。
             AtomicReference<String> lastEmittedStreamedContent = new AtomicReference<>("");
+            // Silent-termination guardrail: track the highest iteration / soft cap
+            // observed and whether the graph reached a legitimate exit (final answer
+            // or limit-exceeded node). If the framework completes the Flux without
+            // either signal we log.error in doOnComplete — the graph framework
+            // historically treated its own recursion cap as a silent normal
+            // completion, which masked turns ending mid-execution. Decoupling the
+            // recursionLimit at compile time should keep this from firing, but the
+            // guard catches any future regression instead of letting it ship silent.
+            AtomicInteger lastIteration = new AtomicInteger(0);
+            AtomicInteger lastSoftCap = new AtomicInteger(0);
+            AtomicBoolean sawLegitimateExit = new AtomicBoolean(false);
 
             return compiledGraph.stream(inputs, config)
                     .flatMapIterable(output -> {
@@ -349,6 +380,15 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                         finalModelName.set(output.state().value(RUNTIME_MODEL_NAME, ""));
                         finalProviderId.set(output.state().value(RUNTIME_PROVIDER_ID, ""));
 
+                        // 4. Silent-termination guard inputs
+                        lastIteration.set(output.state().value(CURRENT_ITERATION, 0));
+                        lastSoftCap.set(output.state().value(MAX_ITERATIONS, 0));
+                        if (hasFinalAnswer(output)
+                                || Boolean.TRUE.equals(output.state().value(LIMIT_EXCEEDED, false))
+                                || !output.state().<String>value(FINISH_REASON).orElse("").isBlank()) {
+                            sawLegitimateExit.set(true);
+                        }
+
                         return deltas;
                     })
                     // 流正常完成后追加内部 usage 事件
@@ -363,7 +403,16 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                         }
                         return null;
                     }).flatMapMany(d -> d != null ? Flux.just(d) : Flux.empty()))
-                    .doOnComplete(() -> setState(AgentState.IDLE))
+                    .doOnComplete(() -> {
+                        setState(AgentState.IDLE);
+                        if (!sawLegitimateExit.get()) {
+                            log.error("[{}] StateGraph structured stream completed WITHOUT a final answer / "
+                                            + "limit_exceeded / finish_reason — likely framework-level silent "
+                                            + "termination (recursionLimit reached or upstream truncation). "
+                                            + "conversationId={}, lastIteration={}, softCap={}",
+                                    agentName, conversationId, lastIteration.get(), lastSoftCap.get());
+                        }
+                    })
                     .doOnError(e -> {
                         log.error("[{}] StateGraph structured stream error: {}", agentName, e.getMessage());
                         setState(AgentState.ERROR);
@@ -406,9 +455,13 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
         inputs.put(SYSTEM_PROMPT, systemPrompt != null ? systemPrompt : "你是一个有帮助的AI助手。");
         inputs.put(MESSAGES, messages);
         // 迭代控制：深度思考模式允许更多迭代（思考需要更多轮工具调用）
+        // maxIterations<=0 表示软上限解除（由 LLM 自己决定何时收尾），加分要短路，
+        // 否则 thinking-on 会把"无限"误算成 5（变成"5 步就停"）。
         String thinkingLevel = vip.mate.agent.ThinkingLevelHolder.get();
         boolean thinkingOn = thinkingLevel != null && !"off".equalsIgnoreCase(thinkingLevel);
-        int effectiveMaxIterations = thinkingOn ? maxIterations + 5 : maxIterations;
+        int effectiveMaxIterations = (maxIterations <= 0)
+                ? 0
+                : (thinkingOn ? maxIterations + 5 : maxIterations);
         inputs.put(MAX_ITERATIONS, effectiveMaxIterations);
         inputs.put(CURRENT_ITERATION, 0);
         // 初始化新字段

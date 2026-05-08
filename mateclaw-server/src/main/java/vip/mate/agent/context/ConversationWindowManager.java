@@ -74,6 +74,20 @@ public class ConversationWindowManager {
     private static final int CONTENT_TAIL = 1500;
     private static final int OLD_TOOL_RESULT_SUMMARY_THRESHOLD = 500;
 
+    /**
+     * Tool names whose results must never be compacted into a one-line
+     * summary. Sub-agent delegations are irreplaceable: the child runs an
+     * independent LLM session that the parent cannot reproduce, so dropping
+     * earlier batches forces the parent to re-dispatch the same children to
+     * recover what was lost. Every other tool (read_file, shell, search,
+     * memory) can be re-invoked cheaply if the parent decides it needs
+     * the data again.
+     */
+    private static final java.util.Set<String> PRUNE_EXEMPT_TOOLS = java.util.Set.of(
+            "delegateToAgent",
+            "delegateParallel"
+    );
+
     // ==================== 冷却机制 ====================
 
     /** 摘要失败后的冷却时间（毫秒）：10 分钟 */
@@ -384,7 +398,8 @@ public class ConversationWindowManager {
             boolean messageChanged = false;
             for (ToolResponseMessage.ToolResponse r : trm.getResponses()) {
                 String data = r.responseData();
-                if (keepFull || data == null || data.length() <= OLD_TOOL_RESULT_SUMMARY_THRESHOLD) {
+                boolean exempt = r.name() != null && PRUNE_EXEMPT_TOOLS.contains(r.name());
+                if (keepFull || exempt || data == null || data.length() <= OLD_TOOL_RESULT_SUMMARY_THRESHOLD) {
                     newResponses.add(r);
                     if (data != null && data.length() > OLD_TOOL_RESULT_SUMMARY_THRESHOLD) {
                         seenLargeOutputs.add(data);

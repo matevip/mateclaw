@@ -300,6 +300,23 @@ public class WikiController {
         return R.ok();
     }
 
+    @RequireWorkspaceRole("member")
+    @Operation(summary = "请求取消正在进行的处理（仅在 processing 状态有效）")
+    @PostMapping("/knowledge-bases/{kbId}/raw/{rawId}/cancel")
+    public R<Void> cancelRaw(@PathVariable Long kbId, @PathVariable Long rawId,
+                              @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        verifyKBWorkspace(kbId, workspaceId);
+        WikiRawMaterialEntity raw = rawService.getById(rawId);
+        if (raw == null || !kbId.equals(raw.getKbId())) {
+            return R.fail("Raw material not found in this knowledge base");
+        }
+        // requestCancel is idempotent: a no-op when the row is not processing,
+        // so repeated clicks (or a click after the run already finished) are
+        // safe and do not surface an error to the user.
+        rawService.requestCancel(rawId);
+        return R.ok();
+    }
+
     @RequireWorkspaceRole("viewer")
     @Operation(summary = "下载原始材料")
     @GetMapping("/knowledge-bases/{kbId}/raw/{rawId}/download")

@@ -172,6 +172,15 @@
       :enable-provider="enableProvider"
       @close="closeDrawer"
     />
+
+    <DeviceCodeDialog
+      :visible="deviceCodeDialog.visible"
+      :user-code="deviceCodeDialog.userCode"
+      :verification-url="deviceCodeDialog.verificationUrl"
+      :verification-url-complete="deviceCodeDialog.verificationUrlComplete"
+      :expires-at="deviceCodeDialog.expiresAt"
+      @close="closeDeviceCodeDialog"
+    />
   </div>
 </template>
 
@@ -192,6 +201,7 @@ const ProviderConfigModal = defineAsyncComponent(() => import('./modals/Provider
 const ManageModelsModal = defineAsyncComponent(() => import('./modals/ManageModelsModal.vue'))
 // RFC-074 PR-2: drawer for browsing the catalog and opting into hidden built-ins.
 const AddProviderDrawer = defineAsyncComponent(() => import('./AddProviderDrawer.vue'))
+const DeviceCodeDialog = defineAsyncComponent(() => import('./modals/DeviceCodeDialog.vue'))
 
 const { t } = useI18n()
 const savedTip = ref('')
@@ -251,6 +261,8 @@ const {
   onIconError,
   handleOAuthLogin,
   handleOAuthRevoke,
+  deviceCodeDialog,
+  closeDeviceCodeDialog,
   // RFC-074 PR-2 — enablement / drawer
   catalog,
   drawerOpen,

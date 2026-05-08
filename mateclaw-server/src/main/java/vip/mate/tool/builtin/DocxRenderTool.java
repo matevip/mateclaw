@@ -5,14 +5,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+import vip.mate.tool.document.FilenameSanitizer;
 import vip.mate.tool.document.GeneratedFileCache;
+import vip.mate.tool.document.GeneratedFileLink;
 import vip.mate.tool.document.MarkdownDocxRenderer;
-import vip.mate.tool.guard.WorkspacePathGuard;
+import vip.mate.tool.document.MarkdownInputResolver;
+import vip.mate.tool.document.MarkdownInputResolver.Resolved;
+import vip.mate.tool.document.MarkdownInputResolver.ResolveException;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -39,8 +39,10 @@ public class DocxRenderTool {
     private final GeneratedFileCache cache;
 
     @Tool(description = """
-        Render a new .docx file from Markdown text and return a one-time download URL.
-        Use for creating NEW documents: reports, memos, contracts, letters, resumes.
+        Render a new .docx (Microsoft Word) file from Markdown text and return a
+        one-time download URL. Use for creating EDITABLE Word documents the user
+        will continue to revise — reports, memos, contracts, letters, resumes.
+
         Supports: headings (# ## ###), bold (**text**), bullet lists (- item),
                   numbered lists (1. item), tables (| col | col |), plain paragraphs,
                   images (![alt](path/to/file.png|jpg|gif|bmp|svg)) — SVG is rasterized
@@ -50,6 +52,11 @@ public class DocxRenderTool {
         disk) — passing huge markdown as a tool argument burns LLM tokens needlessly.
 
         Do NOT use for:
+        - **Anything the user asked for in PDF / .pdf format — use `renderPdf` /
+          `renderPdfFromFile` instead. PDF is a separate non-editable deliverable
+          format; don't silently substitute docx for it.**
+        - Spreadsheets / workbooks — use `renderXlsx` / `renderXlsxFromFile`.
+        - Slide decks / presentations — use `renderPptx` / `renderPptxFromFile`.
         - Editing an existing .docx file (use run_skill_script with unpack/edit/pack)
         - Adding tracked changes or comments (use run_skill_script)
         - GB/T 9704 official documents (use writeGongwen tool, BmacClaw only)
@@ -69,26 +76,15 @@ public class DocxRenderTool {
             return "错误：markdown 参数为空，无法生成文档。";
         }
 
-        String safeName = sanitizeFilename(filename);
-        String displayName = safeName + ".docx";
-        String size = (pageSize == null || pageSize.isBlank()) ? "A4" : pageSize.trim();
+        String displayName = FilenameSanitizer.sanitize(filename, "document", ".docx") + ".docx";
+        String size = resolveSize(pageSize);
 
         try {
             long t0 = System.currentTimeMillis();
             byte[] bytes = renderer.render(markdown, size);
-            String id = cache.put(bytes, displayName, DOCX_MIME);
-            long elapsed = System.currentTimeMillis() - t0;
-            log.info("[DocxRender] generated {} ({} bytes, {}ms, id={})",
-                    displayName, bytes.length, elapsed, id);
-
-            String url = "/api/v1/files/generated/" + id;
-            // Explicit instruction to suppress LLM hallucinating an absolute host.
-            // DeepSeek/Claude have been observed prepending placeholder domains
-            // (e.g. https://ai-tools-system.com) when echoing the URL back to the user,
-            // breaking the download link. Repeat the path verbatim with no host.
-            return "文档已生成：[" + displayName + "](" + url + ")（链接 10 分钟内有效）。\n"
-                    + "重要：回答用户时**必须**使用上述相对路径 `" + url + "`，"
-                    + "**不要**添加任何 https://、http:// 域名前缀，前端会自动拼接当前主机。";
+            log.info("[DocxRender] generated {} ({} bytes, {}ms)",
+                    displayName, bytes.length, System.currentTimeMillis() - t0);
+            return GeneratedFileLink.resultZh(bytes, displayName, DOCX_MIME, cache, "文档");
         } catch (Exception e) {
             log.error("[DocxRender] render failed for {}: {}", displayName, e.getMessage(), e);
             return "渲染失败：" + e.getMessage();
@@ -107,7 +103,13 @@ public class DocxRenderTool {
      * rendered from disk in one IO call. Token cost ≈ 50 (just the path).
      */
     @Tool(description = """
-        Render a .docx file from a markdown FILE on disk and return a one-time download URL.
+        Render a .docx (Microsoft Word) file from a markdown FILE on disk and return
+        a one-time download URL. Use this for EDITABLE Word documents only.
+
+        **If the user asked for PDF / .pdf in any wording, use `renderPdfFromFile`
+        instead. Do not silently substitute docx for PDF.** Same for spreadsheets
+        (`renderXlsxFromFile`) and slide decks (`renderPptxFromFile`).
+
         Use this instead of `renderDocx` when the markdown body is large (>5 KB) — the
         LLM does not need to repeat its own previous output as a tool argument.
 
@@ -132,56 +134,25 @@ public class DocxRenderTool {
             @ToolParam(description = "Page size: A4 or LETTER (default: A4)", required = false)
             String pageSize) {
 
-        if (filePath == null || filePath.isBlank()) {
-            return "Error: filePath parameter is empty.";
-        }
-
-        Path resolved;
+        Resolved input;
         try {
-            resolved = WorkspacePathGuard.validatePath(filePath);
-        } catch (Exception e) {
-            return "Error: path validation failed — " + e.getMessage();
-        }
-        if (!Files.exists(resolved)) {
-            return "Error: file not found at " + resolved;
-        }
-        if (!Files.isRegularFile(resolved) || !Files.isReadable(resolved)) {
-            return "Error: path is not a readable regular file " + resolved;
+            input = MarkdownInputResolver.readSingle(filePath);
+        } catch (ResolveException e) {
+            return "Error: " + e.getMessage();
         }
 
-        String markdown;
-        long mdBytes;
-        try {
-            mdBytes = Files.size(resolved);
-            markdown = Files.readString(resolved, StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            log.error("[DocxRender] read markdown failed for {}: {}", resolved, e.getMessage(), e);
-            return "Error: failed to read markdown — " + e.getMessage();
-        }
-        if (markdown.isBlank()) {
-            return "Error: markdown file is empty " + resolved;
-        }
-
-        String safeName = sanitizeFilename(filename);
-        String displayName = safeName + ".docx";
-        String size = (pageSize == null || pageSize.isBlank()) ? "A4" : pageSize.trim();
+        String displayName = FilenameSanitizer.sanitize(filename, "document", ".docx") + ".docx";
+        String size = resolveSize(pageSize);
 
         try {
             long t0 = System.currentTimeMillis();
-            byte[] bytes = renderer.render(markdown, size);
-            String id = cache.put(bytes, displayName, DOCX_MIME);
-            long elapsed = System.currentTimeMillis() - t0;
-            log.info("[DocxRender] generated {} ({} bytes from {} bytes md, {}ms, id={})",
-                    displayName, bytes.length, mdBytes, elapsed, id);
-
-            String url = "/api/v1/files/generated/" + id;
-            return "Document generated: [" + displayName + "](" + url + ") (link valid for 10 minutes).\n"
-                    + "IMPORTANT: when replying to the user you **must** use the relative path `"
-                    + url + "` verbatim. Do **not** prepend any https://, http:// or domain — "
-                    + "the frontend will resolve the current host automatically.";
+            byte[] bytes = renderer.render(input.markdown(), size);
+            log.info("[DocxRender] generated {} ({} bytes from {} bytes md, {}ms)",
+                    displayName, bytes.length, input.totalBytes(), System.currentTimeMillis() - t0);
+            return GeneratedFileLink.resultEn(bytes, displayName, DOCX_MIME, cache, "Document", 1);
         } catch (Exception e) {
             log.error("[DocxRender] render failed for {} (source: {}): {}",
-                    displayName, resolved, e.getMessage(), e);
+                    displayName, input.sources().get(0), e.getMessage(), e);
             return "Render failed: " + e.getMessage();
         }
     }
@@ -222,91 +193,32 @@ public class DocxRenderTool {
             @ToolParam(description = "Page size: A4 or LETTER (default: A4)", required = false)
             String pageSize) {
 
-        if (filePaths == null || filePaths.isEmpty()) {
-            return "Error: filePaths is empty.";
+        Resolved input;
+        try {
+            input = MarkdownInputResolver.readManyJoined(filePaths);
+        } catch (ResolveException e) {
+            return "Error: " + e.getMessage();
         }
 
-        StringBuilder combined = new StringBuilder();
-        long totalBytes = 0;
-        List<String> resolvedPaths = new ArrayList<>();
-        for (int idx = 0; idx < filePaths.size(); idx++) {
-            String raw = filePaths.get(idx);
-            if (raw == null || raw.isBlank()) {
-                return "Error: filePaths[" + idx + "] is empty.";
-            }
-            Path resolved;
-            try {
-                resolved = WorkspacePathGuard.validatePath(raw);
-            } catch (Exception e) {
-                return "Error: filePaths[" + idx + "] validation failed — " + e.getMessage();
-            }
-            if (!Files.exists(resolved)) {
-                return "Error: filePaths[" + idx + "] not found at " + resolved;
-            }
-            if (!Files.isRegularFile(resolved) || !Files.isReadable(resolved)) {
-                return "Error: filePaths[" + idx + "] is not a readable regular file " + resolved;
-            }
-            String content;
-            try {
-                totalBytes += Files.size(resolved);
-                content = Files.readString(resolved, StandardCharsets.UTF_8);
-            } catch (Exception e) {
-                log.error("[DocxRender] read failed for {}: {}", resolved, e.getMessage(), e);
-                return "Error: read failed for " + resolved + " — " + e.getMessage();
-            }
-            if (content.isBlank()) {
-                return "Error: filePaths[" + idx + "] is blank " + resolved;
-            }
-            if (combined.length() > 0) combined.append("\n\n");
-            combined.append(content);
-            resolvedPaths.add(resolved.toString());
-        }
-
-        String safeName = sanitizeFilename(filename);
-        String displayName = safeName + ".docx";
-        String size = (pageSize == null || pageSize.isBlank()) ? "A4" : pageSize.trim();
+        String displayName = FilenameSanitizer.sanitize(filename, "document", ".docx") + ".docx";
+        String size = resolveSize(pageSize);
 
         try {
             long t0 = System.currentTimeMillis();
-            byte[] bytes = renderer.render(combined.toString(), size);
-            String id = cache.put(bytes, displayName, DOCX_MIME);
-            long elapsed = System.currentTimeMillis() - t0;
-            log.info("[DocxRender] generated {} ({} bytes from {} files / {} bytes md, {}ms, id={})",
-                    displayName, bytes.length, resolvedPaths.size(), totalBytes, elapsed, id);
-
-            String url = "/api/v1/files/generated/" + id;
-            return "Document generated from " + resolvedPaths.size() + " files: ["
-                    + displayName + "](" + url + ") (link valid for 10 minutes).\n"
-                    + "IMPORTANT: when replying to the user you **must** use the relative path `"
-                    + url + "` verbatim. Do **not** prepend any https://, http:// or domain — "
-                    + "the frontend will resolve the current host automatically.";
+            byte[] bytes = renderer.render(input.markdown(), size);
+            log.info("[DocxRender] generated {} ({} bytes from {} files / {} bytes md, {}ms)",
+                    displayName, bytes.length, input.fileCount(), input.totalBytes(),
+                    System.currentTimeMillis() - t0);
+            return GeneratedFileLink.resultEn(bytes, displayName, DOCX_MIME, cache,
+                    "Document", input.fileCount());
         } catch (Exception e) {
             log.error("[DocxRender] render failed for {} (sources: {}): {}",
-                    displayName, resolvedPaths, e.getMessage(), e);
+                    displayName, input.sources(), e.getMessage(), e);
             return "Render failed: " + e.getMessage();
         }
     }
 
-    /**
-     * Strip path separators and other unsafe characters from a user-supplied
-     * filename. Falls back to a generic name when nothing usable remains.
-     */
-    private String sanitizeFilename(String name) {
-        if (name == null) return "document";
-        String trimmed = name.trim();
-        if (trimmed.toLowerCase().endsWith(".docx")) {
-            trimmed = trimmed.substring(0, trimmed.length() - 5);
-        }
-        StringBuilder sb = new StringBuilder(trimmed.length());
-        for (char c : trimmed.toCharArray()) {
-            if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?'
-                    || c == '"' || c == '<' || c == '>' || c == '|' || c < 0x20) {
-                sb.append('_');
-            } else {
-                sb.append(c);
-            }
-        }
-        String cleaned = sb.toString().strip();
-        return cleaned.isEmpty() ? "document" : cleaned;
+    private static String resolveSize(String pageSize) {
+        return (pageSize == null || pageSize.isBlank()) ? "A4" : pageSize.trim();
     }
 }

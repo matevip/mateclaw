@@ -70,7 +70,10 @@ export function useProviderForm(deps: ListDeps) {
     if (id === 'openrouter') return 'https://openrouter.ai/api/v1'
     if (id === 'zhipu-cn') return 'https://open.bigmodel.cn/api/paas/v4'
     if (id === 'zhipu-intl') return 'https://open.z.ai/api/paas/v4'
+    if (id === 'zhipu-cn-codingplan') return 'https://open.bigmodel.cn/api/coding/paas/v4'
+    if (id === 'zhipu-intl-codingplan') return 'https://api.z.ai/api/coding/paas/v4'
     if (id === 'volcengine') return 'https://ark.cn-beijing.volces.com/api/v3'
+    if (id === 'xiaomi-mimo') return 'https://api.xiaomimimo.com/v1'
     return 'https://example.com/v1'
   })
 
@@ -86,6 +89,7 @@ export function useProviderForm(deps: ListDeps) {
     if (id === 'zhipu-cn') return t('settings.model.hints.zhipu')
     if (id === 'zhipu-intl') return t('settings.model.hints.zhipuIntl')
     if (id === 'volcengine') return t('settings.model.hints.volcengine')
+    if (id === 'xiaomi-mimo') return t('settings.model.hints.xiaomiMimo')
     return t('settings.model.hints.openaiCompatible')
   })
 

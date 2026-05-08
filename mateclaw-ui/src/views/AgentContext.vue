@@ -208,8 +208,10 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { mcConfirm } from '@/components/common/useConfirm'
 import { agentApi, agentContextApi } from '@/api/index'
+import { copyToClipboard } from '@/utils/clipboard'
 import type { Agent, WorkspaceFile } from '@/types/index'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
+import { handleMermaidDownload } from '@/composables/useMermaidRenderer'
 import { plainTextIcon } from '@/composables/usePixelarticons'
 
 const { renderMarkdown } = useMarkdownRenderer()
@@ -320,6 +322,7 @@ async function fetchPromptFiles() {
 }
 
 function handlePreviewClick(e: MouseEvent) {
+  if (handleMermaidDownload(e)) return
   const btn = (e.target as HTMLElement).closest('.code-block__copy') as HTMLElement | null
   if (!btn) return
   // Same as ChatConsole: the copy button now lives inside <details><summary>
@@ -330,7 +333,7 @@ function handlePreviewClick(e: MouseEvent) {
   const encoded = btn.getAttribute('data-code')
   if (!encoded) return
   const code = decodeURIComponent(encoded)
-  navigator.clipboard.writeText(code).then(() => {
+  copyToClipboard(code).then(() => {
     btn.classList.add('copied')
     const textEl = btn.querySelector('.code-block__copy-text')
     if (textEl) textEl.textContent = t('chat.copied') || 'Copied'

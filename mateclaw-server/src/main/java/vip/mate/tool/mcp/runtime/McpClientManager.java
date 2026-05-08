@@ -17,6 +17,8 @@ import org.springframework.stereotype.Component;
 import vip.mate.tool.mcp.model.McpServerEntity;
 
 import jakarta.annotation.PreDestroy;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -149,22 +151,77 @@ public class McpClientManager {
     }
 
     /**
-     * 获取所有 active clients 的 ToolCallback 列表
+     * Collect ToolCallbacks from every active MCP client, with each callback's
+     * name rewritten to a server-id-anchored prefix
+     * (see {@link McpToolNameResolver}). Two guarantees:
+     * <ul>
+     *   <li>Two MCP servers can expose the same raw tool name without one
+     *       silently overwriting the other in a name-keyed map downstream.</li>
+     *   <li>If two raw names within the same server happen to hash to the
+     *       same prefixed name, only the first survives —
+     *       {@link McpHashCollisionDetector} flags the second so the picker
+     *       can refuse to bind it.</li>
+     * </ul>
      */
     public List<ToolCallback> getAllToolCallbacks() {
         List<ToolCallback> allCallbacks = new ArrayList<>();
         for (Map.Entry<Long, McpSyncClient> entry : clients.entrySet()) {
+            long serverId = entry.getKey();
             try {
                 SyncMcpToolCallbackProvider provider = new SyncMcpToolCallbackProvider(entry.getValue());
                 ToolCallback[] cbs = provider.getToolCallbacks();
-                if (cbs != null) {
-                    Collections.addAll(allCallbacks, cbs);
+                if (cbs == null || cbs.length == 0) {
+                    continue;
                 }
+                allCallbacks.addAll(wrapServerCallbacks(serverId, cbs));
             } catch (Exception e) {
-                log.warn("Failed to get tool callbacks from MCP server {}: {}", entry.getKey(), e.getMessage());
+                log.warn("Failed to get tool callbacks from MCP server {}: {}", serverId, e.getMessage());
             }
         }
         return allCallbacks;
+    }
+
+    /**
+     * Apply per-server collision detection and wrap each surviving callback
+     * with its prefixed name. Walks {@code cbs} and the matching decision
+     * list in lockstep so that duplicate raw names are honored
+     * one-decision-per-callback — a {@code Map<raw, decision>} would make
+     * every duplicate look up the first (bindable) decision and silently
+     * register two callbacks under the same prefixed name, breaking the
+     * "runtime and picker share one decision" contract.
+     *
+     * <p>Package-private so unit tests can drive it without standing up a
+     * real {@link McpSyncClient}.
+     */
+    static List<ToolCallback> wrapServerCallbacks(long serverId, ToolCallback[] cbs) {
+        List<String> rawNames = new ArrayList<>(cbs.length);
+        for (ToolCallback cb : cbs) {
+            rawNames.add(cb.getToolDefinition() != null ? cb.getToolDefinition().name() : null);
+        }
+        List<McpHashCollisionDetector.Decision> decisions =
+                McpHashCollisionDetector.classify(serverId, rawNames);
+
+        // classify() drops blank/null raws; advance the decision pointer
+        // only when the cb's raw is non-blank so the indices stay aligned.
+        List<ToolCallback> out = new ArrayList<>(cbs.length);
+        int dIdx = 0;
+        for (ToolCallback cb : cbs) {
+            String raw = cb.getToolDefinition() != null ? cb.getToolDefinition().name() : null;
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            if (dIdx >= decisions.size()) {
+                break;
+            }
+            McpHashCollisionDetector.Decision d = decisions.get(dIdx++);
+            if (!d.bindable()) {
+                log.error("Skipping MCP tool callback on server {} (raw='{}', prefixed='{}'): {}",
+                        serverId, raw, d.prefixedName(), d.unavailableReason());
+                continue;
+            }
+            out.add(new PrefixedNameToolCallback(d.prefixedName(), cb));
+        }
+        return out;
     }
 
     /**
@@ -269,6 +326,7 @@ public class McpClientManager {
         // Args
         if (server.getArgsJson() != null && !server.getArgsJson().isBlank()) {
             List<String> args = JSONUtil.toList(server.getArgsJson(), String.class);
+            args = args.stream().map(McpClientManager::expandEnvVars).toList();
             builder.args(args);
         }
 
@@ -315,7 +373,9 @@ public class McpClientManager {
         Duration connectTimeout = Duration.ofSeconds(
                 server.getConnectTimeoutSeconds() != null ? server.getConnectTimeoutSeconds() : 30);
 
-        var builder = HttpClientSseClientTransport.builder(server.getUrl())
+        HttpEndpointConfig endpointConfig = splitHttpUrl(server.getUrl(), "/sse");
+        var builder = HttpClientSseClientTransport.builder(endpointConfig.baseUrl())
+                .sseEndpoint(endpointConfig.endpoint())
                 .connectTimeout(connectTimeout);
 
         // Add headers via request customizer
@@ -335,7 +395,9 @@ public class McpClientManager {
         Duration connectTimeout = Duration.ofSeconds(
                 server.getConnectTimeoutSeconds() != null ? server.getConnectTimeoutSeconds() : 30);
 
-        var builder = HttpClientStreamableHttpTransport.builder(server.getUrl())
+        HttpEndpointConfig endpointConfig = splitHttpUrl(server.getUrl(), "/mcp");
+        var builder = HttpClientStreamableHttpTransport.builder(endpointConfig.baseUrl())
+                .endpoint(endpointConfig.endpoint())
                 .connectTimeout(connectTimeout);
 
         // Add headers via request customizer
@@ -349,6 +411,45 @@ public class McpClientManager {
         }
 
         return builder.build();
+    }
+
+    /**
+     * Splits a full HTTP MCP URL into a {@code scheme://authority} base and a
+     * {@code path[?query]} endpoint suffix. The underlying SDK builders take
+     * the two halves separately and resolve them via {@link URI#resolve(URI)},
+     * which replaces the base URL's path with the endpoint when the endpoint
+     * starts with {@code /}. Passing a full URL as the base would therefore
+     * silently route every request to the SDK's default endpoint
+     * (e.g. {@code /mcp}) and drop any user-configured path or query string.
+     *
+     * @param url             the user-configured full URL
+     * @param defaultEndpoint endpoint to use when the URL has no path
+     */
+    static HttpEndpointConfig splitHttpUrl(String url, String defaultEndpoint) {
+        String trimmed = url != null ? url.trim() : "";
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("MCP server URL must not be empty");
+        }
+        URI uri;
+        try {
+            uri = new URI(trimmed);
+        } catch (URISyntaxException e) {
+            throw new IllegalArgumentException("Invalid MCP server URL: " + url, e);
+        }
+        if (uri.getScheme() == null || uri.getRawAuthority() == null) {
+            throw new IllegalArgumentException("MCP server URL must include scheme and host: " + url);
+        }
+        String path = uri.getRawPath();
+        String endpoint = (path == null || path.isEmpty() || "/".equals(path)) ? defaultEndpoint : path;
+        String query = uri.getRawQuery();
+        if (query != null && !query.isEmpty()) {
+            endpoint += "?" + query;
+        }
+        String baseUrl = uri.getScheme() + "://" + uri.getRawAuthority();
+        return new HttpEndpointConfig(baseUrl, endpoint);
+    }
+
+    record HttpEndpointConfig(String baseUrl, String endpoint) {
     }
 
     private Map<String, String> parseHeaders(McpServerEntity server) {
@@ -376,17 +477,22 @@ public class McpClientManager {
     }
 
     /**
-     * 展开环境变量引用，如 ${ENV_VAR} 或 $ENV_VAR
+     * 展开系统属性和环境变量引用，如 ${user.home}、${ENV_VAR} 或 $ENV_VAR
      * <p>
-     * 先处理 ${VAR}（精确匹配），再用正则处理 $VAR（word boundary），
-     * 避免 $PATH 误替换 $PATH_HOME 的问题。
+     * 先处理 ${VAR}（精确匹配，JVM 系统属性优先于环境变量，
+     * 这样 ${user.home} 等跨平台占位符在 Windows 上也能解析），
+     * 再用正则处理 $VAR（word boundary），避免 $PATH 误替换 $PATH_HOME 的问题。
      */
     private static String expandEnvVars(String value) {
         if (value == null || !value.contains("$")) {
             return value;
         }
         String result = value;
-        // Phase 1: 精确匹配 ${VAR} 模式（不会误替换）
+        // Phase 1a: ${VAR} 优先匹配 JVM system property（如 ${user.home}、${java.io.tmpdir}）
+        for (String key : System.getProperties().stringPropertyNames()) {
+            result = result.replace("${" + key + "}", System.getProperty(key));
+        }
+        // Phase 1b: ${VAR} 回退匹配 OS 环境变量
         for (Map.Entry<String, String> env : System.getenv().entrySet()) {
             result = result.replace("${" + env.getKey() + "}", env.getValue());
         }

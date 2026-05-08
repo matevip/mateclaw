@@ -110,6 +110,18 @@ public class MusicGenerationService {
             asyncTaskService.updateStatus(task.getTaskId(), "running", null, null, null);
 
             MusicGenerationResult result = generateWithFallback(request, config);
+
+            // The conversation may have been deleted while the provider was
+            // blocking (~120s). Gate the entire post-provider tail — status
+            // update, broadcast, persistence — so we never write to a
+            // tombstoned conversation regardless of whether the provider
+            // succeeded or failed.
+            if (asyncTaskService.isConversationCanceled(conversationId)) {
+                log.info("[Music] Task {} (success={}) aborted: conversation {} was deleted",
+                        task.getTaskId(), result.isSuccess(), conversationId);
+                return;
+            }
+
             if (!result.isSuccess()) {
                 asyncTaskService.updateStatus(task.getTaskId(), "failed", null, null,
                         result.getErrorMessage());
@@ -143,6 +155,11 @@ public class MusicGenerationService {
             log.info("[Music] Task {} succeeded, audio at {}", task.getTaskId(), audioUrl);
         } catch (Exception e) {
             log.error("[Music] Task {} worker failed: {}", task.getTaskId(), e.getMessage(), e);
+            if (asyncTaskService.isConversationCanceled(conversationId)) {
+                log.info("[Music] Skipping failure status/broadcast for deleted conversation {}",
+                        conversationId);
+                return;
+            }
             asyncTaskService.updateStatus(task.getTaskId(), "failed", null, null,
                     "音乐生成异常: " + e.getMessage());
             asyncTaskService.broadcastTaskEventWithData(task, "async_task_completed",

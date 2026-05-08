@@ -158,6 +158,18 @@ const sections = computed(() => [
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
   },
   {
+    id: 'workflows',
+    path: '/settings/workflows',
+    label: t('nav.workflows', 'Workflows'),
+    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
+  },
+  {
+    id: 'triggers',
+    path: '/settings/triggers',
+    label: t('nav.triggers', 'Triggers'),
+    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>',
+  },
+  {
     id: 'datasources',
     path: '/settings/datasources',
     label: t('nav.datasources'),

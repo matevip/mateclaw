@@ -5,6 +5,8 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -110,7 +112,22 @@ public class ChatGPTChatModel implements ChatModel {
                             return null;
                         }
                         case "done" -> {
-                            // 流结束，如果没有任何 tool call 产生过 done event 但有未完成的，忽略
+                            // Emit a final empty-content ChatResponse carrying the
+                            // usage metadata so NodeStreamingChatHelper can record
+                            // per-turn token counts. Without this the OAuth path's
+                            // turns log 0/0/0 (the client only knows about Usage
+                            // when it's attached to a ChatResponse.metadata).
+                            if (event.inputTokens() != null || event.outputTokens() != null
+                                    || event.totalTokens() != null) {
+                                int in = event.inputTokens() != null ? event.inputTokens() : 0;
+                                int out = event.outputTokens() != null ? event.outputTokens() : 0;
+                                int total = event.totalTokens() != null ? event.totalTokens() : (in + out);
+                                Usage usage = new DefaultUsage(in, out, total);
+                                Generation usageGen = new Generation(new AssistantMessage(""),
+                                        ChatGenerationMetadata.builder().finishReason("stop").build());
+                                return new ChatResponse(List.of(usageGen),
+                                        ChatResponseMetadata.builder().model(model).usage(usage).build());
+                            }
                             return null;
                         }
                         default -> { return null; }

@@ -12,6 +12,8 @@ import vip.mate.audit.service.AuditEventService;
 import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.common.result.R;
 import vip.mate.exception.MateClawException;
+import vip.mate.i18n.I18nService;
+import vip.mate.workspace.conversation.ConversationService;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,6 +37,8 @@ public class AgentRuntimeController {
     private final ChatStreamTracker streamTracker;
     private final SubagentRegistry subagentRegistry;
     private final AuditEventService auditEventService;
+    private final ConversationService conversationService;
+    private final I18nService i18nService;
 
     @Operation(summary = "Snapshot of every in-flight agent turn")
     @GetMapping("/snapshot")
@@ -59,6 +63,9 @@ public class AgentRuntimeController {
                                           Authentication auth) {
         requireAdmin(auth);
         boolean ok = streamTracker.forceRecycle(conversationId);
+        if (ok) {
+            finalizeRecycledConversation(conversationId);
+        }
         recordAudit(auth, "agent-runtime.recycle", conversationId, Map.of("result", ok));
         return R.ok(Map.of("recycled", ok));
     }
@@ -89,11 +96,44 @@ public class AgentRuntimeController {
                 .toList();
         int recycled = 0;
         for (String cid : ids) {
-            if (streamTracker.forceRecycle(cid)) recycled++;
+            if (streamTracker.forceRecycle(cid)) {
+                recycled++;
+                finalizeRecycledConversation(cid);
+            }
         }
         recordAudit(auth, "agent-runtime.sweep", "all",
                 Map.of("targets", ids, "recycled", recycled));
         return R.ok(Map.of("recycled", recycled, "ids", ids));
+    }
+
+    /**
+     * Common DB-side cleanup after a successful {@code forceRecycle}:
+     * <ol>
+     *   <li>Flip {@code stream_status} off 'running' so the sidebar drops the
+     *       生成中 badge immediately. (The late doOnCancel / doOnComplete may
+     *       re-set this to 'idle' when the agent finally yields — same value,
+     *       no-op.)</li>
+     *   <li>If the conversation's last message is still a user turn — i.e.
+     *       the agent was disposed before any text streamed and the
+     *       emergencySaveCallback found nothing to persist — write a
+     *       "已被用户中止" assistant marker so the UI shows what happened
+     *       instead of a blank reply.</li>
+     * </ol>
+     */
+    private void finalizeRecycledConversation(String conversationId) {
+        try {
+            conversationService.updateStreamStatus(conversationId, "idle");
+        } catch (Exception e) {
+            log.warn("recycle: failed to reset stream_status for {}: {}",
+                    conversationId, e.getMessage());
+        }
+        try {
+            conversationService.saveStopMarkerIfDangling(
+                    conversationId, i18nService.msg("chat.stopMarker.userAborted"), "stopped");
+        } catch (Exception e) {
+            log.warn("recycle: failed to save stop marker for {}: {}",
+                    conversationId, e.getMessage());
+        }
     }
 
     private void requireAdmin(Authentication auth) {

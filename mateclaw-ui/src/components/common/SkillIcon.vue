@@ -76,7 +76,10 @@ const sizeClass = computed(() => {
   justify-content: center;
   line-height: 1;
   flex-shrink: 0;
-  color: var(--mc-text-primary);
+  /* Inherit color so parents (e.g. an agent card avatar) can tint the
+   * pixelart SVG via `currentColor`. Without parental color, the icon
+   * still picks up text-primary through normal CSS inheritance. */
+  color: inherit;
 }
 
 /* Pixelart SVGs ship with viewBox=0 0 24 24 + fill=currentColor — they
@@ -84,6 +87,8 @@ const sizeClass = computed(() => {
  * inner svg so the wrapper's flex centering works. */
 .skill-icon__svg {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   height: 100%;
 }

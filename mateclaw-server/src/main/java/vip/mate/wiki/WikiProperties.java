@@ -130,8 +130,39 @@ public class WikiProperties {
      */
     private int embeddingMaxChars = 6000;
 
+    /**
+     * Circuit-breaker threshold: abort an embedding pass after this many
+     * consecutive batch failures (auth / rate-limit / network errors that
+     * cause an entire batch to embed zero chunks). Without it, a broken
+     * provider would silently iterate through every pending chunk in the
+     * KB, producing only log noise and wasted wall-clock time before the
+     * user can intervene.
+     * <p>
+     * Set too low and a transient blip aborts a healthy pass; set too
+     * high and the user waits forever on a clearly-broken provider.
+     * Default 5 covers most real outages while tolerating a couple of
+     * isolated 5xx hiccups.
+     */
+    private int embeddingConsecutiveFailureThreshold = 5;
+
     /** 混合搜索默认模式：keyword / semantic / hybrid */
     private String searchDefaultMode = "hybrid";
+
+    /**
+     * Minimum trimmed char length for a user message before per-turn wiki
+     * retrieval kicks in. Short messages like "继续" / "嗯" / "OK" carry no
+     * semantic signal and the retriever falls back to whichever pages happen
+     * to dominate the index, polluting the prompt with off-topic content.
+     */
+    private int relevantContextMinQueryLength = 3;
+
+    /**
+     * Relative score floor for relevant-wiki hits. A hit is dropped when its
+     * score is below {@code topHit.score * this ratio}, so a single strong
+     * match does not drag in low-relevance tail pages alongside it. Set to
+     * 0 to disable.
+     */
+    private double relevantContextMinRelativeScore = 0.5;
 
     // ==================== RFC-031: Light processing tiers ====================
 

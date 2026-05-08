@@ -151,6 +151,16 @@ public class VideoGenerationService {
      * 任务完成时的回写逻辑：下载视频 → 保存消息 → 广播 SSE
      */
     private void handleCompletion(AsyncTaskEntity task, TaskPollResult result) {
+        // The conversation may have been deleted while the poller was running.
+        // Gate every post-completion side effect — file write, message save,
+        // success/failure broadcast — so we never write to a tombstoned
+        // conversation regardless of which sub-branch we'd take.
+        if (asyncTaskService.isConversationCanceled(task.getConversationId())) {
+            log.info("[VideoGen] Task {} (success={}) aborted: conversation {} was deleted",
+                    task.getTaskId(), result.succeeded(), task.getConversationId());
+            return;
+        }
+
         if (result.succeeded()) {
             try {
                 String videoUrl = result.videoUrl();
@@ -183,6 +193,11 @@ public class VideoGenerationService {
             } catch (Exception e) {
                 log.error("[VideoGen] Completion handling failed for task {}: {}",
                         task.getTaskId(), e.getMessage(), e);
+                if (asyncTaskService.isConversationCanceled(task.getConversationId())) {
+                    log.info("[VideoGen] Skipping failure broadcast for deleted conversation {}",
+                            task.getConversationId());
+                    return;
+                }
                 asyncTaskService.broadcastTaskEvent(task, "async_task_completed",
                         false, null, "视频下载或保存失败: " + e.getMessage());
             }

@@ -165,6 +165,18 @@ const router = createRouter({
               meta: { title: 'Settings - Cron Jobs' },
             },
             {
+              path: 'workflows',
+              name: 'SettingsWorkflows',
+              component: () => import('@/views/Workflows.vue'),
+              meta: { title: 'Settings - Workflows' },
+            },
+            {
+              path: 'triggers',
+              name: 'SettingsTriggers',
+              component: () => import('@/views/Triggers.vue'),
+              meta: { title: 'Settings - Triggers' },
+            },
+            {
               path: 'datasources',
               name: 'SettingsDatasources',
               component: () => import('@/views/Datasources.vue'),

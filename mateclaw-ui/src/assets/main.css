@@ -140,6 +140,11 @@
   --mc-scrollbar-thumb: #C4B5A8;
   --mc-scrollbar-thumb-hover: #A08070;
 
+  /* workflow canvas — vue-flow surfaces */
+  --mc-canvas-dot: rgba(0, 0, 0, 0.18);
+  --mc-edge: #c2b3a5;
+  --mc-edge-strong: #8a7261;
+
   /* Element Plus light override */
   --el-color-primary: #D97757;
   --el-font-family: var(--mc-font-body);
@@ -260,7 +265,76 @@ html.dark {
   --mc-scrollbar-thumb: #5A4438;
   --mc-scrollbar-thumb-hover: #7A6050;
 
+  /* workflow canvas — darker dots + softer edge color so they read on
+     the dark background without overpowering the node card. */
+  --mc-canvas-dot: rgba(255, 255, 255, 0.14);
+  --mc-edge: #5a4a3e;
+  --mc-edge-strong: #8c7361;
+
   color-scheme: dark;
+}
+
+/* Vue Flow theme bridge — its default stylesheet ships hard-coded
+   light colors for handles / mini-map / control buttons. Map them to
+   our theme tokens so dark mode inherits cleanly.
+
+   Each selector is bumped to (0,2,0) specificity by scoping to
+   `.workflow-canvas` because vue-flow's component CSS imports inside
+   WorkflowCanvas.vue land in the bundle AFTER main.css; equal
+   specificity would lose. */
+.workflow-canvas .vue-flow__handle {
+  background: var(--mc-edge-strong, #777);
+  border-color: var(--mc-bg-elevated, #fff);
+}
+.workflow-canvas .vue-flow__edge-path {
+  stroke: var(--mc-edge, #999);
+}
+.workflow-canvas .vue-flow__edge-text {
+  fill: var(--mc-text-secondary, #555);
+  font-size: 11px;
+}
+.workflow-canvas .vue-flow__edge-textbg {
+  fill: var(--mc-bg-elevated, #fff);
+}
+.workflow-canvas .vue-flow__background {
+  background: transparent;
+}
+.workflow-canvas .vue-flow__minimap {
+  background: var(--mc-bg-sunken, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--mc-border-light, rgba(0, 0, 0, 0.08));
+  border-radius: 6px;
+}
+.workflow-canvas .vue-flow__minimap-mask {
+  fill: var(--mc-bg-muted, rgba(0, 0, 0, 0.06));
+  stroke: var(--mc-border, transparent);
+}
+.workflow-canvas .vue-flow__controls {
+  box-shadow: var(--mc-shadow-soft, 0 2px 6px rgba(0, 0, 0, 0.1));
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--mc-bg-elevated, #ffffff);
+  border: 1px solid var(--mc-border-light, rgba(0, 0, 0, 0.08));
+}
+.workflow-canvas .vue-flow__controls-button {
+  background: var(--mc-bg-elevated, #ffffff);
+  border-bottom: 1px solid var(--mc-border-light, rgba(0, 0, 0, 0.08));
+  fill: var(--mc-text-primary, #333);
+  color: var(--mc-text-primary, #333);
+}
+.workflow-canvas .vue-flow__controls-button svg {
+  fill: currentColor;
+}
+.workflow-canvas .vue-flow__controls-button:hover {
+  background: var(--mc-bg-muted, rgba(0, 0, 0, 0.05));
+}
+/* Round the bottom button so the corner doesn't show the hardcoded grey
+   border vue-flow ships with. */
+.workflow-canvas .vue-flow__controls-button:last-child {
+  border-bottom: none;
+}
+/* Selection ring matches the brand accent in both modes. */
+.workflow-canvas .vue-flow__node.selected {
+  box-shadow: 0 0 0 2px var(--mc-primary, #4084ff);
 }
 
 /* ================================================================

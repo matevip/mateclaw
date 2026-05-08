@@ -4,7 +4,7 @@
       <div class="mc-page-inner agents-page">
         <div class="mc-page-header">
           <div>
-            <div class="mc-page-kicker">Agent Studio</div>
+            <div class="mc-page-kicker">{{ t('agents.kicker') }}</div>
             <h1 class="mc-page-title">{{ t('agents.title') }}</h1>
             <p class="mc-page-desc">{{ t('agents.desc') }}</p>
           </div>
@@ -60,28 +60,40 @@
             class="agent-card mc-surface-card"
             :class="{ 'agent-card--disabled': !agent.enabled }"
           >
-            <div class="agent-card__header">
-              <span class="agent-card__icon">
-                <SkillIcon :value="agent.icon" :size="36" :fallback="'🤖'" />
+            <!--
+              Employee-card layout: avatar, name, one-line tagline, primary
+              chat action, and a hover-revealed overflow row. Anything that
+              isn't identity-or-action lives behind the overflow row to keep
+              the card readable at a glance.
+            -->
+            <div class="agent-card__top">
+              <span
+                class="agent-card__avatar"
+                :class="{ 'agent-card__avatar--off': !agent.enabled }"
+                :style="{ color: agentIconColor(agent.icon) }"
+              >
+                <SkillIcon :value="agent.icon" :size="40" :fallback="'🧑‍💼'" />
               </span>
-              <label class="toggle-switch toggle-switch--sm">
-                <input type="checkbox" :checked="agent.enabled" @change="toggleAgent(agent)" />
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-            <div class="agent-card__body">
-              <h3 class="agent-card__name">{{ agent.name }}</h3>
-              <p class="agent-card__desc">{{ agent.description || t('agents.messages.noDescription') }}</p>
-            </div>
-            <div class="agent-card__meta">
-              <span class="tag type-tag">{{ agent.agentType === 'react' ? 'ReAct' : 'Plan-Execute' }}</span>
-              <div class="tags-cell" v-if="agent.tags">
-                <span v-for="tag in parseTags(agent.tags)" :key="tag" class="tag tag-item">{{ tag }}</span>
+              <div class="agent-card__identity">
+                <h3 class="agent-card__name">{{ agent.name }}</h3>
+                <p class="agent-card__tagline">
+                  {{ agentTagline(agent) || t('agents.messages.noTagline') }}
+                </p>
               </div>
             </div>
-            <div class="agent-card__footer">
-              <span class="time-label">{{ formatTime(agent.updateTime) }}</span>
-              <div class="agent-card__actions">
+
+            <div class="agent-card__action-row">
+              <button class="agent-card__primary" @click="goToChat(agent)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+                {{ t('agents.actions.chat') }}
+              </button>
+              <div class="agent-card__overflow">
+                <label class="toggle-switch toggle-switch--sm" :title="t('agents.fields.enabled')">
+                  <input type="checkbox" :checked="agent.enabled" @change="toggleAgent(agent)" />
+                  <span class="toggle-slider"></span>
+                </label>
                 <button class="action-btn" :title="t('agents.tabs.context')" @click="goToAgentContextFor(agent)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
@@ -136,7 +148,9 @@
               :class="{ applying: applyingTemplate }"
               @click="!applyingTemplate && applyTemplate(tpl.id)"
             >
-              <div class="template-icon">{{ tpl.icon }}</div>
+              <div class="template-icon" :style="{ color: agentIconColor(tpl.icon) }">
+                <SkillIcon :value="tpl.icon" :size="28" :fallback="'🧑‍💼'" />
+              </div>
               <div class="template-info">
                 <h4 class="template-name">{{ $i18n.locale === 'zh-CN' && tpl.nameZh ? tpl.nameZh : tpl.name }}</h4>
                 <p class="template-detail">{{ $i18n.locale === 'zh-CN' && tpl.descriptionZh ? tpl.descriptionZh : tpl.description }}</p>
@@ -246,13 +260,43 @@
                 <option value="max">{{ t('agents.thinkingLevels.max') }}</option>
               </select>
             </div>
+            <!--
+              Identity triad: role + goal + backstory map to H2 sections in
+              the stored systemPrompt. The card tagline is derived from
+              role + goal, so the Goal field shows a live preview to make
+              the constraint visible while typing.
+            -->
+            <div class="form-group full-width">
+              <label class="form-label">{{ t('agents.fields.role') }}</label>
+              <input v-model="profileForm.role" class="form-input" :placeholder="t('agents.placeholders.role')" />
+              <p class="form-hint">{{ t('agents.fields.roleHint') }}</p>
+            </div>
+            <div class="form-group full-width">
+              <label class="form-label">{{ t('agents.fields.goal') }}</label>
+              <input v-model="profileForm.goal" class="form-input" :placeholder="t('agents.placeholders.goal')" />
+              <p class="form-hint" :class="{ 'form-hint--warn': taglinePreviewWidth > taglineSoftLimit }">
+                <span class="form-hint__label">{{ t('agents.fields.taglinePreview') }}</span>
+                <span class="form-hint__value">{{ taglinePreview || t('agents.messages.noTagline') }}</span>
+                <span class="form-hint__counter">{{ taglinePreviewWidth }}/{{ taglineSoftLimit }}</span>
+              </p>
+            </div>
+            <div class="form-group full-width">
+              <label class="form-label">{{ t('agents.fields.backstory') }}</label>
+              <textarea v-model="profileForm.backstory" class="form-textarea" rows="3" :placeholder="t('agents.placeholders.backstory')"></textarea>
+              <p class="form-hint">{{ t('agents.fields.backstoryHint') }}</p>
+            </div>
             <div class="form-group full-width">
               <label class="form-label">{{ t('agents.fields.description') }}</label>
               <input v-model="form.description" class="form-input" :placeholder="t('agents.placeholders.description')" />
             </div>
             <div class="form-group full-width">
-              <label class="form-label">{{ t('agents.fields.systemPrompt') }}</label>
-              <textarea v-model="form.systemPrompt" class="form-textarea" rows="5" :placeholder="t('agents.placeholders.systemPrompt')"></textarea>
+              <details class="advanced-prompt">
+                <summary class="advanced-prompt__summary">
+                  {{ t('agents.fields.extraInstructions') }}
+                </summary>
+                <textarea v-model="profileForm.extra" class="form-textarea" rows="4" :placeholder="t('agents.placeholders.extraInstructions')"></textarea>
+                <p class="form-hint">{{ t('agents.fields.extraInstructionsHint') }}</p>
+              </details>
             </div>
             <div class="form-group">
               <label class="form-label">{{ t('agents.fields.tags') }}</label>
@@ -269,6 +313,10 @@
 
           <!-- Skills Tab -->
           <div v-if="modalTab === 'skills'" class="binding-tab">
+            <div class="binding-intro">
+              <span class="binding-intro__kicker">{{ t('agents.binding.skillsKicker') }}</span>
+              <p class="binding-intro__tagline">{{ t('agents.binding.skillsTagline') }}</p>
+            </div>
             <p class="binding-hint">{{ t('agents.binding.skillsHint') }}</p>
             <div v-if="availableSkills.length === 0" class="binding-empty">{{ t('agents.binding.noSkills') }}</div>
             <div v-else class="binding-list">
@@ -294,6 +342,10 @@
                Skill bindings already auto-expand allowed-tools (§14.2), so
                the picker is collapsed by default to reduce noise. -->
           <div v-if="modalTab === 'tools'" class="binding-tab">
+            <div class="binding-intro">
+              <span class="binding-intro__kicker">{{ t('agents.binding.toolsKicker') }}</span>
+              <p class="binding-intro__tagline">{{ t('agents.binding.toolsTagline') }}</p>
+            </div>
             <details class="advanced-tools" :open="selectedToolNames.length > 0 || advancedToolsOpen">
               <summary class="advanced-tools-summary" @click.prevent="advancedToolsOpen = !advancedToolsOpen">
                 <span class="advanced-tools-title">
@@ -304,22 +356,56 @@
               </summary>
               <p class="binding-hint">{{ t('agents.binding.toolsHint') }}</p>
               <p class="binding-hint advanced-tools-note">{{ t('agents.binding.advancedToolsHint') }}</p>
-              <div v-if="availableTools.length === 0" class="binding-empty">{{ t('agents.binding.noTools') }}</div>
+              <p class="binding-hint advanced-tools-note">{{ t('agents.binding.toolUnionHint') }}</p>
+              <!-- Render the empty state only when there is genuinely
+                   nothing to show. availableTools can be empty while
+                   availableToolGroups still contains a synthesized
+                   orphan group (saved bindings whose tools dropped out
+                   of the catalog) — that case must reach the list so
+                   the user can clean those orphans up. -->
+              <div v-if="availableToolGroups.length === 0" class="binding-empty">{{ t('agents.binding.noTools') }}</div>
               <div v-else class="binding-list">
-                <label
-                  v-for="tool in availableTools"
-                  :key="tool.name"
-                  class="binding-item"
-                  :class="{ selected: selectedToolNames.includes(tool.name) }"
-                >
-                  <input type="checkbox" :value="tool.name" v-model="selectedToolNames" class="binding-checkbox" />
-                  <span class="binding-icon"><SkillIcon :value="tool.icon" :size="20" :fallback="'🔧'" /></span>
-                  <div class="binding-info">
-                    <span class="binding-name">{{ tool.displayName || tool.name }}</span>
-                    <span v-if="tool.description" class="binding-desc">{{ tool.description?.slice(0, 80) }}</span>
-                  </div>
-                  <span class="binding-type-badge">{{ tool.toolType }}</span>
-                </label>
+                <template v-for="group in availableToolGroups" :key="group.groupId">
+                  <div class="binding-group-header">{{ group.label }}</div>
+                  <label
+                    v-for="tool in group.tools"
+                    :key="tool.rowId || `${group.groupId}#${tool.rawName}#${tool.name}`"
+                    class="binding-item"
+                    :class="{
+                      selected: tool._isSelected,
+                      'binding-item--stale': tool.stale,
+                      'binding-item--unavailable': !tool.available,
+                    }"
+                    :title="!tool.available
+                      ? t('agents.binding.toolUnavailableTooltip', { reason: tool.unavailableReason || '' })
+                      : (tool.stale ? t('agents.binding.toolStaleTooltip') : tool.name)"
+                  >
+                    <!-- Manual checkbox state. Two rows can share the
+                         same tool.name (hash-collision twin or
+                         duplicate-raw twin); v-model would auto-sync
+                         both, so we drive each row's checked flag from
+                         the pre-computed _isSelected derived in
+                         availableToolGroups, which considers whether
+                         this row's name is owned by a bindable twin. -->
+                    <input
+                      type="checkbox"
+                      class="binding-checkbox"
+                      :checked="tool._isSelected"
+                      :disabled="tool._isDisabled"
+                      @change="onToolToggle(tool.name, $event)"
+                    />
+                    <span class="binding-icon">
+                      <SkillIcon :value="tool.source === 'mcp' ? '🔌' : '🔧'" :size="20" :fallback="'🔧'" />
+                    </span>
+                    <div class="binding-info">
+                      <span class="binding-name">{{ tool.rawName || tool.name }}</span>
+                      <span v-if="tool.description" class="binding-desc">{{ tool.description?.slice(0, 80) }}</span>
+                    </div>
+                    <span v-if="tool.stale" class="binding-stale-badge">{{ t('agents.binding.toolStaleBadge') }}</span>
+                    <span v-if="!tool.available" class="binding-unavailable-badge">{{ t('agents.binding.toolUnavailableBadge') }}</span>
+                    <span v-else class="binding-type-badge">{{ tool.source }}</span>
+                  </label>
+                </template>
               </div>
             </details>
           </div>
@@ -377,6 +463,16 @@ import { agentApi, agentBindingApi, modelApi, skillApi, toolApi, templateApi, ba
 import type { Agent } from '@/types/index'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import SkillIconPicker from '@/components/common/SkillIconPicker.vue'
+import {
+  emptyProfile,
+  parsePrompt,
+  serializePrompt,
+  deriveTagline,
+  taglineVisualWidth,
+  TAGLINE_CJK_BUDGET,
+  type AgentPromptProfile,
+} from '@/utils/agentPromptProfile'
+import { agentIconColor } from '@/utils/agentIconColor'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -394,6 +490,116 @@ const advancedToolsOpen = ref(false)
 // Binding state
 const availableSkills = ref<any[]>([])
 const availableTools = ref<any[]>([])
+
+/**
+ * Group the flat /tools/available payload by source so the picker
+ * renders one section per origin (built-in, MCP per server). Groups
+ * are stable in insertion order — built-in first because the API
+ * returns them first, then MCP groups in server discovery order.
+ *
+ * <p>For each row we also pre-compute {@code _isSelected} /
+ * {@code _isDisabled} so the template doesn't have to derive them from
+ * {@code tool.name} alone. With hash-collision and duplicate-raw rows
+ * sharing the same {@code name} as the bindable twin, naively using
+ * {@code selectedToolNames.includes(tool.name)} would mark both checked
+ * and let the user uncheck the unavailable one — the unchecked twin
+ * would silently mutate the bound name. The pre-computed flags decouple
+ * each row's UI state from any sibling row that shares its prefixed
+ * name.
+ */
+const availableToolGroups = computed(() => {
+  const groups: Record<string, { groupId: string; label: string; tools: any[] }> = {}
+  const order: string[] = []
+
+  // Names that any available row claims. Unavailable rows whose name is
+  // also held by an available row are "shadowed" — they must never look
+  // selected and must never accept a click. Unavailable rows whose name
+  // ISN'T in this set are orphans (e.g. a saved binding whose tool got
+  // removed upstream); the user must still be able to uncheck them.
+  const bindableNames = new Set<string>()
+  // Names that appear anywhere in availableTools (with either flag). Any
+  // entry in selectedToolNames whose name is not in this set is a
+  // "catalog-orphan" — saved before the upstream catalog dropped it —
+  // and needs a synthesized row so the user can uncheck it.
+  const knownNames = new Set<string>()
+  for (const t of availableTools.value) {
+    knownNames.add(t.name)
+    if (t.available) bindableNames.add(t.name)
+  }
+
+  for (const t of availableTools.value) {
+    const key = t.groupId || (t.source === 'mcp' ? `mcp:${t.providerId}` : 'builtin')
+    if (!groups[key]) {
+      const label = t.group || (t.source === 'mcp' ? `MCP · ${t.providerName ?? ''}` : t.source || 'tools')
+      groups[key] = { groupId: key, label, tools: [] }
+      order.push(key)
+    }
+
+    const inSelection = selectedToolNames.value.includes(t.name)
+    const isOrphanUnavailable = !t.available && !bindableNames.has(t.name)
+    // selected: only the bindable row owns the name; orphan unavailable
+    // rows reflect their own selection state so the user can clean them up.
+    const _isSelected = (t.available || isOrphanUnavailable) && inSelection
+    // disabled: shadowed rows are hard-disabled (let the bindable twin
+    // own the click); orphan unavailable rows allow only "uncheck"
+    // (currently-selected → enabled; not selected → disabled).
+    const _isDisabled = !t.available && !(isOrphanUnavailable && inSelection)
+    groups[key].tools.push({ ...t, _isSelected, _isDisabled, _isOrphanUnavailable: isOrphanUnavailable })
+  }
+
+  // Catalog-orphan synthesis: any name in the existing binding that
+  // /tools/available no longer returns at all. The backend save path
+  // permits removing such names ("keeps" don't validate), but without a
+  // visible row the user has no way to trigger the removal. Render them
+  // in their own group; uncheck removes them from selectedToolNames and
+  // the synthesized row vanishes on the next computed pass (the name is
+  // no longer in selectedToolNames).
+  const orphanNames = selectedToolNames.value.filter((n) => !knownNames.has(n))
+  if (orphanNames.length > 0) {
+    const orphanGroupId = 'orphan'
+    groups[orphanGroupId] = {
+      groupId: orphanGroupId,
+      label: t('agents.binding.toolOrphanGroup'),
+      tools: orphanNames.map((n) => ({
+        rowId: `orphan#${n}`,
+        source: 'orphan',
+        providerId: null,
+        providerName: null,
+        name: n,
+        rawName: n,
+        description: t('agents.binding.toolOrphanDescription'),
+        group: t('agents.binding.toolOrphanGroup'),
+        groupId: orphanGroupId,
+        stale: false,
+        available: false,
+        unavailableReason: 'NOT_IN_CATALOG',
+        // Always selected (it is, by definition, in selectedToolNames)
+        // and always uncheckable so the user can remove it.
+        _isSelected: true,
+        _isDisabled: false,
+        _isOrphanUnavailable: true,
+      })),
+    }
+    order.push(orphanGroupId)
+  }
+  return order.map((k) => groups[k])
+})
+
+/**
+ * Manual checkbox handler — replaces v-model on the picker row so that
+ * two rows sharing a tool name (collision/duplicate twins) don't drag
+ * each other's selection state via Vue's v-model auto-sync.
+ */
+function onToolToggle(toolName: string, event: Event) {
+  const target = event.target as HTMLInputElement
+  if (target.checked) {
+    if (!selectedToolNames.value.includes(toolName)) {
+      selectedToolNames.value.push(toolName)
+    }
+  } else {
+    selectedToolNames.value = selectedToolNames.value.filter((n) => n !== toolName)
+  }
+}
 const selectedSkillIds = ref<number[]>([])
 const selectedToolNames = ref<string[]>([])
 // RFC-009 PR-3: per-agent provider preference order
@@ -434,6 +640,23 @@ const defaultForm = (): Partial<Agent> & { name: string; defaultThinkingLevel: s
 
 const form = ref(defaultForm())
 const iconPickerVisible = ref(false)
+
+// Identity-triad fields displayed in the basic tab. Kept separate from
+// `form.systemPrompt` so the textarea state stays predictable while the
+// user types — we only flatten back to a single prompt at save time.
+const profileForm = ref<AgentPromptProfile>(emptyProfile())
+const taglineSoftLimit = TAGLINE_CJK_BUDGET
+
+const taglinePreview = computed(() => deriveTagline(profileForm.value, form.value.description))
+const taglinePreviewWidth = computed(() => taglineVisualWidth(taglinePreview.value))
+
+/** Tagline shown on each agent card — derived from the stored systemPrompt
+ *  and (as a fallback) the agent's description. Pure function, safe to call
+ *  in the template. */
+function agentTagline(agent: Agent): string {
+  const profile = parsePrompt(agent.systemPrompt)
+  return deriveTagline(profile, agent.description)
+}
 
 const filteredAgents = computed(() => {
   let list = agents.value
@@ -508,17 +731,6 @@ async function loadAvailableModels() {
   }
 }
 
-function parseTags(tags: string): string[] {
-  return tags.split(',').map(s => s.trim()).filter(Boolean)
-}
-
-function formatTime(time?: string): string {
-  if (!time) return '-'
-  const d = new Date(time)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
 function openCreateModal() {
   // Show template selector first
   showTemplateSelector.value = true
@@ -529,6 +741,7 @@ function openBlankCreateModal() {
   showTemplateSelector.value = false
   editingAgent.value = null
   form.value = defaultForm()
+  profileForm.value = emptyProfile()
   modalTab.value = 'basic'
   selectedSkillIds.value = []
   selectedToolNames.value = []
@@ -600,6 +813,7 @@ async function openEditModal(agent: Agent) {
     enabled: agent.enabled,
     defaultThinkingLevel: (agent as any).defaultThinkingLevel || null,
   }
+  profileForm.value = parsePrompt(agent.systemPrompt)
   modalTab.value = 'basic'
   showModal.value = true
 
@@ -609,7 +823,10 @@ async function openEditModal(agent: Agent) {
       // RFC-042: /skills is now paginated; binding dropdown only needs enabled skills,
       // so listEnabled() is both semantically correct and shape-stable (returns array).
       skillApi.listEnabled(),
-      toolApi.list(),
+      // /tools/available aggregates built-in tools + every MCP-discovered
+      // tool grouped by server, with stale/available flags so the picker
+      // matches the runtime callback set exactly.
+      toolApi.listAvailable(),
       modelApi.listProviders(),
       agentBindingApi.listSkills(agent.id),
       agentBindingApi.listTools(agent.id),
@@ -643,12 +860,18 @@ function closeModal() {
 
 async function saveAgent() {
   try {
+    // Flatten the structured profile back to a single systemPrompt before
+    // sending to the backend — the schema is unchanged, only the editor
+    // exposes the H2 sections to the user.
+    const serialized = serializePrompt(profileForm.value)
+    const payload = { ...form.value, systemPrompt: serialized }
+
     let agentId: string | number
     if (editingAgent.value) {
-      await agentApi.update(editingAgent.value.id, form.value)
+      await agentApi.update(editingAgent.value.id, payload)
       agentId = editingAgent.value.id
     } else {
-      const res: any = await agentApi.create(form.value)
+      const res: any = await agentApi.create(payload)
       agentId = res.data?.id
     }
 
@@ -685,14 +908,13 @@ async function deleteAgent(agent: Agent) {
   }
 }
 
-function goToAgentContext() {
-  const agentId = editingAgent.value?.id
-  closeModal()
-  router.push({ path: '/settings/agent-context', query: agentId ? { agentId: String(agentId) } : {} })
-}
-
 function goToAgentContextFor(agent: Agent) {
   router.push({ path: '/settings/agent-context', query: { agentId: String(agent.id) } })
+}
+
+/** Card primary action: open a chat with this agent. */
+function goToChat(agent: Agent) {
+  router.push({ path: '/chat', query: { agentId: String(agent.id) } })
 }
 
 async function toggleAgent(agent: Agent) {
@@ -838,70 +1060,103 @@ html.dark .live-pill {
   opacity: 0.55;
 }
 
-.agent-card__header {
+/* Employee-card layout — identity row on top, primary action row below.
+   The card answers one question: "Who is this and how do I talk to them?" */
+.agent-card__top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
 }
 
-.agent-card__icon {
-  font-size: 36px;
-  width: 52px;
-  height: 52px;
+.agent-card__avatar {
+  width: 56px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--mc-primary-bg);
-  border-radius: 14px;
+  border-radius: 18px;
+  flex-shrink: 0;
+  font-size: 32px;
+  transition: filter 0.18s;
 }
 
-.agent-card__body {
+.agent-card__avatar--off {
+  filter: grayscale(0.85);
+}
+
+.agent-card__identity {
   flex: 1;
-  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .agent-card__name {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 700;
   color: var(--mc-text-primary);
-  margin: 0 0 4px;
-  letter-spacing: -0.02em;
-}
-
-.agent-card__desc {
-  font-size: 13px;
-  color: var(--mc-text-tertiary);
   margin: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
   overflow: hidden;
-  line-height: 1.5;
+  text-overflow: ellipsis;
 }
 
-.agent-card__meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+/* The tagline IS the soul of the card. Keep it on one line so the eye reads
+   it as a single statement of identity — never wrap, never grow. */
+.agent-card__tagline {
+  font-size: 13.5px;
+  color: var(--mc-text-secondary);
+  margin: 0;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.005em;
 }
 
-.agent-card__footer {
+.agent-card__action-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-top: 10px;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 12px;
   border-top: 1px solid var(--mc-border-light);
 }
 
-.agent-card__actions {
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity 0.15s;
+.agent-card__primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--mc-bg-sunken);
+  color: var(--mc-text-primary);
+  border: 1px solid var(--mc-border);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.agent-card__primary:hover {
+  border-color: var(--mc-primary);
+  color: var(--mc-primary);
+  background: var(--mc-primary-bg);
 }
 
-.agent-card:hover .agent-card__actions {
+.agent-card__overflow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.18s;
+}
+.agent-card:hover .agent-card__overflow,
+.agent-card:focus-within .agent-card__overflow {
   opacity: 1;
 }
 
@@ -909,32 +1164,8 @@ html.dark .live-pill {
 .toggle-switch--sm .toggle-slider::before { width: 12px; height: 12px; }
 .toggle-switch--sm input:checked + .toggle-slider::before { transform: translateX(14px); }
 
-/* Context link card */
-.context-link-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 18px;
-  cursor: pointer;
-  border: 1px solid var(--mc-border);
-  border-radius: 12px;
-  transition: all 0.15s;
-}
-.context-link-card:hover {
-  border-color: var(--mc-primary);
-  background: var(--mc-primary-bg);
-}
-.context-link-card__icon { font-size: 28px; }
-.context-link-card__info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
-.context-link-card__title { font-size: 14px; font-weight: 600; color: var(--mc-text-primary); }
-.context-link-card__desc { font-size: 12px; color: var(--mc-text-tertiary); }
-.context-link-card__arrow { color: var(--mc-text-tertiary); flex-shrink: 0; }
-
 .tag { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
-.type-tag { background: var(--mc-primary-bg); color: var(--mc-primary); }
 .tag-item { background: var(--mc-bg-sunken); color: var(--mc-text-secondary); }
-.tags-cell { display: flex; gap: 4px; flex-wrap: wrap; }
-.time-label { font-size: 13px; color: var(--mc-text-tertiary); }
 .text-muted { color: var(--mc-text-tertiary); }
 
 .toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; cursor: pointer; flex-shrink: 0; }
@@ -984,6 +1215,32 @@ html.dark .live-pill {
 /* Binding Tab */
 .binding-tab { min-height: 200px; }
 .binding-hint { font-size: 13px; color: var(--mc-text-tertiary); margin: 0 0 16px; }
+
+/* Tools/Skills semantic intro — names what the user is about to bind so the
+   distinction between "atomic tool" and "trained workflow" is unmissable. */
+.binding-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  margin: 0 0 14px;
+  background: var(--mc-bg-muted);
+  border-left: 3px solid var(--mc-primary);
+  border-radius: 8px;
+}
+.binding-intro__kicker {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mc-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.binding-intro__tagline {
+  font-size: 13px;
+  color: var(--mc-text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
 .binding-empty { padding: 40px; text-align: center; color: var(--mc-text-tertiary); font-size: 14px; }
 .binding-list { display: flex; flex-direction: column; gap: 6px; }
 .binding-item {
@@ -1034,13 +1291,75 @@ html.dark .live-pill {
 }
 .provider-pref-add-btn:hover { border-color: var(--mc-primary); color: var(--mc-primary); border-style: solid; }
 
-.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.form-group { display: flex; flex-direction: column; gap: 6px; }
+/* minmax(0, 1fr) prevents nowrap children (e.g. the tagline preview)
+   from forcing the grid track wider than the modal body. */
+.form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .form-group.full-width { grid-column: 1 / -1; }
 .form-label { font-size: 13px; font-weight: 500; color: var(--mc-text-secondary); }
 .form-input, .form-textarea { padding: 8px 12px; border: 1px solid var(--mc-border); border-radius: 8px; font-size: 14px; color: var(--mc-text-primary); outline: none; transition: border-color 0.15s; background: var(--mc-bg-sunken); }
 .form-input:focus, .form-textarea:focus { border-color: var(--mc-primary); box-shadow: 0 0 0 2px rgba(217,119,87,0.1); }
 .form-textarea { resize: vertical; font-family: inherit; }
+
+/* Inline guidance below an input. Used for the role/goal/backstory triad
+   so the constraint (one short line, etc.) is visible while typing. */
+.form-hint {
+  font-size: 12px;
+  color: var(--mc-text-tertiary);
+  line-height: 1.5;
+  margin: 2px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+}
+.form-hint__label {
+  color: var(--mc-text-tertiary);
+}
+.form-hint__value {
+  color: var(--mc-text-secondary);
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.form-hint__counter {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--mc-text-tertiary);
+}
+.form-hint--warn .form-hint__value,
+.form-hint--warn .form-hint__counter {
+  color: hsl(20, 78%, 48%);
+}
+
+/* Collapsible advanced-instructions block — the everyday user fills the
+   triad and never opens this; power users can append free-form additions. */
+.advanced-prompt { border: 1px dashed var(--mc-border); border-radius: 10px; padding: 0; }
+.advanced-prompt[open] { padding: 12px 14px; }
+.advanced-prompt__summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mc-text-secondary);
+  user-select: none;
+}
+.advanced-prompt__summary::-webkit-details-marker { display: none; }
+.advanced-prompt__summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--mc-text-tertiary);
+  font-size: 11px;
+  transition: transform 0.15s;
+}
+.advanced-prompt[open] > .advanced-prompt__summary { padding: 0 0 8px; border-bottom: 1px solid var(--mc-border-light); margin-bottom: 8px; }
+.advanced-prompt[open] > .advanced-prompt__summary::before { transform: rotate(90deg); }
 .modal-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 24px; border-top: 1px solid var(--mc-border-light); }
 
 @media (max-width: 900px) {
