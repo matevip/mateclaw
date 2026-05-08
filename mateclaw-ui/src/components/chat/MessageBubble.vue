@@ -366,6 +366,7 @@ import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { useAuthenticatedAttachment } from '@/composables/useAuthenticatedAttachment'
 import { useToolLabel } from '@/composables/useToolLabel'
 import { http } from '@/api'
+import { copyToClipboard } from '@/utils/clipboard'
 import TypingCursor from './TypingCursor.vue'
 import BrowserTimeline from './BrowserTimeline.vue'
 import ToolCallSegment from './ToolCallSegment.vue'
@@ -563,7 +564,7 @@ let copyTimer: ReturnType<typeof setTimeout> | null = null
 function copyMessage() {
   const text = displayContent.value || props.message.content || ''
   if (!text) return
-  navigator.clipboard.writeText(text).then(() => {
+  copyToClipboard(text).then(() => {
     copyState.value = 'copied'
     if (copyTimer) clearTimeout(copyTimer)
     copyTimer = setTimeout(() => { copyState.value = 'idle' }, 2000)
