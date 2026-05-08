@@ -80,7 +80,13 @@ public class WorkflowDraftGenerator {
             sequential — 一个员工执行；必须 agentId/agentName + promptTemplate。outputContentType 只能 text 或 json。
             fan_out — 至少 2 个连续 fan_out，后接 collect；每个分支必须 agentId/agentName + promptTemplate。
             collect — 不带 agentId、agentName、promptTemplate；只能跟在 fan_out group 后。
-            conditional — mode.expression 必填（Pebble 子集，如 {{ outputs.x.approved == true }}）；agentId/agentName + promptTemplate 必填。
+            conditional — mode.expression 必填，使用 Pebble 子集语法。
+              · 比较：== != < <= > >=
+              · 逻辑：必须使用单词 and / or / not，禁止 && / || / !
+              · 示例（单条件）：{{ outputs.x.approved == true }}
+              · 示例（多条件）：{{ outputs.finance.flag == true or outputs.ops.flag == true or outputs.customer.flag == true }}
+              · 示例（取反）：{{ not outputs.x.skip }}
+              agentId/agentName + promptTemplate 必填。
             await_approval — approvalKind + approverChannels[] + approvalMessage 必填；可选 timeoutSecs；不要 agentId / agentName / promptTemplate。
             dispatch_channel — channels[] + targets{} + content 必填；不要 agentId / agentName / promptTemplate。
             write_memory — employeeId + file + mergeStrategy(append/replace_section/upsert_kv/overwrite) + content 必填；不要 agentId / agentName / promptTemplate。
