@@ -748,6 +748,15 @@ async function onPublishSubmit(payload: { note: string }) {
     await reload()
   } catch (e) {
     handleCompileError(e)
+    // Close the publish dialog on failure so the operator sees the
+    // errors-panel + Monaco markers underneath instead of staring at a
+    // dialog that just twitched. Also surface a toast with the error
+    // count so the redirect to the editor is obvious — the panel is
+    // below the fold on smaller viewports.
+    publishDialogOpen.value = false
+    if (compileErrors.value.length) {
+      ElMessage.error(t('workflows.status.compileFailed', { count: compileErrors.value.length }))
+    }
   } finally {
     busy.value = false
   }
