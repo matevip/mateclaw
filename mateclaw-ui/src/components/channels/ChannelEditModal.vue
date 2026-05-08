@@ -424,7 +424,6 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { CHANNEL_FIELD_DEFS } from '@/types'
-import { copyToClipboard } from '@/utils/clipboard'
 import type { Agent, Channel, ChannelFieldDef } from '@/types'
 import {
   buildConfigJson,
@@ -630,7 +629,7 @@ const copyLabel = ref(t('channels.webhook.copy'))
 
 async function copyWebhookUrl() {
   try {
-    await copyToClipboard(webhookUrl.value)
+    await navigator.clipboard.writeText(webhookUrl.value)
     copyLabel.value = t('channels.webhook.copied')
     setTimeout(() => { copyLabel.value = t('channels.webhook.copy') }, 2000)
   } catch {
@@ -640,7 +639,7 @@ async function copyWebhookUrl() {
 
 async function copyText(text: string) {
   try {
-    await copyToClipboard(text)
+    await navigator.clipboard.writeText(text)
     ElMessage.success(t('common.copied'))
   } catch {
     ElMessage.warning(t('channels.webhook.copyFailed'))

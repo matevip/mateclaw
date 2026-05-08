@@ -140,12 +140,7 @@ public class WikiEmbeddingService {
 
         int batchSize = Math.max(1, properties.getEmbeddingBatchSize());
         int maxChars = Math.max(500, properties.getEmbeddingMaxChars());
-        int threshold = Math.max(1, properties.getEmbeddingConsecutiveFailureThreshold());
         int total = 0;
-        // Consecutive failure counter: resets on any successful batch / long
-        // chunk, increments when a unit returns zero progress. Crossing the
-        // threshold trips the circuit and aborts the rest of this pass.
-        int consecutiveFailures = 0;
 
         for (int offset = 0; offset < pending.size(); offset += batchSize) {
             List<WikiChunkEntity> batch = pending.subList(offset, Math.min(offset + batchSize, pending.size()));
@@ -165,30 +160,13 @@ public class WikiEmbeddingService {
 
             // Short chunks: existing batch path
             if (!shortBatch.isEmpty()) {
-                int embedded = embedShortBatch(shortBatch, r.model(), modelName, kbId);
-                total += embedded;
-                if (embedded == 0) {
-                    consecutiveFailures++;
-                    if (consecutiveFailures >= threshold) {
-                        int remaining = pending.size() - (offset + batch.size());
-                        throw circuitOpen(kbId, modelName, consecutiveFailures, remaining);
-                    }
-                } else {
-                    consecutiveFailures = 0;
-                }
+                total += embedShortBatch(shortBatch, r.model(), modelName, kbId);
             }
 
             // Long chunks: each goes through sub-segment split + mean pool
             for (WikiChunkEntity longChunk : longChunks) {
                 if (embedLongChunk(longChunk, r.model(), modelName, maxChars)) {
                     total++;
-                    consecutiveFailures = 0;
-                } else {
-                    consecutiveFailures++;
-                    if (consecutiveFailures >= threshold) {
-                        int remaining = pending.size() - (offset + batch.size());
-                        throw circuitOpen(kbId, modelName, consecutiveFailures, remaining);
-                    }
                 }
             }
         }
@@ -201,15 +179,6 @@ public class WikiEmbeddingService {
                     total, pending.size(), kbId, modelName);
         }
         return total;
-    }
-
-    private vip.mate.wiki.job.WikiEmbeddingProviderFailingException circuitOpen(
-            Long kbId, String modelName, int failures, int remaining) {
-        String message = "Embedding provider unavailable: " + failures
-                + " consecutive batch failures (kbId=" + kbId + ", model=" + modelName
-                + "). Aborted with " + remaining + " chunk(s) still pending.";
-        log.warn("[WikiEmbedding] Circuit opened — {}", message);
-        return new vip.mate.wiki.job.WikiEmbeddingProviderFailingException(message, failures, remaining);
     }
 
     /**

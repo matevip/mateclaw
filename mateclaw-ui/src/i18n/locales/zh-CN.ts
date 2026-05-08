@@ -1695,9 +1695,6 @@ export default {
     noRawMaterials: '暂无原始材料',
     reprocess: '重新处理',
     resume: '继续生成',
-    cancel: '取消处理',
-    cancelling: '正在取消…',
-    cancelledHint: '用户已取消处理',
     download: '下载原始文件',
     downloadFailed: '下载失败',
     processAll: '处理所有待处理材料',
@@ -1726,8 +1723,6 @@ export default {
       completed: '已完成',
       partial: '部分完成',
       failed: '失败',
-      cancelled: '已取消',
-      cancelling: '正在取消…',
     },
     progress: {
       preparing: '准备中…',

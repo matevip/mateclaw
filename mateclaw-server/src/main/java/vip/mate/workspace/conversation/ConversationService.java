@@ -556,7 +556,6 @@ public class ConversationService {
                 case "text" -> appendSegment(text, part.getText());
                 case "thinking", "tool_call", "parse_error" -> { /* skip — frontend reads these from contentParts directly */ }
                 case "file" -> appendSegment(text, renderFilePart(part));
-                case "image", "video", "audio", "model3d" -> appendSegment(text, renderMediaPart(part));
                 default -> appendSegment(text, part.getText());
             }
         }
@@ -613,36 +612,6 @@ public class ConversationService {
             return "[附件] " + name;
         }
         return "[附件] " + name + "（路径: " + path + "）";
-    }
-
-    /**
-     * Render an image/video/audio/3D-model content part for the LLM prompt.
-     * <p>
-     * Without this marker, media parts are invisible in the rendered text — the LLM
-     * sees only the user's accompanying text and has no idea an attachment was sent.
-     * That fails closed when the multimodal Media injection in {@code BaseAgent} is
-     * upstream-stripped (model heuristic claims vision but the actual provider drops
-     * the image), leaving the agent to ask "which image?" for an attachment the user
-     * already uploaded. The path lets file-reading tools ({@code read_file},
-     * {@code extract_document_text}, {@code detect_file_type}) work as a fallback.
-     */
-    private String renderMediaPart(MessageContentPart part) {
-        String label = switch (part.getType()) {
-            case "image" -> "[图片]";
-            case "video" -> "[视频]";
-            case "audio" -> "[音频]";
-            case "model3d" -> "[3D 模型]";
-            default -> "[附件]";
-        };
-        String name = safe(part.getFileName());
-        if (name.isBlank()) {
-            name = "未命名";
-        }
-        String path = safe(part.getPath());
-        if (path.isBlank()) {
-            return label + " " + name;
-        }
-        return label + " " + name + "（路径: " + path + "）";
     }
 
     private void appendSegment(StringBuilder builder, String text) {

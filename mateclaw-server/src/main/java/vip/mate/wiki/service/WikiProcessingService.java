@@ -303,17 +303,7 @@ public class WikiProcessingService {
 
             String finalStatus;
             String finalDetail = null;
-            // Cancellation takes precedence over the normal terminal-state logic:
-            // chunks that observed the cancel flag returned early as "failed", but
-            // those aren't real failures — the user asked to stop. Surface that
-            // intent explicitly so the UI can show "cancelled" instead of "failed"
-            // or "partial".
-            if (rawService.isCancelRequested(rawId)) {
-                finalDetail = "Cancelled by user (" + totalPages + " page(s) generated, "
-                        + (totalChunks - failedChunks) + "/" + totalChunks + " chunks completed before stop).";
-                rawService.updateProcessingStatus(rawId, "cancelled", finalDetail);
-                finalStatus = "cancelled";
-            } else if (totalPages == 0) {
+            if (totalPages == 0) {
                 // RFC-051 follow-up: previously this was an unconditional "failed".
                 // But chunks were already persisted (and the materials are searchable
                 // via wiki_semantic_search) — the only thing that actually went wrong
@@ -381,34 +371,31 @@ public class WikiProcessingService {
                     var terminalStage = switch (finalStatus) {
                         case "failed" -> vip.mate.wiki.job.WikiJobStage.FAILED;
                         case "partial" -> vip.mate.wiki.job.WikiJobStage.PARTIAL;
-                        case "cancelled" -> vip.mate.wiki.job.WikiJobStage.CANCELLED;
                         default -> vip.mate.wiki.job.WikiJobStage.COMPLETED;
                     };
                     wikiJobService.transition(jobId, terminalStage);
                 } catch (Exception ignored) {}
             }
 
-            // Skip the post-terminal side effects (log line, overview rebuild,
-            // KB-dirty event) for cancelled and failed runs. A cancelled run
-            // means the user explicitly stopped — don't burn LLM tokens on
-            // overview regeneration over an unstable partial state.
-            boolean nonTerminalSideEffects = !"failed".equals(finalStatus) && !"cancelled".equals(finalStatus);
-            if (logService != null && nonTerminalSideEffects) {
+            // RFC-051 PR-2c: log every non-failed eager ingest. Failures already get a
+            // RAW_FAILED broadcast and an error message in the raw row. Title goes first
+            // so the log reads as "what just landed" instead of an opaque raw id.
+            if (logService != null && !"failed".equals(finalStatus)) {
                 String title = (raw.getTitle() == null || raw.getTitle().isBlank())
                         ? ("raw#" + rawId) : raw.getTitle();
                 logService.append(kb.getId(), WikiLogService.EventType.INGEST,
                         "eager " + finalStatus + " · " + title
                                 + " · " + totalPages + " pages · " + totalChunks + " chunks");
             }
-            // Refresh overview stats whenever a raw lands in a terminal state
-            // (completed or partial). Failures and cancellations don't shift the stats meaningfully.
-            if (overviewService != null && nonTerminalSideEffects) {
+            // RFC-051 PR-2b: refresh overview stats whenever a raw lands in a terminal state
+            // (completed or partial). Failures don't shift the stats meaningfully.
+            if (overviewService != null && !"failed".equals(finalStatus)) {
                 overviewService.rebuild(kb.getId());
             }
             // Tier 2: signal "KB content is dirty" so WikiNarrativeService can
             // schedule (debounced) an LLM-generated overview narrative refresh.
             // Stats rebuild above is sync; narrative regen runs after-commit.
-            if (nonTerminalSideEffects) {
+            if (!"failed".equals(finalStatus)) {
                 eventPublisher.publishEvent(new vip.mate.wiki.event.WikiKbDirtyEvent(this, kb.getId()));
             }
 
@@ -423,12 +410,7 @@ public class WikiProcessingService {
             // RFC-051 follow-up: trigger embedding whenever chunks landed, not only when
             // pages were produced. Otherwise the partial-with-no-pages case above ends up
             // with chunks in DB but never embedded, so semantic search silently misses them.
-            // Skip the post-ingest embedding sweep when this run was cancelled.
-            // The user almost certainly stopped because the embedding provider
-            // is failing (out of credits, wrong key, etc.); kicking off another
-            // embedding pass on the same provider would just churn through
-            // every pending chunk and produce more "all chunks failed" noise.
-            if (totalChunks > 0 && !"cancelled".equals(finalStatus)) {
+            if (totalChunks > 0) {
                 final Long fKbId = kb.getId();
                 WIKI_EXECUTOR.submit(() -> {
                     try {
@@ -436,12 +418,6 @@ public class WikiProcessingService {
                         if (embedded > 0) {
                             log.info("[Wiki] Async embedding completed: kbId={}, embedded={}", fKbId, embedded);
                         }
-                    } catch (vip.mate.wiki.job.WikiEmbeddingProviderFailingException ex) {
-                        // Circuit-breaker tripped — the provider has consistently failed.
-                        // The exception's own log line in WikiEmbeddingService is enough;
-                        // emit a calmer notice here instead of a generic failure log.
-                        log.warn("[Wiki] Async embedding aborted by circuit-breaker for kbId={}: {}",
-                                fKbId, ex.getMessage());
                     } catch (Exception ex) {
                         log.warn("[Wiki] Async embedding failed for kbId={}: {}", fKbId, ex.getMessage());
                     }
@@ -449,39 +425,16 @@ public class WikiProcessingService {
             }
 
         } catch (Exception e) {
-            // If the user requested cancellation while this run was in flight,
-            // surface the abort as 'cancelled' rather than 'failed' even when
-            // the exception bubbled up from somewhere mid-pipeline (e.g. a
-            // checkpoint rejected between chunks).
-            boolean cancelled = rawService.isCancelRequested(rawId);
-            String terminalStatus = cancelled ? "cancelled" : "failed";
-            String detail = cancelled
-                    ? "Cancelled by user (interrupted: " + (e.getMessage() == null ? "unknown" : e.getMessage()) + ")"
-                    : e.getMessage();
-            if (cancelled) {
-                log.info("[Wiki] Processing cancelled for raw={}: {}", rawId, e.getMessage());
-            } else {
-                log.error("[Wiki] Processing failed for raw={}: {}", rawId, e.getMessage(), e);
-            }
-            rawService.updateProcessingStatus(rawId, terminalStatus, detail);
+            log.error("[Wiki] Processing failed for raw={}: {}", rawId, e.getMessage(), e);
+            rawService.updateProcessingStatus(rawId, "failed", e.getMessage());
             kbService.updateStatus(kb.getId(), "active");
+            // Transition job to failed
             if (wikiJobService != null && jobId != null) {
-                try {
-                    wikiJobService.transition(jobId, cancelled
-                            ? vip.mate.wiki.job.WikiJobStage.CANCELLED
-                            : vip.mate.wiki.job.WikiJobStage.FAILED);
-                } catch (Exception ignored) {}
+                try { wikiJobService.transition(jobId, vip.mate.wiki.job.WikiJobStage.FAILED); } catch (Exception ignored) {}
             }
-            // Broadcast: cancelled rows reuse the COMPLETED event with status="cancelled"
-            // so subscribers can render the terminal-but-not-error UI; only true failures
-            // go through RAW_FAILED (which the UI surfaces as a red banner).
-            if (cancelled) {
-                progressBus.broadcast(kb.getId(), WikiProgressBus.EVENT_RAW_COMPLETED,
-                        java.util.Map.of("rawId", rawId, "status", "cancelled"));
-            } else {
-                progressBus.broadcast(kb.getId(), WikiProgressBus.EVENT_RAW_FAILED,
-                        java.util.Map.of("rawId", rawId, "error", e.getMessage() == null ? "unknown" : e.getMessage()));
-            }
+            // RFC-012 M3：广播异常终态
+            progressBus.broadcast(kb.getId(), WikiProgressBus.EVENT_RAW_FAILED,
+                    java.util.Map.of("rawId", rawId, "error", e.getMessage() == null ? "unknown" : e.getMessage()));
         } finally {
             // RFC-012 M2 v2 UI v2：写入最终进度并清理共享计数器
             ProgressCounter pc = progressCounters.remove(rawId);
@@ -2211,13 +2164,8 @@ public class WikiProcessingService {
      * @return {@code true} if the raw is gone; caller should stop work
      */
     private boolean isAborted(Long rawId, String ctx) {
-        WikiRawMaterialEntity raw = rawService.getById(rawId);
-        if (raw == null) {
+        if (rawService.getById(rawId) == null) {
             log.info("[Wiki] Aborting {} for raw={}: raw was deleted mid-processing", ctx, rawId);
-            return true;
-        }
-        if (Boolean.TRUE.equals(raw.getCancelRequested())) {
-            log.info("[Wiki] Aborting {} for raw={}: cancellation requested by user", ctx, rawId);
             return true;
         }
         return false;
@@ -2312,9 +2260,6 @@ public class WikiProcessingService {
                     if (embedded > 0) {
                         log.info("[Wiki] Lazy async embedding completed: kbId={}, embedded={}", fKbId, embedded);
                     }
-                } catch (vip.mate.wiki.job.WikiEmbeddingProviderFailingException ex) {
-                    log.warn("[Wiki] Lazy async embedding aborted by circuit-breaker for kbId={}: {}",
-                            fKbId, ex.getMessage());
                 } catch (Exception ex) {
                     log.warn("[Wiki] Lazy async embedding failed for kbId={}: {}", fKbId, ex.getMessage());
                 }

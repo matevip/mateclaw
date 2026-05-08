@@ -602,8 +602,6 @@ export const wikiApi = {
     http.delete(`/wiki/knowledge-bases/${kbId}/raw/${rawId}`),
   reprocessRaw: (kbId: number, rawId: number) =>
     http.post(`/wiki/knowledge-bases/${kbId}/raw/${rawId}/reprocess`),
-  cancelRaw: (kbId: number, rawId: number) =>
-    http.post(`/wiki/knowledge-bases/${kbId}/raw/${rawId}/cancel`),
   downloadRaw: (kbId: number, rawId: number) =>
     http.get<Blob>(`/wiki/knowledge-bases/${kbId}/raw/${rawId}/download`, {
       responseType: 'blob',

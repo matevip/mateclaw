@@ -1683,9 +1683,6 @@ export default {
     noRawMaterials: 'No raw materials yet',
     reprocess: 'Reprocess',
     resume: 'Resume',
-    cancel: 'Cancel processing',
-    cancelling: 'Cancelling…',
-    cancelledHint: 'Cancelled by user',
     download: 'Download original file',
     downloadFailed: 'Download failed',
     processAll: 'Process All Pending',
@@ -1714,8 +1711,6 @@ export default {
       completed: 'COMPLETED',
       partial: 'PARTIAL',
       failed: 'FAILED',
-      cancelled: 'CANCELLED',
-      cancelling: 'CANCELLING…',
     },
     progress: {
       preparing: 'Preparing…',

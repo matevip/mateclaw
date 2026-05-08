@@ -232,45 +232,8 @@ public class WikiRawMaterialService {
         entity.setProgressPhase(null);
         entity.setProgressTotal(0);
         entity.setProgressDone(0);
-        // Fresh start clears any stale cancel request from a previous run.
-        entity.setCancelRequested(Boolean.FALSE);
         rawMapper.updateById(entity);
         return true;
-    }
-
-    /**
-     * Mark a raw material for cancellation. Only valid while it is currently
-     * being processed; for any other status this is a no-op so the call is
-     * idempotent and safe to retry from the UI.
-     *
-     * @return {@code true} if the flag was set, {@code false} otherwise
-     */
-    @Transactional
-    public boolean requestCancel(Long id) {
-        WikiRawMaterialEntity entity = rawMapper.selectById(id);
-        if (entity == null) {
-            return false;
-        }
-        if (!"processing".equals(entity.getProcessingStatus())) {
-            return false;
-        }
-        if (Boolean.TRUE.equals(entity.getCancelRequested())) {
-            // Already requested; treat as success without redundant write.
-            return true;
-        }
-        entity.setCancelRequested(Boolean.TRUE);
-        rawMapper.updateById(entity);
-        return true;
-    }
-
-    /**
-     * Returns {@code true} if the user has asked to cancel this raw material's
-     * current processing run. Used by abort checkpoints inside the processing
-     * pipeline to bail out early.
-     */
-    public boolean isCancelRequested(Long id) {
-        WikiRawMaterialEntity entity = rawMapper.selectById(id);
-        return entity != null && Boolean.TRUE.equals(entity.getCancelRequested());
     }
 
     /**
@@ -302,12 +265,6 @@ public class WikiRawMaterialService {
         entity.setErrorMessage(errorMessage);
         if ("completed".equals(status)) {
             entity.setLastProcessedAt(java.time.LocalDateTime.now());
-        }
-        // Cancellation flag is only meaningful while a row is being processed.
-        // Any transition out of 'processing' clears it so the field reflects
-        // an idle row's true state and the next reprocess starts clean.
-        if (!"processing".equals(status)) {
-            entity.setCancelRequested(Boolean.FALSE);
         }
         rawMapper.updateById(entity);
     }
