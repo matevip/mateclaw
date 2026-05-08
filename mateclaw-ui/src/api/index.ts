@@ -899,6 +899,13 @@ export const workflowApi = {
   /** Canonical workflow templates the generator can apply directly. */
   listDraftTemplates: () =>
     http.get<WorkflowDraftTemplate[]>('/workflows/draft/templates'),
+  /** Compile arbitrary draft JSON without persisting. Used by the template
+   *  picker / generator-result preview to give the operator the same compile
+   *  signal the existing /workflows/{id}/compile endpoint provides for saved
+   *  workflows. Resolves on success; rejects with an axios error whose
+   *  response.data.data carries the WorkflowCompileFailure on a 422. */
+  previewCompileDraft: (draftJson: string) =>
+    http.post('/workflows/draft/preview-compile', { draftJson }),
 }
 
 export interface GeneratedDraft {

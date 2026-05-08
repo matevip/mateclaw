@@ -263,6 +263,29 @@ public class WorkflowController {
         return R.ok(draftTemplates.all());
     }
 
+    @Operation(summary = "Compile arbitrary draft JSON without persisting — used by the template picker / generator preview to surface real ACL + schema diagnostics before a workflow row exists.")
+    @PostMapping("/draft/preview-compile")
+    public ResponseEntity<?> previewCompile(@RequestBody WorkflowDraftRequest body,
+                                            @RequestHeader("X-Workspace-Id") long workspaceId) {
+        if (body == null || body.draftJson() == null || body.draftJson().isBlank()) {
+            return ResponseEntity.badRequest().body(R.fail("draftJson is required"));
+        }
+        WorkflowCompiler.Result result;
+        try {
+            result = compiler.compile(body.draftJson(),
+                    new PublishContext(workspaceId, 0L), aclPort);
+        } catch (vip.mate.workflow.compiler.WorkflowParseException e) {
+            return ResponseEntity.unprocessableEntity().body(buildCompileFailure(List.of(
+                    new vip.mate.workflow.compiler.CompileError(
+                            "graph.parse_failed", "/", e.getMessage()))));
+        }
+        if (!result.ok()) {
+            return ResponseEntity.unprocessableEntity()
+                    .body(buildCompileFailure(result.errors()));
+        }
+        return ResponseEntity.ok(R.ok());
+    }
+
     public record DraftGenerateRequest(String description) {}
 
     /** Narrow patch shape for {@link #update}; keeps the metadata path

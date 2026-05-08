@@ -53,6 +53,17 @@
         />
         <small class="pf-hint">{{ t('triggers.pattern.senderEqualsHint') }}</small>
       </div>
+      <div class="pf-field">
+        <span class="pf-label">{{ t('triggers.pattern.contentContains') }}</span>
+        <input
+          v-model.trim="form.contentContains"
+          class="pf-input"
+          :placeholder="t('triggers.pattern.contentContainsPlaceholder')"
+          spellcheck="false"
+          @input="emitFromForm"
+        />
+        <small class="pf-hint">{{ t('triggers.pattern.contentContainsHint') }}</small>
+      </div>
     </template>
 
     <!-- content_match — substring (required) -->
@@ -177,6 +188,7 @@ interface FormState {
   timezone?: string
   channelType?: string
   senderEquals?: string
+  contentContains?: string
   substring?: string
   agentId?: number | null
   phase?: string
@@ -206,6 +218,7 @@ function loadFromJson(json: string) {
     if (typeof parsed.timezone === 'string') form.timezone = parsed.timezone
     if (typeof parsed.channelType === 'string') form.channelType = parsed.channelType
     if (typeof parsed.senderEquals === 'string') form.senderEquals = parsed.senderEquals
+    if (typeof parsed.contentContains === 'string') form.contentContains = parsed.contentContains
     if (typeof parsed.substring === 'string') form.substring = parsed.substring
     if (typeof parsed.agentId === 'number') form.agentId = parsed.agentId
     if (typeof parsed.phase === 'string') form.phase = parsed.phase
@@ -228,6 +241,7 @@ function buildJsonFromForm(): string {
     case 'channel_message':
       if (form.channelType) out.channelType = form.channelType
       if (form.senderEquals) out.senderEquals = form.senderEquals
+      if (form.contentContains) out.contentContains = form.contentContains
       break
     case 'content_match':
       if (form.substring) out.substring = form.substring

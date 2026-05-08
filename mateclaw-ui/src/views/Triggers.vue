@@ -80,13 +80,24 @@
                     <input v-model="formState.name" :placeholder="t('triggers.fields.namePlaceholder')" />
                   </label>
                   <label>{{ t('triggers.fields.patternType') }}
+                    <!-- v0 ships four pattern types in the manual create UI:
+                         cron, channel_message (which now carries the keyword
+                         filter that content_match used to provide),
+                         workflow_completion, webhook. content_match and
+                         agent_lifecycle remain supported by the matcher for
+                         legacy rows but are hidden from the new-trigger
+                         dropdown so the manual entry matches what the
+                         natural-language generator surfaces. They re-appear
+                         only when editing a row that already uses one, so
+                         the operator can tweak/disable/delete it without
+                         being stuck on a dropdown that excludes its type. -->
                     <select v-model="formState.patternType">
                       <option value="cron">cron</option>
                       <option value="channel_message">channel_message</option>
-                      <option value="content_match">content_match</option>
-                      <option value="agent_lifecycle">agent_lifecycle</option>
                       <option value="workflow_completion">workflow_completion</option>
                       <option value="webhook">webhook</option>
+                      <option v-if="showLegacyContentMatch" value="content_match">content_match (legacy)</option>
+                      <option v-if="showLegacyAgentLifecycle" value="agent_lifecycle">agent_lifecycle (legacy)</option>
                     </select>
                   </label>
                   <div class="span-2">
@@ -175,6 +186,12 @@ const workflows = ref<WorkflowSummary[]>([])
 const availableWorkflows = computed(() =>
   workflows.value.filter((w) => w.latestRevisionId)
 )
+
+// Show the legacy pattern types only when the trigger being edited
+// actually uses one — otherwise they stay hidden so the new-trigger
+// flow matches the four-pattern v0 product surface.
+const showLegacyContentMatch = computed(() => formState.value?.patternType === 'content_match')
+const showLegacyAgentLifecycle = computed(() => formState.value?.patternType === 'agent_lifecycle')
 
 const patternErrors = ref<Record<string, string>>({})
 function onPatternValidation(errs: Record<string, string>) {
@@ -272,7 +289,8 @@ function patternSummary(row: TriggerSummary): string {
     case 'channel_message': {
       const ch = parsed.channelType ? `${parsed.channelType}` : t('triggers.pattern.channelTypeAny')
       const sender = parsed.senderEquals ? ` · @${parsed.senderEquals}` : ''
-      return `${ch}${sender}`
+      const contains = parsed.contentContains ? ` · "${parsed.contentContains}"` : ''
+      return `${ch}${sender}${contains}`
     }
     case 'content_match': {
       return parsed.substring ? `"${parsed.substring}"` : '—'
