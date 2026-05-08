@@ -122,6 +122,49 @@
 
           <!-- right: runs -->
           <aside class="workflows-runs mc-surface-card" v-if="selected">
+            <section v-if="pausedRuns.length" class="paused-section">
+              <header class="paused-header">
+                <span>{{ t('workflows.paused.header', { count: pausedRuns.length }) }}</span>
+                <button class="btn-ghost" @click="reloadPausedRuns">{{ t('workflows.refresh') }}</button>
+              </header>
+              <ul class="paused-list">
+                <li v-for="entry in pausedRuns" :key="entry.run.id" class="paused-row">
+                  <div class="paused-row-line">
+                    <span class="run-state state-paused">paused</span>
+                    <span class="paused-run-hash">{{ t('workflows.paused.runHash', { id: entry.run.id }) }}</span>
+                  </div>
+                  <div class="paused-meta" v-if="entry.pause">
+                    <div><span>{{ t('workflows.paused.pauseTokenLabel') }}:</span>
+                      <code class="pause-token">{{ truncateToken(entry.pause.pauseToken) }}</code></div>
+                    <div v-if="entry.pause.pausedAt">
+                      <span>{{ t('workflows.paused.pausedAtLabel') }}:</span> {{ formatTime(entry.pause.pausedAt) }}
+                    </div>
+                    <div v-if="entry.pause.resumeDeadline">
+                      <span>{{ t('workflows.paused.deadlineLabel') }}:</span> {{ formatTime(entry.pause.resumeDeadline) }}
+                    </div>
+                  </div>
+                  <div class="paused-actions" v-if="entry.pause">
+                    <button class="resume-btn approve" :disabled="resumingId === entry.run.id"
+                            @click="onResume(entry, 'approved')">
+                      {{ t('workflows.paused.resumeApproved') }}
+                    </button>
+                    <button class="resume-btn reject" :disabled="resumingId === entry.run.id"
+                            @click="onResume(entry, 'rejected')">
+                      {{ t('workflows.paused.resumeRejected') }}
+                    </button>
+                    <button class="resume-btn neutral" :disabled="resumingId === entry.run.id"
+                            @click="onResume(entry, 'timeout')">
+                      {{ t('workflows.paused.resumeTimeout') }}
+                    </button>
+                    <button class="resume-btn neutral" :disabled="resumingId === entry.run.id"
+                            @click="onResume(entry, 'cancelled')">
+                      {{ t('workflows.paused.resumeCancelled') }}
+                    </button>
+                  </div>
+                </li>
+              </ul>
+            </section>
+
             <header class="runs-header">
               <span>{{ t('workflows.runs.header', { count: runs.length }) }}</span>
               <button class="btn-ghost" @click="reloadRuns">{{ t('workflows.refresh') }}</button>
@@ -165,6 +208,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { mcConfirm } from '@/components/common/useConfirm'
+import { ElMessage } from 'element-plus'
 import {
   workflowApi,
   type WorkflowSummary,
@@ -172,6 +216,8 @@ import {
   type WorkflowRunStep,
   type WorkflowCompileError,
   type WorkflowCompileFailure,
+  type PausedRunSummary,
+  type ResumeOutcome,
 } from '@/api'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import WorkflowCanvas from '@/components/workflow/WorkflowCanvas.vue'
@@ -201,6 +247,8 @@ const busy = ref(false)
 
 const runs = ref<WorkflowRun[]>([])
 const runDetail = ref<{ run: WorkflowRun; steps: WorkflowRunStep[] } | null>(null)
+const pausedRuns = ref<PausedRunSummary[]>([])
+const resumingId = ref<number | null>(null)
 
 const templateChoice = ref('')
 
@@ -376,6 +424,40 @@ async function reloadRuns() {
     runs.value = (res.data as unknown as WorkflowRun[]) ?? []
   } catch (e) {
     console.error('listRuns failed', e)
+  }
+  // Paused-run list spans the whole workspace, not just the selected
+  // workflow — operators usually want the global queue when they reach
+  // for "what's blocked right now". Refresh on every workflow switch
+  // so the count accurately reflects the post-publish state.
+  await reloadPausedRuns()
+}
+
+async function reloadPausedRuns() {
+  try {
+    const res = await workflowApi.listPausedRuns(50)
+    pausedRuns.value = (res.data as unknown as PausedRunSummary[]) ?? []
+  } catch (e) {
+    console.error('listPausedRuns failed', e)
+  }
+}
+
+function truncateToken(token: string | undefined): string {
+  if (!token) return '-'
+  return token.length <= 14 ? token : token.slice(0, 6) + '…' + token.slice(-4)
+}
+
+async function onResume(entry: PausedRunSummary, outcome: ResumeOutcome) {
+  if (!entry.pause?.pauseToken) return
+  resumingId.value = entry.run.id
+  try {
+    await workflowApi.resumeRun(entry.run.id, entry.pause.pauseToken, outcome)
+    ElMessage.success(t('workflows.paused.resumeOk', { outcome }))
+    await reloadPausedRuns()
+    await reloadRuns()
+  } catch (e) {
+    ElMessage.error(t('workflows.paused.resumeFailed', { msg: (e as Error).message }))
+  } finally {
+    resumingId.value = null
   }
 }
 
@@ -554,8 +636,14 @@ function formatTime(iso?: string) {
   return iso.replace('T', ' ').slice(0, 19)
 }
 
-onMounted(reload)
-watch(workspaceId, reload)
+onMounted(async () => {
+  await reload()
+  await reloadPausedRuns()
+})
+watch(workspaceId, async () => {
+  await reload()
+  await reloadPausedRuns()
+})
 </script>
 
 <style scoped>
@@ -955,6 +1043,104 @@ button:disabled {
   flex-direction: column;
   gap: 6px;
   min-height: 360px;
+}
+.paused-section {
+  border-bottom: 1px dashed var(--mc-border-light, rgba(0, 0, 0, 0.08));
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+}
+.paused-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--mc-text-primary, inherit);
+}
+.paused-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.paused-row {
+  background: var(--mc-bg-sunken, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--mc-border-light, rgba(0, 0, 0, 0.08));
+  border-left: 3px solid var(--node-band, #ffb84d);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.paused-row-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.paused-run-hash {
+  font-weight: 600;
+}
+.paused-meta {
+  font-size: 11px;
+  opacity: 0.85;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.paused-meta span {
+  opacity: 0.6;
+  margin-right: 4px;
+}
+.pause-token {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 11px;
+  background: var(--mc-bg-elevated, rgba(0, 0, 0, 0.04));
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.paused-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.resume-btn {
+  flex: 1 0 calc(50% - 2px);
+  padding: 5px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--mc-border, rgba(0, 0, 0, 0.12));
+  background: transparent;
+  color: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.resume-btn:hover:not(:disabled) {
+  background: var(--mc-bg-muted, rgba(0, 0, 0, 0.04));
+}
+.resume-btn.approve {
+  background: rgba(46, 204, 113, 0.12);
+  border-color: rgba(46, 204, 113, 0.5);
+  color: #1e8449;
+}
+.resume-btn.approve:hover:not(:disabled) {
+  background: rgba(46, 204, 113, 0.22);
+}
+.resume-btn.reject {
+  background: rgba(231, 76, 60, 0.1);
+  border-color: rgba(231, 76, 60, 0.5);
+  color: var(--mc-danger, #c0392b);
+}
+.resume-btn.reject:hover:not(:disabled) {
+  background: rgba(231, 76, 60, 0.18);
+}
+.resume-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* Responsive: collapse to a single column below 1100px so the editor

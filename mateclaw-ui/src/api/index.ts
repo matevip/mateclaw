@@ -825,6 +825,42 @@ export interface WorkflowRunStep {
   completedAt?: string
 }
 
+/** Pause record carried inline on a paused run so the UI can resume
+ *  without a second roundtrip. Mirrors mate_workflow_run_pause. */
+export interface WorkflowRunPause {
+  id: number
+  runId: number
+  stepId?: number
+  pauseKind: string
+  pauseToken: string
+  externalApprovalId?: number
+  pausedAt: string
+  resumeDeadline?: string
+  resumePayloadRef?: string
+  resumedAt?: string
+  resumeOutcome?: string
+}
+
+export interface PausedRunSummary {
+  run: WorkflowRun
+  pause: WorkflowRunPause | null
+}
+
+export interface RunDetail {
+  run: WorkflowRun
+  steps: WorkflowRunStep[]
+  /** Most recent unresolved pause record; null when the run is not paused. */
+  activePause: WorkflowRunPause | null
+}
+
+export type ResumeOutcome = 'approved' | 'rejected' | 'timeout' | 'cancelled'
+
+export interface ResumeResponse {
+  kind: string
+  runId?: number | null
+  errorMessage?: string | null
+}
+
 export const workflowApi = {
   list: (workspaceId: number) =>
     http.get<WorkflowSummary[]>('/workflows', { params: { workspaceId } }),
@@ -844,7 +880,17 @@ export const workflowApi = {
   runs: (id: number, limit = 50) =>
     http.get<WorkflowRun[]>(`/workflows/${id}/runs`, { params: { limit } }),
   runDetail: (runId: number) =>
-    http.get<{ run: WorkflowRun; steps: WorkflowRunStep[] }>(`/workflows/runs/${runId}`),
+    http.get<RunDetail>(`/workflows/runs/${runId}`),
+  /** List paused runs across the workspace so operators can resume them. */
+  listPausedRuns: (limit = 50) =>
+    http.get<PausedRunSummary[]>('/workflows/runs/paused', { params: { limit } }),
+  /** Resume a paused workflow run with one of the four documented outcomes. */
+  resumeRun: (runId: number, pauseToken: string, outcome: ResumeOutcome, payload?: string) =>
+    http.post<ResumeResponse>(`/workflows/runs/${runId}/resume`, {
+      pauseToken,
+      outcome,
+      payload,
+    }),
 }
 
 // ==================== Trigger ====================
