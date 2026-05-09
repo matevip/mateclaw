@@ -1,23 +1,40 @@
 package vip.mate.stt.provider;
 
-import cn.hutool.http.HttpRequest;
-import cn.hutool.http.HttpResponse;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
+import vip.mate.exception.MateClawException;
+import vip.mate.llm.model.ModelProviderEntity;
 import vip.mate.llm.service.ModelProviderService;
-import vip.mate.stt.AudioMimeTypes;
 import vip.mate.stt.SttProvider;
 import vip.mate.stt.SttRequest;
 import vip.mate.stt.SttResult;
+import vip.mate.stt.SttTransportConfig;
+import vip.mate.stt.transport.OpenAiCompatibleSttTransport;
 import vip.mate.system.model.SystemSettingsDTO;
 
 /**
- * OpenAI STT Provider — Whisper / gpt-4o-mini-transcribe
- * <p>
- * 复用模型管理中的 OpenAI API Key。
+ * OpenAI Whisper / OpenAI-compatible STT provider — thin wrapper.
+ *
+ * <p>Issue #76: this used to bake the {@code id="openai"} credential row + the
+ * {@code https://api.openai.com} base URL + Whisper-1 directly into the
+ * transport call, so the only way to point STT at FunASR / SiliconFlow / Groq
+ * was to hand-edit the OpenAI provider row's baseUrl (lossy + side-effects on
+ * chat). After this refactor:
+ *
+ * <ul>
+ *   <li>Wire protocol lives in {@link OpenAiCompatibleSttTransport}.</li>
+ *   <li>Credential row is selected by {@code SystemSettingsDTO.sttOpenAiCompatProviderId}
+ *       (defaults to {@code "openai"} for backwards compatibility).</li>
+ *   <li>Model is selected by {@code SystemSettingsDTO.sttOpenAiCompatModel}
+ *       (defaults to {@code "whisper-1"}).</li>
+ * </ul>
+ *
+ * <p>The provider id stays {@code "openai"} because settings UI / fallback
+ * registry / per-language ordering all key off it. Phase 2 of the refactor
+ * will replace this single provider with a profile-driven registry; until
+ * then, swapping the credential row is the path forward for new vendors.
  */
 @Slf4j
 @Component
@@ -25,12 +42,13 @@ import vip.mate.system.model.SystemSettingsDTO;
 public class OpenAiSttProvider implements SttProvider {
 
     private final ModelProviderService modelProviderService;
-    private final ObjectMapper objectMapper;
+    private final OpenAiCompatibleSttTransport transport;
 
-    private static final String DEFAULT_MODEL = "whisper-1";
+    private static final String LEGACY_DEFAULT_PROVIDER_ID = "openai";
+    private static final String LEGACY_DEFAULT_MODEL = "whisper-1";
 
     @Override public String id() { return "openai"; }
-    @Override public String label() { return "OpenAI Whisper"; }
+    @Override public String label() { return "OpenAI / OpenAI-compatible (Whisper)"; }
     @Override public boolean requiresCredential() { return true; }
     @Override public int autoDetectOrder() { return 100; }
 
@@ -56,7 +74,8 @@ public class OpenAiSttProvider implements SttProvider {
     @Override
     public boolean isAvailable(SystemSettingsDTO config) {
         try {
-            return modelProviderService.isProviderConfigured("openai");
+            String providerId = resolveProviderId(config);
+            return modelProviderService.isProviderConfigured(providerId);
         } catch (Exception e) {
             log.warn("[OpenAI STT] availability check failed: {}", e.getMessage());
             return false;
@@ -65,40 +84,39 @@ public class OpenAiSttProvider implements SttProvider {
 
     @Override
     public SttResult transcribe(SttRequest request, SystemSettingsDTO config) {
+        String providerId = resolveProviderId(config);
+        ModelProviderEntity provider;
         try {
-            String apiKey = modelProviderService.getProviderConfig("openai").getApiKey();
-            String baseUrl = modelProviderService.getProviderConfig("openai").getBaseUrl();
-            if (apiKey == null) return SttResult.failure("OpenAI API Key 未配置");
-
-            String url = (baseUrl != null ? baseUrl : "https://api.openai.com") + "/v1/audio/transcriptions";
-            String model = request.getModel() != null ? request.getModel() : DEFAULT_MODEL;
-            // AudioMimeTypes ensures the filename extension matches the
-            // actual bytes (audio.wav, audio.mp3, etc.), which Hutool then
-            // uses to infer the multipart Content-Type. Don't pass
-            // contentType to .form() explicitly — Hutool has no
-            // form(String,byte[],String,String) overload, and the wrong
-            // dispatch crashes with ClassCastException on byte[] → Object[].
-            String fileName = AudioMimeTypes.resolveFileName(request.getFileName(), request.getContentType());
-
-            HttpResponse response = HttpRequest.post(url)
-                    .header("Authorization", "Bearer " + apiKey)
-                    .form("model", model)
-                    .form("file", request.getAudioData(), fileName)
-                    .timeout(60_000)
-                    .execute();
-
-            if (response.getStatus() == 200) {
-                JsonNode result = objectMapper.readTree(response.body());
-                String text = result.path("text").asText("");
-                log.info("[OpenAI STT] Transcribed {} chars (model={})", text.length(), model);
-                return SttResult.success(text);
-            } else {
-                log.warn("[OpenAI STT] Failed: HTTP {} - {}", response.getStatus(), response.body());
-                return SttResult.failure("OpenAI STT 失败: HTTP " + response.getStatus());
-            }
-        } catch (Exception e) {
-            log.error("[OpenAI STT] Error: {}", e.getMessage(), e);
-            return SttResult.failure("OpenAI STT 异常: " + e.getMessage());
+            provider = modelProviderService.getProviderConfig(providerId);
+        } catch (MateClawException e) {
+            return SttResult.failure("STT 凭证 provider 未找到: " + providerId);
         }
+
+        String apiKey = provider.getApiKey();
+        String baseUrl = StringUtils.hasText(provider.getBaseUrl())
+                ? provider.getBaseUrl()
+                : "https://api.openai.com";
+
+        // Allow blank apiKey for self-hosted / no-auth setups (FunASR is the
+        // typical case). The transport will only attach the Authorization
+        // header when apiKey is present.
+        boolean requiresKey = Boolean.TRUE.equals(provider.getRequireApiKey());
+        if (requiresKey && (apiKey == null || apiKey.isBlank())) {
+            return SttResult.failure("STT 凭证 provider 未配置 API Key: " + providerId);
+        }
+
+        String model = resolveModel(config);
+        SttTransportConfig transportConfig = new SttTransportConfig(baseUrl, apiKey, model);
+        return transport.transcribe(request, transportConfig);
+    }
+
+    private String resolveProviderId(SystemSettingsDTO config) {
+        String configured = config != null ? config.getSttOpenAiCompatProviderId() : null;
+        return StringUtils.hasText(configured) ? configured.trim() : LEGACY_DEFAULT_PROVIDER_ID;
+    }
+
+    private String resolveModel(SystemSettingsDTO config) {
+        String configured = config != null ? config.getSttOpenAiCompatModel() : null;
+        return StringUtils.hasText(configured) ? configured.trim() : LEGACY_DEFAULT_MODEL;
     }
 }

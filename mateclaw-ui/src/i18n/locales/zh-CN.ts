@@ -644,6 +644,9 @@ export default {
       sttEnabled: '启用语音识别',
       sttProvider: '首选 STT 提供商',
       sttFallbackEnabled: '提供商回退',
+      // Issue #76: OpenAI-compat STT 端点路由
+      sttOpenAiCompatProviderId: 'OpenAI 兼容凭证',
+      sttOpenAiCompatModel: 'OpenAI 兼容模型名',
       // 音乐生成
       musicEnabled: '启用音乐生成',
       musicProvider: '首选音乐提供商',
@@ -697,6 +700,10 @@ export default {
       sttFallbackEnabled: '首选提供商失败时自动尝试其他已配置的提供商。',
       openaiSttInfo: '复用模型管理中的 OpenAI API Key。使用 Whisper 模型，支持多语言自动识别。',
       dashscopeSttInfo: '复用模型管理中的 DashScope API Key。使用 Paraformer Realtime（WebSocket 流式），中文识别效果优秀，亚秒级延迟。',
+      // Issue #76
+      sttOpenAiCompatProviderId: '从模型管理选一个 OpenAI 兼容 provider 行作为凭证（baseUrl + API Key）来源。除官方 OpenAI 外，FunASR 私有部署 / 硅基流动 / Groq / Together / 火山 / 七牛等都可以用——在模型管理新增自定义 provider 后即可在此选用。',
+      sttOpenAiCompatModel: '发送给端点的模型名（multipart "model" 字段）。OpenAI 默认 whisper-1；FunASR 通常是 paraformer-large；其他厂商按其文档填写。',
+      sttOpenAiCompatNote: '提示：要接私有 ASR 服务，先去模型管理 → 新增自定义 provider → 协议选 "OpenAI 兼容" → 填 Base URL + 可选 API Key，然后回到这里选它。',
       // 音乐生成
       musicEnabled: '开启后 Agent 可通过 music_generate 工具生成音乐。Google Lyria 复用 Google Key。',
       musicProvider: '选择首选音乐提供商，auto 模式优先使用 Google Lyria。',

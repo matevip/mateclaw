@@ -49,6 +49,9 @@ public class SystemSettingService {
     private static final String STT_ENABLED_KEY = "sttEnabled";
     private static final String STT_PROVIDER_KEY = "sttProvider";
     private static final String STT_FALLBACK_ENABLED_KEY = "sttFallbackEnabled";
+    // Issue #76: let the OpenAI STT provider point at any OpenAI-compat endpoint.
+    private static final String STT_OPENAI_COMPAT_PROVIDER_ID_KEY = "sttOpenAiCompatProviderId";
+    private static final String STT_OPENAI_COMPAT_MODEL_KEY = "sttOpenAiCompatModel";
 
     // 音乐生成配置 keys
     private static final String MUSIC_ENABLED_KEY = "musicEnabled";
@@ -134,6 +137,10 @@ public class SystemSettingService {
         dto.setSttEnabled(Boolean.parseBoolean(getValue(STT_ENABLED_KEY, "false")));
         dto.setSttProvider(getValue(STT_PROVIDER_KEY, "auto"));
         dto.setSttFallbackEnabled(Boolean.parseBoolean(getValue(STT_FALLBACK_ENABLED_KEY, "true")));
+        // Issue #76: default to "openai" so upgrades behave identically to the
+        // old hard-coded path; users can swap to any OpenAI-compat provider row.
+        dto.setSttOpenAiCompatProviderId(getValue(STT_OPENAI_COMPAT_PROVIDER_ID_KEY, "openai"));
+        dto.setSttOpenAiCompatModel(getValue(STT_OPENAI_COMPAT_MODEL_KEY, "whisper-1"));
 
         // 音乐生成配置
         dto.setMusicEnabled(Boolean.parseBoolean(getValue(MUSIC_ENABLED_KEY, "false")));
@@ -294,6 +301,15 @@ public class SystemSettingService {
         }
         if (dto.getSttFallbackEnabled() != null) {
             saveValue(STT_FALLBACK_ENABLED_KEY, String.valueOf(dto.getSttFallbackEnabled()), "STT Provider 级 Fallback");
+        }
+        // Issue #76: persist the OpenAI-compatible STT routing target.
+        if (dto.getSttOpenAiCompatProviderId() != null) {
+            saveValue(STT_OPENAI_COMPAT_PROVIDER_ID_KEY, dto.getSttOpenAiCompatProviderId(),
+                    "OpenAI-compat STT 凭证来源 provider id");
+        }
+        if (dto.getSttOpenAiCompatModel() != null) {
+            saveValue(STT_OPENAI_COMPAT_MODEL_KEY, dto.getSttOpenAiCompatModel(),
+                    "OpenAI-compat STT 模型名");
         }
 
         // 音乐生成配置

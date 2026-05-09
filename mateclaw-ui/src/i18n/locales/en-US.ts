@@ -757,6 +757,9 @@ export default {
       sttEnabled: 'Enable Speech Recognition',
       sttProvider: 'Preferred STT Provider',
       sttFallbackEnabled: 'Provider Fallback',
+      // Issue #76: route the OpenAI-compat STT endpoint
+      sttOpenAiCompatProviderId: 'OpenAI-compatible Credential',
+      sttOpenAiCompatModel: 'OpenAI-compatible Model',
       musicEnabled: 'Enable Music Generation',
       musicProvider: 'Preferred Music Provider',
       musicFallbackEnabled: 'Provider Fallback',
@@ -804,6 +807,10 @@ export default {
       sttFallbackEnabled: 'Automatically try other configured providers if the preferred one fails.',
       openaiSttInfo: 'Reuses OpenAI API Key from Model Management. Whisper model, supports multilingual auto-detection.',
       dashscopeSttInfo: 'Reuses DashScope API Key from Model Management. Paraformer Realtime over WebSocket — strong Chinese recognition, sub-second latency.',
+      // Issue #76
+      sttOpenAiCompatProviderId: 'Pick any OpenAI-compatible provider from Model Management as the credential source (baseUrl + API key). Beyond OpenAI itself this covers self-hosted FunASR, SiliconFlow, Groq, Together, Volcano, Qiniu, and any custom provider you add with the OpenAI-compatible protocol.',
+      sttOpenAiCompatModel: 'Model id sent in the multipart "model" field. Defaults to whisper-1; use paraformer-large for FunASR, or whatever id your vendor documents.',
+      sttOpenAiCompatNote: 'Tip: to plug in a private ASR service, head to Model Management → Add Custom Provider → pick the "OpenAI Compatible" protocol → fill in Base URL (and an optional API key), then come back and select it here.',
       musicEnabled: 'Enable to let Agent use the music generation tool. Google Lyria reuses Google Key.',
       musicProvider: 'Select preferred music provider. Auto mode prioritizes Google Lyria.',
       musicFallbackEnabled: 'Automatically try other configured providers if the preferred one fails.',

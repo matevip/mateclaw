@@ -108,6 +108,20 @@ public class SystemSettingsDTO {
     /** 首选 STT provider: auto / openai / dashscope */
     private String sttProvider;
     private Boolean sttFallbackEnabled;
+    /**
+     * Issue #76: which {@code mate_model_provider} row should the OpenAI STT
+     * provider read its baseUrl + apiKey from. Defaults to "openai" so existing
+     * deployments keep working; swap to a custom OpenAI-compatible provider row
+     * (FunASR / SiliconFlow / Groq / Together / Volcano / etc.) to point STT
+     * at any compatible endpoint without a code change.
+     */
+    private String sttOpenAiCompatProviderId;
+    /**
+     * Issue #76: model id sent in the multipart "model" field. Defaults to
+     * whisper-1; override with paraformer-large / FunAudioLLM-Whisper / etc.
+     * when the configured provider exposes a different identifier.
+     */
+    private String sttOpenAiCompatModel;
 
     // ===== 音乐生成配置 =====
     private Boolean musicEnabled;

@@ -50,10 +50,52 @@
     <template v-if="settings.sttEnabled">
       <div class="provider-section">
         <div class="provider-header">
-          <span class="provider-name">OpenAI Whisper</span>
+          <span class="provider-name">OpenAI / OpenAI-compatible (Whisper)</span>
           <span class="provider-tag">{{ t('settings.sttProviderTags.reuseLlmKey') }}</span>
         </div>
-        <div class="settings-card"><div class="setting-item"><div class="setting-info"><div class="setting-hint">{{ t('settings.hints.openaiSttInfo') }}</div></div></div></div>
+        <!-- Issue #76: let users point this provider at any OpenAI-compat
+             endpoint (FunASR / SiliconFlow / Groq / Together / Volcano /
+             Qiniu / self-hosted ...) by selecting the credential row + model. -->
+        <div class="settings-card">
+          <div class="setting-item">
+            <div class="setting-info">
+              <div class="setting-label">{{ t('settings.fields.sttOpenAiCompatProviderId') }}</div>
+              <div class="setting-hint">{{ t('settings.hints.sttOpenAiCompatProviderId') }}</div>
+            </div>
+            <div class="setting-control">
+              <select
+                v-model="settings.sttOpenAiCompatProviderId"
+                class="form-input"
+                :disabled="!settings.sttEnabled"
+              >
+                <option
+                  v-for="p in openAiCompatProviders"
+                  :key="p.id"
+                  :value="p.id"
+                >{{ p.name }}{{ p.id === 'openai' ? '' : ` (${p.id})` }}</option>
+              </select>
+            </div>
+          </div>
+          <div class="setting-item">
+            <div class="setting-info">
+              <div class="setting-label">{{ t('settings.fields.sttOpenAiCompatModel') }}</div>
+              <div class="setting-hint">{{ t('settings.hints.sttOpenAiCompatModel') }}</div>
+            </div>
+            <div class="setting-control">
+              <input
+                v-model="settings.sttOpenAiCompatModel"
+                class="form-input"
+                :disabled="!settings.sttEnabled"
+                placeholder="whisper-1"
+              />
+            </div>
+          </div>
+          <div class="setting-item">
+            <div class="setting-info">
+              <div class="setting-hint">{{ t('settings.hints.sttOpenAiCompatNote') }}</div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="provider-section">
         <div class="provider-header">
@@ -73,15 +115,69 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { settingsApi } from '@/api'
+import { modelApi, settingsApi } from '@/api'
 
 const { t } = useI18n()
 const savedTip = ref('')
-const settings = reactive({ sttEnabled: false, sttProvider: 'auto', sttFallbackEnabled: true })
+const settings = reactive({
+  sttEnabled: false,
+  sttProvider: 'auto',
+  sttFallbackEnabled: true,
+  // Issue #76: route OpenAI Whisper provider to any OpenAI-compat credential row.
+  sttOpenAiCompatProviderId: 'openai',
+  sttOpenAiCompatModel: 'whisper-1',
+})
 
-onMounted(() => loadSettings())
+interface ProviderRow {
+  id: string
+  name: string
+  chatModel?: string
+  protocol?: string
+}
+
+const providers = ref<ProviderRow[]>([])
+
+/**
+ * Issue #76: surface every OpenAI-compatible credential row as a STT
+ * endpoint candidate. This includes the bundled OpenAI provider, Kimi /
+ * DeepSeek / Together / SiliconFlow / Groq / Volcano / Qiniu (all share
+ * `OpenAIChatModel`), and any user-added custom provider that picks the
+ * OpenAI-compatible protocol. The user's self-hosted FunASR fits the
+ * latter — they add a custom provider with baseUrl http://internal/v1
+ * and select it here.
+ */
+const openAiCompatProviders = computed<ProviderRow[]>(() => {
+  const list = providers.value.filter(p =>
+    (p.chatModel === 'OpenAIChatModel') || (p.protocol === 'openai-compatible')
+  )
+  if (list.some(p => p.id === settings.sttOpenAiCompatProviderId)) return list
+  // Always render the currently-saved id even if its row was disabled / removed,
+  // so the user can see what's persisted instead of silent fallback to "openai".
+  return [
+    ...list,
+    { id: settings.sttOpenAiCompatProviderId, name: settings.sttOpenAiCompatProviderId },
+  ]
+})
+
+onMounted(async () => {
+  await Promise.all([loadProviders(), loadSettings()])
+})
+
+async function loadProviders() {
+  try {
+    const res: any = await modelApi.listProviders()
+    providers.value = (res?.data || []).map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      chatModel: p.chatModel,
+      protocol: p.protocol,
+    }))
+  } catch {
+    providers.value = []
+  }
+}
 
 async function loadSettings() {
   const res: any = await settingsApi.get()
@@ -89,10 +185,18 @@ async function loadSettings() {
   settings.sttEnabled = d.sttEnabled ?? false
   settings.sttProvider = d.sttProvider ?? 'auto'
   settings.sttFallbackEnabled = d.sttFallbackEnabled ?? true
+  settings.sttOpenAiCompatProviderId = d.sttOpenAiCompatProviderId ?? 'openai'
+  settings.sttOpenAiCompatModel = d.sttOpenAiCompatModel ?? 'whisper-1'
 }
 
 async function onSaveSettings() {
-  await settingsApi.update({ sttEnabled: settings.sttEnabled, sttProvider: settings.sttProvider, sttFallbackEnabled: settings.sttFallbackEnabled })
+  await settingsApi.update({
+    sttEnabled: settings.sttEnabled,
+    sttProvider: settings.sttProvider,
+    sttFallbackEnabled: settings.sttFallbackEnabled,
+    sttOpenAiCompatProviderId: settings.sttOpenAiCompatProviderId,
+    sttOpenAiCompatModel: settings.sttOpenAiCompatModel,
+  })
   await loadSettings()
   savedTip.value = t('settings.messages.saveSuccess')
   setTimeout(() => { savedTip.value = '' }, 2500)
