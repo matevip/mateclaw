@@ -401,8 +401,10 @@ public class SkillController {
     }
 
     /**
-     * 把返回给前端的 effectiveAllowedTools 做展示转换
-     * 除显示mcp_<serverId>_<slug>_<hash6>工具名，在后面用括号也显示原始mcp工具名
+     * Perform a display transformation on `effectiveAllowedTools` (returned to the frontend),
+     * and store the transformed result in `effectiveAllowedToolsDisplay`.
+     * In addition to displaying the tool name in the format `mcp_<serverId>_<slug>_<hash6>`,
+     * also display the original MCP tool name in parentheses immediately following it.
      *
      * @param skill
      * @return
@@ -417,7 +419,7 @@ public class SkillController {
             List<String> displayTools = skill.getEffectiveAllowedTools().stream()
                     .map(mcpSkillBridge::decorateToolNameForDisplay)
                     .toList();
-            view.put("effectiveAllowedTools", displayTools);
+            view.put("effectiveAllowedToolsDisplay", displayTools);
         }
 
         return view;

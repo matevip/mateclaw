@@ -122,7 +122,8 @@ public class McpSkillBridge {
     }
 
     /**
-     * 增加一个“仅展示用”的方法，把 prefixed name 反查成 raw name
+     * Add a "display-only" method to reverse-lookup a prefixed name back to its raw name.
+     *
      * @param prefixedName
      * @return
      */
