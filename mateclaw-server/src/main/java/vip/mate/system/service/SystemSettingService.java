@@ -63,6 +63,10 @@ public class SystemSettingService {
     private static final String MODEL3D_PROVIDER_KEY = "model3dProvider";
     private static final String MODEL3D_FALLBACK_ENABLED_KEY = "model3dFallbackEnabled";
 
+    // Multimodal sidecar routing keys (id values; references mate_model_config.id)
+    private static final String DEFAULT_VISION_MODEL_KEY = "default.vision_model";
+    private static final String DEFAULT_VIDEO_MODEL_KEY = "default.video_model";
+
     private static final String ZHIPU_API_KEY_KEY = "zhipuApiKey";
     private static final String ZHIPU_BASE_URL_KEY = "zhipuBaseUrl";
     private static final String FAL_API_KEY_KEY = "falApiKey";
@@ -151,7 +155,20 @@ public class SystemSettingService {
         dto.setModel3dEnabled(Boolean.parseBoolean(getValue(MODEL3D_ENABLED_KEY, "false")));
         dto.setModel3dProvider(getValue(MODEL3D_PROVIDER_KEY, "auto"));
         dto.setModel3dFallbackEnabled(Boolean.parseBoolean(getValue(MODEL3D_FALLBACK_ENABLED_KEY, "true")));
+
+        // Multimodal sidecar routing — empty string means "not configured"
+        dto.setDefaultVisionModelId(parseIdOrNull(getValue(DEFAULT_VISION_MODEL_KEY, "")));
+        dto.setDefaultVideoModelId(parseIdOrNull(getValue(DEFAULT_VIDEO_MODEL_KEY, "")));
         return dto;
+    }
+
+    private Long parseIdOrNull(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**
@@ -333,6 +350,15 @@ public class SystemSettingService {
         if (dto.getModel3dFallbackEnabled() != null) {
             saveValue(MODEL3D_FALLBACK_ENABLED_KEY, String.valueOf(dto.getModel3dFallbackEnabled()), "3D Provider 级 Fallback");
         }
+
+        // Multimodal sidecar routing — write empty string to clear (parse-back returns null)
+        // Always written so users can revert to "not configured" via the UI.
+        saveValue(DEFAULT_VISION_MODEL_KEY,
+                dto.getDefaultVisionModelId() == null ? "" : String.valueOf(dto.getDefaultVisionModelId()),
+                "Default vision-capable model id (mate_model_config.id) for sidecar routing");
+        saveValue(DEFAULT_VIDEO_MODEL_KEY,
+                dto.getDefaultVideoModelId() == null ? "" : String.valueOf(dto.getDefaultVideoModelId()),
+                "Default video-capable model id (mate_model_config.id) for sidecar routing");
         return getSettings();
     }
 

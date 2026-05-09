@@ -134,4 +134,22 @@ public class SystemSettingsDTO {
     /** 首选 3D provider: auto / hunyuan-3d */
     private String model3dProvider;
     private Boolean model3dFallbackEnabled;
+
+    // ===== Multimodal sidecar routing =====
+    /**
+     * Default vision-capable model id used to caption image attachments when the
+     * agent's primary model lacks the VISION modality. References mate_model_config.id;
+     * provider+model_name pairs are not unique so we store the surrogate key.
+     * null / non-existent / disabled rows are treated as "not configured" — the
+     * runtime then leaves the attachment out and asks the user to pick a model.
+     */
+    private Long defaultVisionModelId;
+
+    /**
+     * Default video-capable model id used when the agent's primary model lacks
+     * the VIDEO modality. Same semantics as defaultVisionModelId. v1 routing does
+     * not yet implement video sidecar; this is reserved for the next iteration so
+     * the configuration surface is stable.
+     */
+    private Long defaultVideoModelId;
 }

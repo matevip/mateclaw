@@ -83,6 +83,15 @@ public final class MateClawStateKeys {
     // ===== 事件流（APPEND 策略）=====
     public static final String PENDING_EVENTS = "pending_events";
 
+    /**
+     * Multimodal routing decision for the current turn (REPLACE strategy).
+     * Stored as a Map ready for JSON serialization. Set by BaseAgent before
+     * the reasoning node runs; read back by FinalAnswerNode and (separately)
+     * emitted as a graph event for the SSE accumulator to write into the
+     * persisted message metadata under {@code metadata.routing}.
+     */
+    public static final String ROUTING_DECISION = "routing_decision";
+
     // ===== 阶段标记（REPLACE 策略）=====
     public static final String CURRENT_PHASE = "current_phase";
 

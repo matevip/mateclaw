@@ -10,6 +10,10 @@ import org.springframework.core.io.FileSystemResource;
 import org.springframework.util.MimeType;
 import reactor.core.publisher.Flux;
 import vip.mate.approval.ApprovalPlaceholderUtil;
+import vip.mate.llm.model.ModelConfigEntity;
+import vip.mate.llm.routing.MediaCaptionService;
+import vip.mate.llm.routing.MultimodalRouter;
+import vip.mate.llm.routing.model.MultimodalRoutingDecision;
 import vip.mate.llm.service.ModelCapabilityService;
 import vip.mate.workspace.conversation.ConversationService;
 import vip.mate.workspace.conversation.model.MessageContentPart;
@@ -84,6 +88,31 @@ public abstract class BaseAgent {
 
     /** 构建时使用的 provider ID（运行时快照） */
     protected String runtimeProviderId;
+
+    /**
+     * Full runtime model configuration used by the multimodal router to
+     * decide whether the primary model can handle attachments natively.
+     * Set by {@code AgentGraphBuilder} alongside {@link #modelCapabilities}.
+     */
+    protected ModelConfigEntity runtimeModelConfig;
+
+    /**
+     * The agent's effective tool set. Lifted from subclasses so
+     * {@link #buildUserMessage} can ask whether the agent has any media-capable
+     * tool when the primary model rejects an attachment.
+     */
+    protected vip.mate.agent.AgentToolSet toolSet;
+
+    /**
+     * Optional sidecar routing services. Null when not wired (e.g. tests with
+     * minimal builders); the routing path then degrades to the legacy
+     * skip-with-text-hint behavior without any extra LLM calls.
+     */
+    protected MultimodalRouter multimodalRouter;
+    protected MediaCaptionService mediaCaptionService;
+
+    /** Locale used when prompting the vision sidecar. Defaults to zh-CN when unset. */
+    protected java.util.Locale userLocale = java.util.Locale.SIMPLIFIED_CHINESE;
 
 
     protected BaseAgent(ChatClient chatClient, ConversationService conversationService) {
@@ -510,34 +539,87 @@ public abstract class BaseAgent {
     }
 
     /**
-     * 构建 UserMessage，支持 multimodal：如果消息包含图片/视频附件，直接注入 Spring AI Media 对象，
-     * 让模型在 prompt 中直接看到媒体内容，不需要再调 MCP read_media_file 工具。
+     * Build a {@link UserMessage} for the current turn, including any image/video
+     * media the agent's primary model can handle natively. Returns the message
+     * paired with the {@link MultimodalRoutingDecision} taken so the caller can
+     * persist it as message metadata and emit a routing event.
      */
-    protected UserMessage buildUserMessage(MessageEntity message, String renderedContent) {
-        return buildUserMessage(message, renderedContent, true);
+    protected CurrentTurnUserMessage buildUserMessageForCurrentTurn(MessageEntity message, String renderedContent) {
+        return buildUserMessageInternal(message, renderedContent, true);
     }
 
     /**
-     * @param injectMedia when {@code false} (history replay), skip the Media-loading
-     *                    branch entirely and return text-only — providers like Zhipu
-     *                    GLM-5V cap at 1 video per request, so re-injecting historical
-     *                    attachments on every turn breaks the call.
+     * History-replay variant: text-only, no media reinjected, no routing decision.
+     * Many providers cap at one video per request, so re-injecting old attachments
+     * on every replay would break the call.
      */
+    protected UserMessage buildUserMessage(MessageEntity message, String renderedContent) {
+        return buildUserMessageInternal(message, renderedContent, true).userMessage();
+    }
+
     protected UserMessage buildUserMessage(MessageEntity message, String renderedContent, boolean injectMedia) {
+        return buildUserMessageInternal(message, renderedContent, injectMedia).userMessage();
+    }
+
+    private CurrentTurnUserMessage buildUserMessageInternal(MessageEntity message, String renderedContent, boolean injectMedia) {
         if (!injectMedia) {
-            return new UserMessage(renderedContent == null ? "" : renderedContent);
+            return new CurrentTurnUserMessage(
+                    new UserMessage(renderedContent == null ? "" : renderedContent),
+                    null);
         }
         List<MessageContentPart> parts = conversationService.parseMessageParts(message);
+
+        // Sidecar routing — runs first so caption text gets folded into finalText
+        // before native media injection considers the same parts again.
+        MultimodalRoutingDecision decision = multimodalRouter != null
+                ? multimodalRouter.route(parts, runtimeModelConfig)
+                : MultimodalRoutingDecision.none();
+
+        StringBuilder textBuilder = new StringBuilder(renderedContent == null ? "" : renderedContent);
+        java.util.Set<String> sidecarHandledIdentifiers = new java.util.HashSet<>();
+        if (decision.strategy() == MultimodalRoutingDecision.Strategy.SIDECAR
+                && mediaCaptionService != null
+                && decision.sidecarModel() != null) {
+            for (MessageContentPart part : parts) {
+                if (part == null) continue;
+                String contentType = part.getContentType();
+                boolean isImage = ("image".equals(part.getType()) || "file".equals(part.getType()))
+                        && contentType != null && contentType.startsWith("image/")
+                        && !contentType.contains("svg");
+                if (!isImage) continue;
+                MediaCaptionService.CaptionResult result = mediaCaptionService.caption(
+                        decision.sidecarModel(), part, userLocale);
+                if (result.isFailure()) {
+                    log.warn("[{}] Sidecar caption failed for {}: {}",
+                            agentName, part.getFileName(), result.failure().getMessage());
+                    textBuilder.append("\n\n[系统提示] 视觉模型未能解析附件 ")
+                            .append(part.getFileName())
+                            .append("，请稍后重试或在「设置 → 模型」检查视觉模型配置。");
+                    continue;
+                }
+                textBuilder.append("\n\n[图片附件描述: ")
+                        .append(part.getFileName() == null ? "image" : part.getFileName())
+                        .append("]\n")
+                        .append(result.description())
+                        .append("\n[/图片附件描述]");
+                String identifier = identifyPart(part);
+                if (identifier != null) sidecarHandledIdentifiers.add(identifier);
+            }
+        }
+
         List<Media> mediaList = new ArrayList<>();
-        // Reasons for attachments that the model cannot consume — surfaced to the agent
-        // via the user message text so it does not hallucinate a tool call to read them.
-        // See issue #44.
         List<String> skippedAttachments = new ArrayList<>();
         boolean videoSupported = modelSupportsVideo();
         boolean visionSupported = modelSupportsVision();
 
         for (MessageContentPart part : parts) {
             if (part == null) continue;
+            // Sidecar already produced text for this image; never inject the
+            // raw bytes — the primary model would receive them and try to
+            // process natively, defeating the cost-saving purpose.
+            String identifier = identifyPart(part);
+            if (identifier != null && sidecarHandledIdentifiers.contains(identifier)) continue;
+
             String partType = part.getType();
             String contentType = part.getContentType();
             // image 类型的 part 可能没有精确 contentType，补全为 image/jpeg
@@ -607,21 +689,88 @@ public abstract class BaseAgent {
             }
         }
 
-        String finalText = renderedContent;
         if (!skippedAttachments.isEmpty()) {
-            finalText = (renderedContent == null ? "" : renderedContent)
-                    + "\n\n[系统提示] 以下附件未能传入当前模型：" + String.join("、", skippedAttachments)
-                    + "。\n请用对话语言清晰、友好地告诉用户：当前模型无法处理这类附件，建议切换到具备相应能力的多模态模型（图片需视觉模型，视频需视频理解模型）后重新上传。"
-                    + "不要调用任何工具（包括 ffmpeg、浏览器、文件读取等）尝试解析这些附件。";
+            textBuilder.append("\n\n[系统提示] 以下附件未能传入当前模型：")
+                    .append(String.join("、", skippedAttachments))
+                    .append("。");
+            // Only suggest switching models when no media-capable tool is bound
+            // either. With a media tool the LLM may legitimately choose to
+            // delegate to the tool — never instruct it not to use tools.
+            if (!hasMediaCapableTools()) {
+                textBuilder.append("\n请用对话语言清晰、友好地告诉用户：当前模型无法处理这类附件，建议切换到具备相应能力的多模态模型，或在「设置 → 模型」中配置视觉/视频模型作为旁路。");
+            }
         }
 
-        if (mediaList.isEmpty()) {
-            return new UserMessage(finalText);
+        String finalText = textBuilder.toString();
+        UserMessage built = mediaList.isEmpty()
+                ? new UserMessage(finalText)
+                : UserMessage.builder().text(finalText).media(mediaList).build();
+        return new CurrentTurnUserMessage(built, decision);
+    }
+
+    /**
+     * Stable identifier for de-duplicating parts already handled by the sidecar
+     * pass. Falls back across {@code path → mediaId → fileName} since not every
+     * channel populates the same field.
+     */
+    private static String identifyPart(MessageContentPart part) {
+        if (part == null) return null;
+        if (part.getPath() != null && !part.getPath().isBlank()) return "p:" + part.getPath();
+        if (part.getMediaId() != null && !part.getMediaId().isBlank()) return "m:" + part.getMediaId();
+        if (part.getFileName() != null && !part.getFileName().isBlank()) return "f:" + part.getFileName();
+        return null;
+    }
+
+    /**
+     * True if the agent has at least one tool whose name or description
+     * suggests it can read images / video / audio. The check is intentionally
+     * loose — false positives just mean the agent is allowed to attempt media
+     * processing on its own, which is the safer default.
+     */
+    private static final Set<String> MEDIA_TOOL_KEYWORDS = Set.of(
+            "image", "图片", "vision", "视觉",
+            "video", "视频", "ffmpeg",
+            "ocr", "caption", "media", "audio", "音频");
+
+    private boolean hasMediaCapableTools() {
+        if (toolSet == null) return false;
+        var callbacks = toolSet.callbacks();
+        if (callbacks == null || callbacks.isEmpty()) return false;
+        return callbacks.stream().anyMatch(cb -> {
+            try {
+                String name = String.valueOf(cb.getToolDefinition().name()).toLowerCase();
+                String desc = String.valueOf(cb.getToolDefinition().description()).toLowerCase();
+                return MEDIA_TOOL_KEYWORDS.stream().anyMatch(k -> name.contains(k) || desc.contains(k));
+            } catch (Exception e) {
+                return false;
+            }
+        });
+    }
+
+    /**
+     * Pair returned from the current-turn user message build path: the assembled
+     * {@link UserMessage} and the routing decision the caller should persist as
+     * {@code metadata.routing} and surface to the SSE consumer.
+     */
+    public record CurrentTurnUserMessage(UserMessage userMessage, MultimodalRoutingDecision routingDecision) {}
+
+    /**
+     * Extract a routing-decision payload from the graph input map (placed there
+     * by {@code buildInitialState}) and turn it into a startup
+     * {@link vip.mate.agent.AgentService.StreamDelta} the SSE accumulator can
+     * persist. Returns an empty Flux when no routing happened this turn so we
+     * don't emit zero-value events.
+     */
+    @SuppressWarnings("unchecked")
+    public static reactor.core.publisher.Flux<vip.mate.agent.AgentService.StreamDelta> routingStartupDelta(
+            java.util.Map<String, Object> inputs) {
+        Object decision = inputs.get(vip.mate.agent.graph.state.MateClawStateKeys.ROUTING_DECISION);
+        if (decision instanceof java.util.Map<?, ?> map && !map.isEmpty()) {
+            return reactor.core.publisher.Flux.just(vip.mate.agent.AgentService.StreamDelta.event(
+                    vip.mate.agent.GraphEventPublisher.EVENT_ROUTING_DECISION,
+                    (java.util.Map<String, Object>) map));
         }
-        return UserMessage.builder()
-                .text(finalText)
-                .media(mediaList)
-                .build();
+        return reactor.core.publisher.Flux.empty();
     }
 
     /**
@@ -642,6 +791,17 @@ public abstract class BaseAgent {
      * @return 带图片 Media 的 UserMessage（如果有图片附件），否则纯文本 UserMessage
      */
     protected UserMessage buildCurrentUserMessage(String conversationId, String userMessageText) {
+        return buildCurrentUserMessageWithRouting(conversationId, userMessageText).userMessage();
+    }
+
+    /**
+     * Same as {@link #buildCurrentUserMessage} but also returns the multimodal
+     * routing decision taken for this turn so the caller can persist it as
+     * {@code metadata.routing} and emit a SSE-side event for the chat UI.
+     * Returns a decision with NONE strategy when the message has no attachments
+     * the primary model can't already handle.
+     */
+    protected CurrentTurnUserMessage buildCurrentUserMessageWithRouting(String conversationId, String userMessageText) {
         try {
             List<MessageEntity> history = conversationService.listMessages(conversationId);
             // 倒序取最后一条 user 消息（buildInitialState 在 saveMessage 后调用，所以最后一条就是当前消息）
@@ -650,14 +810,14 @@ public abstract class BaseAgent {
                 if ("user".equals(msg.getRole())) {
                     // 用 DB 中的实际内容（可能包含 contentParts），不用传入的 text
                     String content = conversationService.renderMessageContent(msg);
-                    return buildUserMessage(msg, content != null && !content.isBlank() ? content : userMessageText);
+                    return buildUserMessageForCurrentTurn(msg, content != null && !content.isBlank() ? content : userMessageText);
                 }
             }
         } catch (Exception e) {
             log.debug("[{}] Failed to load current user message parts for multimodal: {}",
                     agentName, e.getMessage());
         }
-        return new UserMessage(userMessageText);
+        return new CurrentTurnUserMessage(new UserMessage(userMessageText), null);
     }
 
     protected Path resolveImagePath(String relativePath) {

@@ -198,7 +198,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             AtomicInteger lastSoftCap = new AtomicInteger(0);
             AtomicBoolean sawLegitimateExit = new AtomicBoolean(false);
 
-            return compiledGraph.stream(inputs, config)
+            return BaseAgent.routingStartupDelta(inputs).concatWith(compiledGraph.stream(inputs, config)
                     .flatMapIterable(output -> {
                         List<AgentService.StreamDelta> deltas = new ArrayList<>();
                         List<GraphEventPublisher.GraphEvent> allEvents = GraphEventPublisher.extractEvents(output);
@@ -263,7 +263,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                             ));
                         }
                         return null;
-                    }).flatMapMany(d -> d != null ? Flux.just(d) : Flux.empty()))
+                    }).flatMapMany(d -> d != null ? Flux.just(d) : Flux.empty())))
                     .doOnComplete(() -> {
                         setState(AgentState.IDLE);
                         if (!sawLegitimateExit.get()) {
@@ -326,7 +326,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
             AtomicInteger lastSoftCap = new AtomicInteger(0);
             AtomicBoolean sawLegitimateExit = new AtomicBoolean(false);
 
-            return compiledGraph.stream(inputs, config)
+            return BaseAgent.routingStartupDelta(inputs).concatWith(compiledGraph.stream(inputs, config)
                     .flatMapIterable(output -> {
                         List<AgentService.StreamDelta> deltas = new ArrayList<>();
                         // 1. 提取所有累积的事件，只发送新增部分
@@ -402,7 +402,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
                             ));
                         }
                         return null;
-                    }).flatMapMany(d -> d != null ? Flux.just(d) : Flux.empty()))
+                    }).flatMapMany(d -> d != null ? Flux.just(d) : Flux.empty())))
                     .doOnComplete(() -> {
                         setState(AgentState.IDLE);
                         if (!sawLegitimateExit.get()) {
@@ -444,7 +444,9 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
 
         List<Message> messages = new ArrayList<>(historyMessages);
         // 构建当前用户消息：支持 multimodal（如果有图片附件，直接注入 Media）
-        messages.add(buildCurrentUserMessage(conversationId, userMessage));
+        // 同步获取 routing decision，写入 state 供后续节点 / accumulator 读取。
+        BaseAgent.CurrentTurnUserMessage currentTurn = buildCurrentUserMessageWithRouting(conversationId, userMessage);
+        messages.add(currentTurn.userMessage());
 
         Map<String, Object> inputs = new HashMap<>();
         // 输入
@@ -481,6 +483,15 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
         inputs.put(RUNTIME_MODEL_NAME, modelName != null ? modelName : "");
         inputs.put(RUNTIME_PROVIDER_ID, runtimeProviderId != null ? runtimeProviderId : "");
         inputs.put(TRACE_ID, UUID.randomUUID().toString().substring(0, 8));
+
+        // Multimodal sidecar routing — null when the turn carries no media or
+        // the primary model already covers the modalities. Stored as a Map so
+        // graph state stays JSON-friendly.
+        if (currentTurn.routingDecision() != null
+                && currentTurn.routingDecision().strategy() != vip.mate.llm.routing.model.MultimodalRoutingDecision.Strategy.NONE
+                || (currentTurn.routingDecision() != null && !currentTurn.routingDecision().skipped().isEmpty())) {
+            inputs.put(MateClawStateKeys.ROUTING_DECISION, currentTurn.routingDecision().toMap());
+        }
 
         // RFC-063r §2.5: enrich the originating ChatOrigin with this agent's id
         // and workspace, then write it into graph state so ActionNode +

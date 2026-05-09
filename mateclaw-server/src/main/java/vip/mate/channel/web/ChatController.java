@@ -1650,6 +1650,14 @@ public class ChatController {
         private List<String> planSteps = List.of();
         private Integer currentPlanStep = null;
         private Map<String, Object> pendingApproval = null;
+        /**
+         * Multimodal sidecar routing decision for this turn (null when no
+         * routing happened). Captured from the {@code _routing_decision}
+         * event emitted before the graph stream and folded into
+         * {@code metadata.routing} on persistence so the chat UI can show
+         * which sidecar (if any) was invoked.
+         */
+        private Map<String, Object> routingDecision = null;
 
         synchronized void accept(AgentService.StreamDelta delta, String conversationId) {
             if (delta == null) return;
@@ -1682,6 +1690,13 @@ public class ChatController {
                         // persisted with the assistant message.
                         finishReason = String.valueOf(reason);
                     }
+                }
+                if (vip.mate.agent.GraphEventPublisher.EVENT_ROUTING_DECISION.equals(delta.eventType())) {
+                    // Captured at turn start; persisted under metadata.routing so the
+                    // chat UI can render which sidecar (if any) was invoked. Internal
+                    // event — return early to skip rebroadcast on IM channels.
+                    routingDecision = delta.eventData();
+                    return;
                 }
                 accumulateToolEvent(delta.eventType(), delta.eventData(), conversationId);
                 try {
@@ -1966,6 +1981,9 @@ public class ChatController {
                     // turns from long-term memory promotion) instead of doing
                     // brittle text matching on the assistant content.
                     metadata.put("finishReason", finishReason);
+                }
+                if (routingDecision != null && !routingDecision.isEmpty()) {
+                    metadata.put("routing", routingDecision);
                 }
                 return objectMapper.writeValueAsString(metadata);
             } catch (Exception e) {
