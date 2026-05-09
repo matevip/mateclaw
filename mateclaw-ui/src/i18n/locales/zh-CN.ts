@@ -2660,6 +2660,8 @@ export default {
     empty: '暂无技能',
     emptyDesc: '添加技能以增强 Agent 的能力',
     noDescription: '暂无描述',
+    // Issue #83: shown on the padlock that replaces the toggle for MCP/ACP virtual skills.
+    virtualReadonlyHint: 'MCP / ACP 衍生技能不能在此切换，请到 Settings ▸ 连接页面操作对应的服务',
     modal: {
       configureTitle: '配置技能',
       newTitle: '新建技能',

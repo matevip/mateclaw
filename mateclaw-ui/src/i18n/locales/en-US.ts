@@ -2656,6 +2656,8 @@ export default {
     empty: 'No skills found',
     emptyDesc: 'Add skills to enhance your agents\' capabilities',
     noDescription: 'No description',
+    // Issue #83: shown on the padlock that replaces the toggle for MCP/ACP virtual skills.
+    virtualReadonlyHint: 'MCP/ACP-derived skills can\'t be toggled here — manage the underlying service in Settings ▸ Connections.',
     modal: {
       configureTitle: 'Configure Skill',
       newTitle: 'New Skill',
