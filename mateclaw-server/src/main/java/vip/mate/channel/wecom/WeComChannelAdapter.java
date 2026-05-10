@@ -2553,10 +2553,22 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
      * (channelType, chatId, senderId) tuple. Pre-computing it here lets the
      * media-download helper write into the right per-conversation directory
      * <em>before</em> the {@link ChannelMessage} is built.
+     *
+     * <p>The router's identifier is {@code chatId} when present (group context)
+     * and {@code senderId} otherwise (1:1) — there is no {@code group:} infix
+     * because the router doesn't add one. An earlier divergence here ({@code
+     * "wecom:group:" + chatId}) persisted media at
+     * {@code data/chat-uploads/wecom:group:{chatId}/} and stamped that path
+     * onto {@link MessageContentPart#getFileUrl()}, but the message's actual
+     * conversationId in {@code mate_conversation} was {@code wecom:{chatId}}
+     * (no {@code group:} infix). The {@code /api/v1/chat/files/...} endpoint
+     * then ran {@code isConversationOwner("wecom:group:...")}, found no
+     * matching row, returned 403, and the IM client rendered every
+     * group-quoted image as a broken icon.
      */
     private static String inboundConversationId(String senderId, String chatId, String chatType) {
         boolean isGroup = "group".equals(chatType);
-        return isGroup ? "wecom:group:" + chatId : "wecom:" + senderId;
+        return isGroup ? "wecom:" + chatId : "wecom:" + senderId;
     }
 
     // ==================== 引用消息（quote）解析 ====================
