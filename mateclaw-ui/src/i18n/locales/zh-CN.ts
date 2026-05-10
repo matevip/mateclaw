@@ -2337,7 +2337,7 @@ export default {
   },
   channels: {
     title: '渠道管理',
-    desc: '将 Agent 连接到各消息平台和 API',
+    desc: '将数字员工连接到各消息平台和 API',
     newChannel: '新建渠道',
     addChannel: '添加渠道',
     status: {
@@ -2349,7 +2349,7 @@ export default {
     disable: '停用',
     empty: {
       title: '连接第一个渠道',
-      desc: '把你的 Agent 接入团队已经在用的 IM 工具——Slack、企业微信、Telegram 等。',
+      desc: '把你的数字员工接入团队已经在用的 IM 工具——Slack、企业微信、Telegram 等。',
       cta: '连接一个渠道',
     },
     stats: {
@@ -2409,12 +2409,12 @@ export default {
       name: '名称',
       type: '类型',
       description: '描述',
-      bindAgent: '绑定 Agent',
+      bindAgent: '绑定员工',
     },
     placeholders: {
       name: '渠道名称',
       description: '渠道用途说明',
-      selectAgent: '选择 Agent...',
+      selectAgent: '选择员工...',
     },
     types: {
       web: 'Web API',
@@ -2631,8 +2631,8 @@ export default {
       fixIt: '修复',
       retry: '重试',
       readyHeadline: '一切就绪',
-      readySubtitle: '绑定一个 Agent，发条测试消息确认。',
-      bindAgentLabel: '绑定 Agent',
+      readySubtitle: '绑定一个员工，发条测试消息确认。',
+      bindAgentLabel: '绑定员工',
       sendTest: '发送测试消息',
       sendTestHint: '打开 {service} 给机器人发条消息——回复应该几秒内到达。',
       saveFailed: '渠道保存失败',
