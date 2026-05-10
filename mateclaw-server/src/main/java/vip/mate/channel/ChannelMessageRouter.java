@@ -469,7 +469,10 @@ public class ChannelMessageRouter {
                     ResolveOutcome denyOutcome = approvalService.resolve(
                             pending.getPendingId(), message.getSenderId(), "denied");
                     conversationService.removeApprovalPlaceholders(conversationId);
-                    adapter.sendMessage(replyTarget, "⛔ 已拒绝执行工具: " + pending.getToolName());
+                    String denyHint = "⛔ 已拒绝执行工具: " + pending.getToolName();
+                    persistAndBroadcastApprovalHint(conversationId, denyHint,
+                            "denied", pending.getPendingId(), pending.getToolName());
+                    adapter.sendMessage(replyTarget, denyHint);
                     log.info("[{}] Approval DENIED via IM command: pendingId={}, tool={}, msgRewritten={}",
                             adapter.getChannelType(), pending.getPendingId(), pending.getToolName(),
                             denyOutcome.messagesRewritten());
@@ -479,7 +482,10 @@ public class ChannelMessageRouter {
                     // Non-approval message while a pending exists → treat as implicit deny.
                     approvalService.resolve(pending.getPendingId(), message.getSenderId(), "denied");
                     conversationService.removeApprovalPlaceholders(conversationId);
-                    adapter.sendMessage(replyTarget, "⛔ 审批已取消。将继续处理您的新消息。");
+                    String cancelHint = "⛔ 审批已取消。将继续处理您的新消息。";
+                    persistAndBroadcastApprovalHint(conversationId, cancelHint,
+                            "cancelled", pending.getPendingId(), pending.getToolName());
+                    adapter.sendMessage(replyTarget, cancelHint);
                     log.info("[{}] Approval auto-cancelled (non-approval message): pendingId={}",
                             adapter.getChannelType(), pending.getPendingId());
                     // Fall through to process the new message normally.
@@ -763,8 +769,14 @@ public class ChannelMessageRouter {
         String replyTarget = resolveReplyTarget(triggerMessage);
         Long agentId = channelEntity.getAgentId();
 
-        // 通知用户审批已通过
-        adapter.sendMessage(replyTarget, "✅ 已批准执行工具: " + consumed.getToolName());
+        // Notify the user that the approval went through. Persist + broadcast so a
+        // Web mirror of the same conversationId sees the resolution; otherwise this
+        // hint would only land in the IM channel and the Web admin console would
+        // show the replay reply with no preceding "approved" marker.
+        String approveHint = "✅ 已批准执行工具: " + consumed.getToolName();
+        persistAndBroadcastApprovalHint(conversationId, approveHint,
+                "approved", consumed.getPendingId(), consumed.getToolName());
+        adapter.sendMessage(replyTarget, approveHint);
 
         // 清理 DB 中残留的审批占位消息
         conversationService.removeApprovalPlaceholders(conversationId);
@@ -800,7 +812,62 @@ public class ChannelMessageRouter {
                     adapter.getChannelType(), consumed.getToolName(), reply.length());
         } catch (Exception e) {
             log.error("[approval-replay] Replay failed: {}", e.getMessage(), e);
-            adapter.sendMessage(replyTarget, "❌ 工具执行失败: " + e.getMessage());
+            String errHint = "❌ 工具执行失败: " + e.getMessage();
+            persistAndBroadcastApprovalHint(conversationId, errHint, null, null, null);
+            adapter.sendMessage(replyTarget, errHint);
+        }
+    }
+
+    /**
+     * Persist an approval-related hint as an assistant message and best-effort
+     * broadcast it to any live SSE viewer of the conversation.
+     * <p>
+     * Without this, IM-driven approve/deny only reaches the originating IM
+     * channel via {@code adapter.sendMessage(...)} — a Web mirror of the same
+     * conversationId has no record of the resolution because nothing lands in
+     * {@code mate_message} and no SSE event is emitted. The hint then "vanishes"
+     * from the Web admin console even though it shows up on the user's phone.
+     * <p>
+     * Persistence is the load-bearing fix (Web reload picks it up). Broadcast
+     * is best-effort: if no SSE stream is currently registered for the
+     * conversation, the broadcast no-ops silently — that's the common case
+     * since IM-driven clicks rarely race with an active web subscriber.
+     *
+     * @param conversationId conversation owning the hint
+     * @param hint           text to render as an assistant bubble
+     * @param decision       "approved" / "denied" / "cancelled" / null (skips the
+     *                       structured resolved event when null, e.g. on replay error)
+     * @param pendingId      pending approval id; null when not applicable
+     * @param toolName       tool name for the structured event; null when not applicable
+     */
+    private void persistAndBroadcastApprovalHint(String conversationId, String hint,
+                                                  String decision, String pendingId,
+                                                  String toolName) {
+        try {
+            conversationService.saveMessage(conversationId, "assistant", hint, null, "completed");
+        } catch (Exception e) {
+            log.warn("[approval-hint] saveMessage failed for conv={}: {}",
+                    conversationId, e.getMessage());
+        }
+        try {
+            if (decision != null) {
+                streamTracker.broadcastObject(conversationId, "tool_approval_resolved", Map.of(
+                        "pendingId", pendingId == null ? "" : pendingId,
+                        "decision", decision,
+                        "toolName", toolName == null ? "" : toolName,
+                        "timestamp", System.currentTimeMillis()
+                ));
+            }
+            streamTracker.broadcastObject(conversationId, "message_start",
+                    Map.of("role", "assistant"));
+            streamTracker.broadcastObject(conversationId, "content_delta",
+                    Map.of("delta", hint));
+            streamTracker.broadcastObject(conversationId, "message_complete",
+                    Map.of("status", "completed"));
+        } catch (Exception e) {
+            // Broadcast is best-effort; a missing run state is the common case.
+            log.debug("[approval-hint] broadcast skipped/failed for conv={}: {}",
+                    conversationId, e.getMessage());
         }
     }
 

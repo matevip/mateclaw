@@ -481,7 +481,8 @@ public class ChannelManager {
             case "telegram" -> new TelegramChannelAdapter(channel, messageRouter, objectMapper);
             case "discord" -> new DiscordChannelAdapter(channel, messageRouter, objectMapper);
             case "wecom" -> new WeComChannelAdapter(channel, messageRouter, objectMapper,
-                    approvalNotificationService, weComCardDispatcher, weComKeepaliveScheduler);
+                    approvalNotificationService, weComCardDispatcher, weComKeepaliveScheduler,
+                    generatedFileCache);
             case "qq" -> new QQChannelAdapter(channel, messageRouter, objectMapper);
             case "weixin" -> new WeixinChannelAdapter(channel, messageRouter, objectMapper);
             case "slack" -> new vip.mate.channel.slack.SlackChannelAdapter(channel, messageRouter, objectMapper);
