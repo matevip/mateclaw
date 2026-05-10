@@ -2772,12 +2772,44 @@ public class WeComChannelAdapter extends AbstractChannelAdapter {
             if (!title.isBlank()) text.append(' ').append(title);
             if (!desc.isBlank()) text.append('\n').append(desc);
             text.append('\n').append(linkUrl);
+            // WeChat public-account articles (mp.weixin.qq.com) ship the
+            // body behind a captcha-gated SSR page — the URL is opaque to
+            // any LLM tool. Without this hint the model invents plausible
+            // content from the title alone (observed: "本文讲了三个要点…"
+            // hallucinations). The hint nudges the agent to ask the user
+            // to paste the article text instead of guessing.
+            if (isPublicAccountArticle(linkUrl)) {
+                text.append('\n').append(PUBLIC_ACCOUNT_ARTICLE_HINT);
+            }
         } else if (!title.isBlank()) {
             text.append("[appmsg: ").append(title).append("]");
         } else {
             text.append("[appmsg]");
         }
         return new AppmsgContent(text.toString(), attached);
+    }
+
+    /**
+     * Hint appended to forwarded WeChat public-account articles. Worded as
+     * a directive for the agent (not a user-visible message) — the agent's
+     * reasoning prompt picks it up alongside the link itself, so the model
+     * sees the directive in-band with the share.
+     */
+    static final String PUBLIC_ACCOUNT_ARTICLE_HINT =
+            "（提示：该链接为公众号文章，正文需要用户在微信内打开后复制粘贴，"
+            + "请优先请用户粘贴正文，不要凭标题猜测内容。）";
+
+    /**
+     * Public-account article links are hosted on {@code mp.weixin.qq.com}.
+     * Compared to a generic URL host check, this is intentionally narrow —
+     * other Tencent properties (e.g. video.qq.com) don't share the same
+     * "title-only, body needs paste" property and shouldn't get the hint.
+     */
+    static boolean isPublicAccountArticle(String url) {
+        if (url == null) return false;
+        String lower = url.toLowerCase();
+        return lower.contains("://mp.weixin.qq.com/")
+                || lower.startsWith("mp.weixin.qq.com/");
     }
 
     /**
