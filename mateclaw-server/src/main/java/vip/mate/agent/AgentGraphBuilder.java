@@ -131,6 +131,7 @@ public class AgentGraphBuilder {
     private final vip.mate.llm.failover.ProviderHealthTracker providerHealthTracker;
     private final vip.mate.llm.chatmodel.ProviderChatModelFactory chatModelFactory;
     private final vip.mate.llm.failover.AvailableProviderPool providerPool;
+    private final vip.mate.tool.document.GeneratedFileCache generatedFileCache;
     /** PR-0b: DashScope-specific construction lives here now; we only call into it for the search-on log. */
     private final vip.mate.agent.chatmodel.AgentDashScopeChatModelBuilder dashScopeBuilder;
     private final vip.mate.llm.routing.MultimodalRouter multimodalRouter;
@@ -565,7 +566,7 @@ public class AgentGraphBuilder {
             ObservationNode observationNode = new ObservationNode(observationProcessor, streamTracker);
             SummarizingNode summarizingNode = new SummarizingNode(chatModel, streamingHelper, streamTracker);
             LimitExceededNode limitExceededNode = new LimitExceededNode(chatModel, observationProcessor, streamingHelper, i18nService);
-            FinalAnswerNode finalAnswerNode = new FinalAnswerNode();
+            FinalAnswerNode finalAnswerNode = new FinalAnswerNode(generatedFileCache);
 
             KeyStrategyFactory keyStrategyFactory = KeyStrategy.builder()
                     // 输入字段

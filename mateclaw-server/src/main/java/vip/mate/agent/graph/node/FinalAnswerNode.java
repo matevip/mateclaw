@@ -8,6 +8,7 @@ import vip.mate.agent.graph.state.DirectToolOutput;
 import vip.mate.agent.graph.state.FinishReason;
 import vip.mate.agent.graph.state.MateClawStateAccessor;
 import vip.mate.agent.graph.state.SourceEvidenceLedger;
+import vip.mate.tool.document.GeneratedFileCache;
 
 import java.util.List;
 import java.util.Map;
@@ -30,6 +31,22 @@ import java.util.Map;
 @Slf4j
 public class FinalAnswerNode implements NodeAction {
 
+    /**
+     * Cache used to vet {@code /api/v1/files/generated/{id}} URLs the LLM
+     * may have written into the final answer. {@code null} disables the
+     * guard (legacy callers, narrow unit tests that don't exercise file
+     * outputs).
+     */
+    private final GeneratedFileCache generatedFileCache;
+
+    public FinalAnswerNode() {
+        this(null);
+    }
+
+    public FinalAnswerNode(GeneratedFileCache generatedFileCache) {
+        this.generatedFileCache = generatedFileCache;
+    }
+
     @Override
     public Map<String, Object> apply(OverAllState state) throws Exception {
         MateClawStateAccessor accessor = new MateClawStateAccessor(state);
@@ -47,7 +64,7 @@ public class FinalAnswerNode implements NodeAction {
         if (accessor.returnDirectTriggered()) {
             List<DirectToolOutput> outputs = accessor.directToolOutputs();
             if (!outputs.isEmpty()) {
-                String assembled = assembleDirectAnswer(outputs);
+                String assembled = scrubFakeUrls(assembleDirectAnswer(outputs));
                 String currentThinking = accessor.currentThinking();
                 String existingThinking = accessor.finalThinking();
                 String preservedThinking = !currentThinking.isEmpty() ? currentThinking : existingThinking;
@@ -70,7 +87,7 @@ public class FinalAnswerNode implements NodeAction {
 
         // 审批等待路径：Graph 因 AWAITING_APPROVAL 终止，保留已流式推送的内容用于持久化
         if (accessor.awaitingApproval()) {
-            String preservedContent = accessor.streamedContent();
+            String preservedContent = scrubFakeUrls(accessor.streamedContent());
             String preservedThinking = !accessor.streamedThinking().isEmpty()
                     ? accessor.streamedThinking() : accessor.currentThinking();
             log.info("[FinalAnswerNode] AWAITING_APPROVAL — preserving streamed content " +
@@ -139,6 +156,12 @@ public class FinalAnswerNode implements NodeAction {
             }
         }
 
+        // Scrub hallucinated `/api/v1/files/generated/{id}` URLs whose ids
+        // were never inserted into the cache. Done before evidence
+        // validation so the validator sees the user-visible warning rather
+        // than treating the fake link as a "reference".
+        finalAnswer = scrubFakeUrls(finalAnswer);
+
         SourceEvidenceLedger.Validation validation = accessor.sourceEvidenceLedger().validateAnswer(finalAnswer);
         if (finishReason == FinishReason.NORMAL && !validation.valid()) {
             finishReason = FinishReason.EVIDENCE_INSUFFICIENT;
@@ -194,6 +217,16 @@ public class FinalAnswerNode implements NodeAction {
             sb.append(out.fullResult());
         }
         return sb.toString();
+    }
+
+    /**
+     * Replace fake {@code /api/v1/files/generated/{id}} URLs (cache-miss)
+     * with a user-visible warning. No-op when no cache is wired (legacy
+     * tests) or when the answer is empty.
+     */
+    private String scrubFakeUrls(String text) {
+        if (generatedFileCache == null || text == null || text.isEmpty()) return text;
+        return generatedFileCache.scrubMissingReferences(text);
     }
 
     private FinishReason parseFinishReason(String reason) {
