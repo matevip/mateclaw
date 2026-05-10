@@ -60,14 +60,16 @@ public class DashScopeVideoProvider implements VideoGenerationProvider {
     private static final String DEFAULT_T2V_MODEL = "wan2.5-t2v-turbo";
     private static final String DEFAULT_I2V_MODEL = "wan2.5-i2v-turbo";
 
-    private enum BodyShape {
+    /** Package-private so per-routing tests can switch on it without reflection. */
+    enum BodyShape {
         /** input.img_url + parameters.size("1280*720") + parameters.duration. */
         LEGACY,
         /** input.media[].first_frame + parameters.resolution + parameters.ratio + parameters.duration. */
         UNIFIED
     }
 
-    private record ModelSpec(
+    /** Package-private for unit tests; the MODELS map is the routing source of truth. */
+    record ModelSpec(
             String id,
             String endpoint,
             BodyShape bodyShape,
@@ -213,7 +215,8 @@ public class DashScopeVideoProvider implements VideoGenerationProvider {
 
     // ==================== spec resolution ====================
 
-    private ModelSpec resolveSpec(VideoGenerationRequest request) {
+    /** Package-private for direct unit tests — submit() goes over HTTP and is not a unit-test surface. */
+    ModelSpec resolveSpec(VideoGenerationRequest request) {
         String requested = request.getModel();
         if (requested != null && !requested.isBlank() && MODELS.containsKey(requested)) {
             return MODELS.get(requested);
@@ -226,7 +229,8 @@ public class DashScopeVideoProvider implements VideoGenerationProvider {
 
     // ==================== body building ====================
 
-    private ObjectNode buildRequestBody(VideoGenerationRequest request, ModelSpec spec) {
+    /** Package-private for unit tests; verify the JSON shape per body family without HTTP. */
+    ObjectNode buildRequestBody(VideoGenerationRequest request, ModelSpec spec) {
         return switch (spec.bodyShape()) {
             case LEGACY -> buildLegacyBody(request, spec);
             case UNIFIED -> buildUnifiedBody(request, spec);

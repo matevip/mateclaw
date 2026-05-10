@@ -4,6 +4,8 @@ export default {
   },
   common: {
     save: 'Save',
+    saving: 'Saving...',
+    saved: 'Saved',
     cancel: 'Cancel',
     reset: 'Reset',
     edit: 'Edit',
@@ -22,6 +24,8 @@ export default {
     close: 'Close',
     add: 'Add',
     search: 'Search',
+    noResults: 'No matches',
+    noOptions: 'No options',
     clear: 'Clear',
     expandSidebar: 'Expand sidebar',
     collapseSidebar: 'Collapse sidebar',
@@ -148,6 +152,23 @@ export default {
     copy: 'Copy',
     copied: 'Copied',
     regenerate: 'Regenerate',
+    replyModel: 'Reply model: {model}',
+    routing: {
+      kind: {
+        image: 'image',
+        video: 'video',
+        media: 'media',
+      },
+      tooltip: 'This turn was answered by {primary}; image attachments were captioned via {sidecar} ({sidecarProvider}) before reaching the primary model.',
+      hint: {
+        willRoute: 'Detected {kind} attachment. The current model "{primary}" does not support {kind} input — it will be captioned by "{sidecar}" first (sidecar mode, primary chat unchanged).',
+        notConfigured: 'Detected {kind} attachment. The current model does not support {kind} input and no sidecar model has been configured.',
+        videoReserved: 'Detected video attachment. Video sidecar is reserved (pre-configured "{sidecar}") but not yet wired in this version. Switch to a video-capable primary model instead.',
+        action: {
+          gotoSettings: 'Configure',
+        },
+      },
+    },
     ttsPlay: 'Read Aloud',
     ttsStop: 'Stop Reading',
     conversations: 'Conversations',
@@ -180,6 +201,49 @@ export default {
     // RFC-074 PR-2: empty-state inside the model dropdown
     noProvidersConfigured: 'No models available yet',
     goConfigure: 'Configure',
+    // Issue #81: liveness-aware popup state machine.
+    prompt: {
+      noActive: {
+        title: 'Pick a model first',
+        desc: 'No active model. Choose one in Model Management before chatting.',
+      },
+      unconfigured: {
+        title: '{name} is not fully configured',
+        desc: 'Missing: {fields}. {hint}',
+      },
+      removed: {
+        title: '{name} is unavailable',
+        descFallback: 'The last probe failed — check whether the service is running.',
+      },
+      cooldown: {
+        title: '{name} is temporarily unavailable',
+        desc: 'Auto-retrying in about {seconds}s.',
+      },
+      unprobed: {
+        title: 'Checking model availability',
+        desc: 'Hold on or refresh to retry.',
+      },
+      noModels: {
+        title: '{name} has no usable models',
+        desc: 'Discover models or add one manually.',
+      },
+    },
+    promptAction: {
+      fillBaseUrl: 'Fill Base URL',
+      fillApiKey: 'Fill API Key',
+      fillRequiredFields: 'Complete required fields',
+      startOAuth: 'Sign in',
+      testConnection: 'Test connection',
+      pullModel: 'Discover models',
+      waitCooldown: 'Retry now',
+      reprobe: 'Re-probe',
+      switchToModel: 'Switch to {name}',
+      fixThis: 'Fix',
+    },
+    recoverableBanner: {
+      message: '{name} is unavailable; sends will fall back to {fallback} automatically',
+      switched: 'Primary model unavailable; switched to {fallback}',
+    },
     uploadFailed: 'File upload failed',
     dropToUpload: 'Drop files or folders here',
     copyFailed: 'Copy failed',
@@ -429,6 +493,22 @@ export default {
     lastChecked: 'Checked {time} ago',
     diagnose: 'Diagnose',
   },
+  // Issue #81: provider-level hint / status text shared across chat popup and ModelSelector.
+  provider: {
+    hint: {
+      ollamaBaseUrlExample: 'Example: {example}',
+      lmstudioBaseUrlExample: 'Example: {example} (LM Studio default port)',
+      llamacppBaseUrlExample: 'Example: {example} (llama-server default port)',
+      vllmBaseUrlExample: 'Example: {example}',
+      openaiCompatBaseUrlExample: 'Example: OpenAI-compatible endpoint, e.g. {example}',
+    },
+    status: {
+      unconfigured: 'Not configured',
+      removed: 'Unavailable',
+      cooldown: 'Retry in {s}s',
+      unprobed: 'Probing',
+    },
+  },
   settings: {
     title: 'Settings',
     kicker: 'Configuration',
@@ -445,6 +525,25 @@ export default {
       featureFlags: 'Feature Flags',
       about: 'About',
       advanced: 'Advanced',
+    },
+    models: {
+      sidecar: {
+        title: 'Multimodal sidecar',
+        hint: "When the primary model can't handle images or video, the sidecar model captions the attachment to text first.",
+        notConfigured: 'Not configured (skip attachment)',
+        idle: 'Off',
+        reserved: 'Reserved',
+        vision: {
+          label: 'Vision sidecar model',
+          desc: 'Invoked once per uploaded image to produce a structured description. The primary chat model is unchanged.',
+          empty: 'No vision-capable model is enabled yet. Add one under "Cloud Models" above.',
+        },
+        video: {
+          label: 'Video sidecar model (reserved)',
+          desc: 'Reserved for a future iteration: when the user uploads a video, this model will sample frames and describe them. Not yet wired in v1.',
+          empty: 'No video-capable model is enabled yet.',
+        },
+      },
     },
     featureFlags: {
       title: 'Feature Flags',
@@ -549,6 +648,7 @@ export default {
       protocolGemini: 'Gemini Native',
       protocolDashScope: 'DashScope Native',
       advancedHint: 'Use this for generation options such as temperature, max_tokens, and top_p.',
+      requireApiKeyHint: 'Turn this off for internal or local OpenAI-compatible services that do not require auth. Connection tests will omit the Authorization header.',
       fallbackPriorityHint: 'Pool try-order (lower wins): 0 = excluded, 1 = first in line, 2 = second, and so on. Providers sharing the same value are tried in alphabetical order of their ID.',
       fallbackBadge: 'Preferred #{priority}',
       fallbackBadgeTitle: 'Position in the available pool — lower numbers are tried first',
@@ -624,6 +724,7 @@ export default {
         providerName: 'Provider Name',
         defaultBaseUrl: 'Default Base URL',
         apiKeyPrefix: 'API Key Prefix',
+        requireApiKey: 'Requires API Key',
         protocol: 'Protocol',
         generateKwargs: 'Generate Kwargs (JSON)',
         fallbackPriority: 'Pool Try-Order',
@@ -698,6 +799,9 @@ export default {
       sttEnabled: 'Enable Speech Recognition',
       sttProvider: 'Preferred STT Provider',
       sttFallbackEnabled: 'Provider Fallback',
+      // Issue #76: route the OpenAI-compat STT endpoint
+      sttOpenAiCompatProviderId: 'OpenAI-compatible Credential',
+      sttOpenAiCompatModel: 'OpenAI-compatible Model',
       musicEnabled: 'Enable Music Generation',
       musicProvider: 'Preferred Music Provider',
       musicFallbackEnabled: 'Provider Fallback',
@@ -745,6 +849,10 @@ export default {
       sttFallbackEnabled: 'Automatically try other configured providers if the preferred one fails.',
       openaiSttInfo: 'Reuses OpenAI API Key from Model Management. Whisper model, supports multilingual auto-detection.',
       dashscopeSttInfo: 'Reuses DashScope API Key from Model Management. Paraformer Realtime over WebSocket — strong Chinese recognition, sub-second latency.',
+      // Issue #76
+      sttOpenAiCompatProviderId: 'Pick any OpenAI-compatible provider from Model Management as the credential source (baseUrl + API key). Beyond OpenAI itself this covers self-hosted FunASR, SiliconFlow, Groq, Together, Volcano, Qiniu, and any custom provider you add with the OpenAI-compatible protocol.',
+      sttOpenAiCompatModel: 'Model id sent in the multipart "model" field. Defaults to whisper-1; use paraformer-large for FunASR, or whatever id your vendor documents.',
+      sttOpenAiCompatNote: 'Tip: to plug in a private ASR service, head to Model Management → Add Custom Provider → pick the "OpenAI Compatible" protocol → fill in Base URL (and an optional API key), then come back and select it here.',
       musicEnabled: 'Enable to let Agent use the music generation tool. Google Lyria reuses Google Key.',
       musicProvider: 'Select preferred music provider. Auto mode prioritizes Google Lyria.',
       musicFallbackEnabled: 'Automatically try other configured providers if the preferred one fails.',
@@ -1231,6 +1339,10 @@ export default {
         decision: 'Decision',
         remediation: 'Remediation',
         priority: 'Priority',
+      },
+      messages: {
+        ruleIdRequired: 'Rule ID is required',
+        saveFailed: 'Failed to save rule',
       },
     },
     fileGuard: {
@@ -2597,6 +2709,8 @@ export default {
     empty: 'No skills found',
     emptyDesc: 'Add skills to enhance your agents\' capabilities',
     noDescription: 'No description',
+    // Issue #83: shown on the padlock that replaces the toggle for MCP/ACP virtual skills.
+    virtualReadonlyHint: 'MCP/ACP-derived skills can\'t be toggled here — manage the underlying service in Settings ▸ Connections.',
     modal: {
       configureTitle: 'Configure Skill',
       newTitle: 'New Skill',

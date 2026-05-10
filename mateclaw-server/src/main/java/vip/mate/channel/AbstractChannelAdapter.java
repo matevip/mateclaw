@@ -319,6 +319,27 @@ public abstract class AbstractChannelAdapter implements ChannelAdapter {
         }
     }
 
+    /**
+     * Approval notice rendering — primary implementation position.
+     *
+     * <p>Subclasses that support a native card surface (WeCom
+     * {@code button_interaction}, DingTalk {@code ActionCard}, etc.)
+     * override this method and may call
+     * {@code super.sendApprovalNotice(...)} to fall back to the text
+     * path on render failure / payload-too-large / etc.
+     *
+     * <p>Lives on the abstract class rather than as an interface
+     * default method so the {@code super.x(...)} call from subclasses
+     * resolves cleanly via Java's normal class inheritance — see
+     * RFC-32 §2.0.4 (C-4 fix).
+     */
+    @Override
+    public void sendApprovalNotice(String targetId,
+            vip.mate.channel.notification.ApprovalNotice notice) {
+        sendMessage(targetId,
+                vip.mate.channel.notification.ApprovalNotificationService.staticBuildText(notice));
+    }
+
     // ==================== 模板方法（子类实现） ====================
 
     /**

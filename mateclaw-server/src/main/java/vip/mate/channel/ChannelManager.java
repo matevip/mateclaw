@@ -46,6 +46,31 @@ public class ChannelManager {
     private final ObjectMapper objectMapper;
     private final vip.mate.tool.document.GeneratedFileCache generatedFileCache;
 
+    /**
+     * Approval notification renderer — used by WeCom adapter (PR-0
+     * threading; PR-1 wired the WeCom override to render a
+     * {@code button_interaction} card via this service's card builder).
+     * Other adapters keep using the text path on
+     * {@link AbstractChannelAdapter}, which calls
+     * {@code ApprovalNotificationService.staticBuildText} so this
+     * field is currently consumed only by WeCom.
+     */
+    private final vip.mate.channel.notification.ApprovalNotificationService approvalNotificationService;
+
+    /**
+     * WeCom interactive card dispatcher (PR-1). Drives the
+     * {@code button_interaction} approval card render + the inbound
+     * {@code template_card_event} routing.
+     */
+    private final vip.mate.channel.wecom.cards.WeComCardDispatcher weComCardDispatcher;
+
+    /**
+     * WeCom keepalive scheduler (PR-1). Refreshes the "🤔 思考中..."
+     * placeholder every 20s and force-finishes after 180s so long-
+     * running agent tasks don't lose their stream slot.
+     */
+    private final vip.mate.channel.wecom.WeComKeepaliveScheduler weComKeepaliveScheduler;
+
     /** 运行中的渠道适配器：channelId -> adapter */
     private final Map<Long, ChannelAdapter> activeAdapters = new HashMap<>();
 
@@ -455,7 +480,9 @@ public class ChannelManager {
             case "feishu" -> new FeishuChannelAdapter(channel, messageRouter, objectMapper);
             case "telegram" -> new TelegramChannelAdapter(channel, messageRouter, objectMapper);
             case "discord" -> new DiscordChannelAdapter(channel, messageRouter, objectMapper);
-            case "wecom" -> new WeComChannelAdapter(channel, messageRouter, objectMapper);
+            case "wecom" -> new WeComChannelAdapter(channel, messageRouter, objectMapper,
+                    approvalNotificationService, weComCardDispatcher, weComKeepaliveScheduler,
+                    generatedFileCache);
             case "qq" -> new QQChannelAdapter(channel, messageRouter, objectMapper);
             case "weixin" -> new WeixinChannelAdapter(channel, messageRouter, objectMapper);
             case "slack" -> new vip.mate.channel.slack.SlackChannelAdapter(channel, messageRouter, objectMapper);

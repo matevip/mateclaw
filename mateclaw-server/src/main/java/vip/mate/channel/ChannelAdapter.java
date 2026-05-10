@@ -95,6 +95,53 @@ public interface ChannelAdapter {
         sendMessage(targetId, content);
     }
 
+    /**
+     * Extended render-and-send overload that carries an optional
+     * {@link SendContext} side-channel (e.g. WeCom AI Bot
+     * {@code feedback.id} for like/dislike collection).
+     *
+     * <p>Default implementation ignores {@code ctx} and falls back to
+     * {@link #renderAndSend(String, String)}, so existing channel
+     * adapters and callers see no behavior change. Channels that want
+     * to consume {@code SendContext} fields override this overload.
+     *
+     * <p>This was introduced as part of PR-0 (RFC-32 §2.0.3) to give
+     * {@code ChannelMessageRouter} a way to thread the pre-allocated
+     * feedback id (registered against the persisted
+     * {@code mate_message.id}) down to the WeCom adapter without
+     * widening the legacy two-arg signature.
+     */
+    default void renderAndSend(String targetId, String content, SendContext ctx) {
+        renderAndSend(targetId, content);
+    }
+
+    /**
+     * Render and deliver an approval notice. Channels that support a
+     * native interactive surface (WeCom {@code button_interaction},
+     * DingTalk {@code ActionCard}, etc.) override this to skip the
+     * text path entirely.
+     *
+     * <p><b>Primary implementation lives on
+     * {@link AbstractChannelAdapter}</b>, which keeps the bytewise
+     * fallback (markdown text → {@link #sendMessage}). Adapters that
+     * inherit from {@code AbstractChannelAdapter} can call
+     * {@code super.sendApprovalNotice(...)} to fall back; the default
+     * here is just a safety net for adapters that, for some reason,
+     * implement {@link ChannelAdapter} directly.
+     *
+     * <p>Introduced in PR-0 (RFC-32 §2.0.3) so the router does not
+     * need to know which channel renders cards vs text:
+     * <pre>
+     *     ApprovalNotice notice = approvalNotificationService.buildNotice(pending);
+     *     adapter.sendApprovalNotice(replyTarget, notice);
+     * </pre>
+     */
+    default void sendApprovalNotice(String targetId,
+            vip.mate.channel.notification.ApprovalNotice notice) {
+        sendMessage(targetId,
+                vip.mate.channel.notification.ApprovalNotificationService.staticBuildText(notice));
+    }
+
     // ==================== 主动推送 ====================
 
     /**

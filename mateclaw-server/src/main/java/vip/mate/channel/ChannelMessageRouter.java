@@ -96,8 +96,47 @@ public class ChannelMessageRouter {
     /** 每个渠道的队列容量 */
     private static final int QUEUE_CAPACITY = 1000;
 
-    /** 防抖等待时间（毫秒） */
-    private static final long DEBOUNCE_MS = 500;
+    /** 防抖等待时间（毫秒）。Package-private for unit-test access. */
+    static final long DEBOUNCE_MS = 500;
+
+    /**
+     * Extended debounce window for suspected paste-split scenarios. WeCom
+     * (and other IM clients) silently split a single pasted long prompt
+     * into 2-4 separate messages when it exceeds the per-frame limit
+     * (~2000 chars). The fragments arrive 0.5-2s apart, which means the
+     * default {@link #DEBOUNCE_MS} flushes the first fragment before the
+     * second one arrives — the agent then sees a torn context, calls the
+     * LLM on a partial prompt, and gets re-triggered when the next
+     * fragment lands. When merged content exceeds
+     * {@link #LONG_TEXT_THRESHOLD} we extend the window so the merger has
+     * time to absorb the rest.
+     * <p>
+     * Package-private for unit-test access.
+     */
+    static final long LONG_DEBOUNCE_MS = 2500;
+
+    /**
+     * Content length (chars) above which we treat the message as a likely
+     * paste-split fragment. 1500 sits below the typical ~2000-char IM
+     * client split point while staying well above any normally-typed
+     * message, so the long-debounce path doesn't penalize ordinary
+     * chatting. A short typed "hello" still flushes in 500ms.
+     * <p>
+     * Package-private for unit-test access.
+     */
+    static final int LONG_TEXT_THRESHOLD = 1500;
+
+    /**
+     * Pick the debounce window: extend to {@link #LONG_DEBOUNCE_MS} when
+     * either the new arrival or the accumulated merged buffer looks like
+     * a paste-split fragment, otherwise stay at {@link #DEBOUNCE_MS}.
+     * <p>
+     * Package-private + static so tests can pin the threshold without
+     * spinning up the whole router (which has 12+ injected dependencies).
+     */
+    static long pickDebounceMs(int currentMergedLength) {
+        return currentMergedLength > LONG_TEXT_THRESHOLD ? LONG_DEBOUNCE_MS : DEBOUNCE_MS;
+    }
 
     /**
      * Plan-Execute SSE events that the Web Console mirror needs to see when
@@ -223,7 +262,11 @@ public class ChannelMessageRouter {
         log.info("[{}] Enqueuing message: sender={}, conversationId={}, agentId={}",
                 channelType, message.getSenderId(), conversationId, agentId);
 
-        // 防抖：同一会话 500ms 内的连续消息合并
+        // Debounce + adaptive merge: same conversation messages within the
+        // (500ms / 2.5s) window get concatenated into one. Adaptive: when
+        // the merged buffer crosses the LONG_TEXT_THRESHOLD we extend to
+        // LONG_DEBOUNCE_MS so paste-split fragments arrive together
+        // instead of triggering one agent call per piece.
         synchronized (pendingMessages) {
             PendingMessage existing = pendingMessages.get(conversationId);
             if (existing != null) {
@@ -232,18 +275,31 @@ public class ChannelMessageRouter {
                     existing.timer.cancel(false);
                 }
                 existing.appendContent(message.getContent());
+                int mergedLen = existing.getMergedContent().length();
+                long debounceMs = pickDebounceMs(mergedLen);
                 existing.timer = debounceScheduler.schedule(
-                        () -> flushPending(conversationId), DEBOUNCE_MS, TimeUnit.MILLISECONDS);
-                log.debug("[{}] Message merged with pending (debounce): conversationId={}",
-                        channelType, conversationId);
+                        () -> flushPending(conversationId), debounceMs, TimeUnit.MILLISECONDS);
+                if (debounceMs > DEBOUNCE_MS) {
+                    log.info("[{}] Long-text merger active: conversationId={}, mergedLen={}, debounce={}ms (paste-split suspected)",
+                            channelType, conversationId, mergedLen, debounceMs);
+                } else {
+                    log.debug("[{}] Message merged with pending (debounce {}ms): conversationId={}",
+                            channelType, debounceMs, conversationId);
+                }
                 return;
             }
 
             // 首条消息，创建 PendingMessage 并设定防抖定时器
             PendingMessage pending = new PendingMessage(message, adapter, channelEntity);
             pendingMessages.put(conversationId, pending);
+            int firstLen = message.getContent() != null ? message.getContent().length() : 0;
+            long debounceMs = pickDebounceMs(firstLen);
             pending.timer = debounceScheduler.schedule(
-                    () -> flushPending(conversationId), DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+                    () -> flushPending(conversationId), debounceMs, TimeUnit.MILLISECONDS);
+            if (debounceMs > DEBOUNCE_MS) {
+                log.info("[{}] Long-text merger armed on first message: conversationId={}, len={}, debounce={}ms",
+                        channelType, conversationId, firstLen, debounceMs);
+            }
         }
     }
 
@@ -469,7 +525,10 @@ public class ChannelMessageRouter {
                     ResolveOutcome denyOutcome = approvalService.resolve(
                             pending.getPendingId(), message.getSenderId(), "denied");
                     conversationService.removeApprovalPlaceholders(conversationId);
-                    adapter.sendMessage(replyTarget, "⛔ 已拒绝执行工具: " + pending.getToolName());
+                    String denyHint = "⛔ 已拒绝执行工具: " + pending.getToolName();
+                    persistAndBroadcastApprovalHint(conversationId, denyHint,
+                            "denied", pending.getPendingId(), pending.getToolName());
+                    adapter.sendMessage(replyTarget, denyHint);
                     log.info("[{}] Approval DENIED via IM command: pendingId={}, tool={}, msgRewritten={}",
                             adapter.getChannelType(), pending.getPendingId(), pending.getToolName(),
                             denyOutcome.messagesRewritten());
@@ -479,7 +538,10 @@ public class ChannelMessageRouter {
                     // Non-approval message while a pending exists → treat as implicit deny.
                     approvalService.resolve(pending.getPendingId(), message.getSenderId(), "denied");
                     conversationService.removeApprovalPlaceholders(conversationId);
-                    adapter.sendMessage(replyTarget, "⛔ 审批已取消。将继续处理您的新消息。");
+                    String cancelHint = "⛔ 审批已取消。将继续处理您的新消息。";
+                    persistAndBroadcastApprovalHint(conversationId, cancelHint,
+                            "cancelled", pending.getPendingId(), pending.getToolName());
+                    adapter.sendMessage(replyTarget, cancelHint);
                     log.info("[{}] Approval auto-cancelled (non-approval message): pendingId={}",
                             adapter.getChannelType(), pending.getPendingId());
                     // Fall through to process the new message normally.
@@ -564,9 +626,13 @@ public class ChannelMessageRouter {
                     // 检查 chat 过程中是否产生了审批 pending
                     PendingApproval newPending = approvalService.findPendingByConversation(conversationId);
                     if (newPending != null) {
-                        // 有审批需求：不保存 LLM 的审批占位回复到 DB，直接从 pending 元数据构建通知
-                        String approvalNotice = buildApprovalNotice(newPending);
-                        adapter.renderAndSend(replyTarget, approvalNotice);
+                        // Channel-specific approval rendering: WeCom overrides
+                        // sendApprovalNotice to post a button_interaction card;
+                        // every other adapter falls back to the markdown-text path
+                        // on AbstractChannelAdapter (preserves PR-0 behavior for
+                        // non-WeCom channels).
+                        var notice = approvalNotificationService.buildNotice(newPending);
+                        adapter.sendApprovalNotice(replyTarget, notice);
                         log.info("[{}] Approval triggered during chat, sent notice (NOT saved to DB): tool={}",
                                 adapter.getChannelType(), newPending.getToolName());
                     } else {
@@ -694,7 +760,11 @@ public class ChannelMessageRouter {
             PendingApproval newPending = approvalService.findPendingByConversation(conversationId);
             if (newPending != null) {
                 String replyTarget = resolveReplyTarget(message);
-                streamingAdapter.sendMessage(replyTarget, buildApprovalNotice(newPending));
+                // Same polymorphic dispatch as the non-streaming path — WeCom
+                // renders a card, others render text. See the buildNotice +
+                // sendApprovalNotice pair at the non-streaming call site above.
+                var notice = approvalNotificationService.buildNotice(newPending);
+                streamingAdapter.sendApprovalNotice(replyTarget, notice);
                 log.info("[{}] Approval triggered during streaming (NOT saved to DB): tool={}",
                         channelType, newPending.getToolName());
             } else if (finalContent != null && !finalContent.isBlank()) {
@@ -755,8 +825,14 @@ public class ChannelMessageRouter {
         String replyTarget = resolveReplyTarget(triggerMessage);
         Long agentId = channelEntity.getAgentId();
 
-        // 通知用户审批已通过
-        adapter.sendMessage(replyTarget, "✅ 已批准执行工具: " + consumed.getToolName());
+        // Notify the user that the approval went through. Persist + broadcast so a
+        // Web mirror of the same conversationId sees the resolution; otherwise this
+        // hint would only land in the IM channel and the Web admin console would
+        // show the replay reply with no preceding "approved" marker.
+        String approveHint = "✅ 已批准执行工具: " + consumed.getToolName();
+        persistAndBroadcastApprovalHint(conversationId, approveHint,
+                "approved", consumed.getPendingId(), consumed.getToolName());
+        adapter.sendMessage(replyTarget, approveHint);
 
         // 清理 DB 中残留的审批占位消息
         conversationService.removeApprovalPlaceholders(conversationId);
@@ -792,7 +868,62 @@ public class ChannelMessageRouter {
                     adapter.getChannelType(), consumed.getToolName(), reply.length());
         } catch (Exception e) {
             log.error("[approval-replay] Replay failed: {}", e.getMessage(), e);
-            adapter.sendMessage(replyTarget, "❌ 工具执行失败: " + e.getMessage());
+            String errHint = "❌ 工具执行失败: " + e.getMessage();
+            persistAndBroadcastApprovalHint(conversationId, errHint, null, null, null);
+            adapter.sendMessage(replyTarget, errHint);
+        }
+    }
+
+    /**
+     * Persist an approval-related hint as an assistant message and best-effort
+     * broadcast it to any live SSE viewer of the conversation.
+     * <p>
+     * Without this, IM-driven approve/deny only reaches the originating IM
+     * channel via {@code adapter.sendMessage(...)} — a Web mirror of the same
+     * conversationId has no record of the resolution because nothing lands in
+     * {@code mate_message} and no SSE event is emitted. The hint then "vanishes"
+     * from the Web admin console even though it shows up on the user's phone.
+     * <p>
+     * Persistence is the load-bearing fix (Web reload picks it up). Broadcast
+     * is best-effort: if no SSE stream is currently registered for the
+     * conversation, the broadcast no-ops silently — that's the common case
+     * since IM-driven clicks rarely race with an active web subscriber.
+     *
+     * @param conversationId conversation owning the hint
+     * @param hint           text to render as an assistant bubble
+     * @param decision       "approved" / "denied" / "cancelled" / null (skips the
+     *                       structured resolved event when null, e.g. on replay error)
+     * @param pendingId      pending approval id; null when not applicable
+     * @param toolName       tool name for the structured event; null when not applicable
+     */
+    private void persistAndBroadcastApprovalHint(String conversationId, String hint,
+                                                  String decision, String pendingId,
+                                                  String toolName) {
+        try {
+            conversationService.saveMessage(conversationId, "assistant", hint, null, "completed");
+        } catch (Exception e) {
+            log.warn("[approval-hint] saveMessage failed for conv={}: {}",
+                    conversationId, e.getMessage());
+        }
+        try {
+            if (decision != null) {
+                streamTracker.broadcastObject(conversationId, "tool_approval_resolved", Map.of(
+                        "pendingId", pendingId == null ? "" : pendingId,
+                        "decision", decision,
+                        "toolName", toolName == null ? "" : toolName,
+                        "timestamp", System.currentTimeMillis()
+                ));
+            }
+            streamTracker.broadcastObject(conversationId, "message_start",
+                    Map.of("role", "assistant"));
+            streamTracker.broadcastObject(conversationId, "content_delta",
+                    Map.of("delta", hint));
+            streamTracker.broadcastObject(conversationId, "message_complete",
+                    Map.of("status", "completed"));
+        } catch (Exception e) {
+            // Broadcast is best-effort; a missing run state is the common case.
+            log.debug("[approval-hint] broadcast skipped/failed for conv={}: {}",
+                    conversationId, e.getMessage());
         }
     }
 

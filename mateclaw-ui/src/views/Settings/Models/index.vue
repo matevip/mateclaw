@@ -116,6 +116,10 @@
     <!-- Embedding 模型（RFC Embedding UI） -->
     <EmbeddingModelsSection />
 
+    <!-- Multimodal sidecar routing: text-only primary models can delegate
+         image/video understanding to a vision/video model configured here. -->
+    <MultimodalSidecarSection />
+
     <div v-if="savedTip" class="save-tip">{{ savedTip }}</div>
 
     <!-- Provider Config Modal -->
@@ -194,6 +198,7 @@ import type { ProviderInfo, ProviderModelInfo } from '@/types'
 import { useProviders } from './useProviders'
 import ProviderCard from './ProviderCard.vue'
 import EmbeddingModelsSection from './EmbeddingModelsSection.vue'
+import MultimodalSidecarSection from './MultimodalSidecarSection.vue'
 // RFC-074 PR-1: defer modal JS until the user actually opens one — same
 // pattern as ChannelEditModal in commit 9300559b. Drops ~30KB from the
 // initial Settings/Models route chunk.

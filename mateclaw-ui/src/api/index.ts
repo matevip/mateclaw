@@ -101,6 +101,8 @@ export const agentApi = {
   chat: (id: string | number, data: any) => http.post(`/agents/${id}/chat`, data),
   execute: (id: string | number, data: any) => http.post(`/agents/${id}/execute`, data),
   getState: (id: string | number) => http.get(`/agents/${id}/state`),
+  /** Lightweight capability snapshot used by the chat console attachment hint. */
+  getCapabilities: (id: string | number) => http.get(`/agents/${id}/capabilities`),
 }
 
 // ==================== Templates ====================
@@ -444,8 +446,8 @@ export const modelApi = {
   disableProvider: (providerId: string) => http.post(`/models/${providerId}/disable`),
 
   // ==================== Embedding Model (RFC Embedding UI) ====================
-  listByType: (modelType: 'chat' | 'embedding') =>
-    http.get('/models/by-type', { params: { modelType } }),
+  listByType: (modelType: 'chat' | 'embedding', modality?: 'vision' | 'video' | 'audio') =>
+    http.get('/models/by-type', { params: { modelType, modality } }),
   testEmbedding: (modelId: string | number) =>
     http.post(`/models/embedding/${modelId}/test`),
   getDefaultEmbedding: () => http.get('/models/embedding/default'),
@@ -516,6 +518,13 @@ export const settingsApi = {
   update: (data: any) => http.put('/settings', data),
   getLanguage: () => http.get('/settings/language'),
   updateLanguage: (language: string) => http.put('/settings/language', { language }),
+  // Dedicated endpoint for the multimodal sidecar configuration. The bulk
+  // /settings PUT now guards vision/video model ids with non-null checks so
+  // unrelated settings pages can't clobber them via partial payloads. This
+  // endpoint is the only path that writes those fields unconditionally —
+  // pass {defaultVisionModelId: null} here to explicitly clear a sidecar.
+  updateSidecar: (data: { defaultVisionModelId: number | null; defaultVideoModelId: number | null }) =>
+    http.put('/settings/sidecar', data),
 }
 
 // ==================== Workspace ====================

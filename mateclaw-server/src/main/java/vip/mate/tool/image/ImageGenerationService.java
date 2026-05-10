@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import vip.mate.channel.AsyncTaskMediaDispatcher;
 import vip.mate.channel.web.ChatStreamTracker;
 import vip.mate.system.model.SystemSettingsDTO;
 import vip.mate.system.service.SystemSettingService;
@@ -39,6 +40,14 @@ public class ImageGenerationService {
     private final ImageFileDownloader fileDownloader;
     private final ObjectMapper objectMapper;
     private final ChatStreamTracker streamTracker;
+    /**
+     * Forward completion to the conversation's bound IM channel adapter so
+     * WeCom / DingTalk / Feishu / etc. users actually receive the generated
+     * image as a native attachment. Web SSE handling continues unchanged
+     * via {@link ChatStreamTracker} — the dispatcher is additive and skips
+     * Web channels to avoid double-rendering.
+     */
+    private final AsyncTaskMediaDispatcher asyncTaskMediaDispatcher;
 
     private static final String TASK_TYPE = "image_generation";
 
@@ -180,7 +189,15 @@ public class ImageGenerationService {
 
                 MessageContentPart imagePart = MessageContentPart.image(null, servingUrl);
                 imagePart.setFileName(localPath.getFileName().toString());
+                imagePart.setStoredName(localPath.getFileName().toString());
                 imagePart.setContentType("image/png");
+                // Set absolute disk path so IM channel adapters can read the
+                // bytes locally instead of round-tripping through the
+                // /api/v1/chat/files endpoint (which would require auth).
+                imagePart.setPath(localPath.toAbsolutePath().toString());
+                try {
+                    imagePart.setFileSize(java.nio.file.Files.size(localPath));
+                } catch (Exception ignored) { /* size is best-effort */ }
                 contentParts.add(imagePart);
             }
 
@@ -206,6 +223,11 @@ public class ImageGenerationService {
                 data.put("providerName", submitResult.getProviderName());
                 streamTracker.broadcastObject(conversationId, "async_task_completed", data);
             }
+
+            // Forward to the conversation's bound IM channel adapter so
+            // WeCom / DingTalk / Feishu etc. users receive a native attachment
+            // (the SSE broadcast above only reaches Web subscribers).
+            asyncTaskMediaDispatcher.forwardToImIfBound(conversationId, contentParts);
 
             log.info("[ImageGen] Sync generation completed, {} image(s) saved for conversation {}",
                     servingUrls.size(), conversationId);
@@ -248,16 +270,30 @@ public class ImageGenerationService {
                 // 保存 assistant 消息
                 MessageContentPart imagePart = MessageContentPart.image(null, servingUrl);
                 imagePart.setFileName(localPath.getFileName().toString());
+                imagePart.setStoredName(localPath.getFileName().toString());
                 imagePart.setContentType("image/png");
+                // Set absolute disk path so IM channel adapters can read the
+                // bytes locally instead of round-tripping through the
+                // /api/v1/chat/files endpoint (which would require auth).
+                imagePart.setPath(localPath.toAbsolutePath().toString());
+                try {
+                    imagePart.setFileSize(java.nio.file.Files.size(localPath));
+                } catch (Exception ignored) { /* size is best-effort */ }
 
+                List<MessageContentPart> parts = List.of(imagePart);
                 conversationService.saveMessage(
                         task.getConversationId(), "assistant",
                         "图片已生成完毕",
-                        List.of(imagePart), "completed");
+                        parts, "completed");
 
                 // SSE 广播（使用 imageUrl 字段）
                 asyncTaskService.broadcastTaskEvent(task, "async_task_completed",
                         true, null, servingUrl, null);
+
+                // Forward to the conversation's bound IM channel adapter so
+                // WeCom / DingTalk / Feishu etc. users receive a native
+                // attachment (the SSE broadcast above only reaches Web).
+                asyncTaskMediaDispatcher.forwardToImIfBound(task.getConversationId(), parts);
 
                 log.info("[ImageGen] Task {} completed, image saved: {}", task.getTaskId(), servingUrl);
             } catch (Exception e) {

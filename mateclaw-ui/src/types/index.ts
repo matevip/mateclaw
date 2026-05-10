@@ -83,6 +83,9 @@ export interface Message {
   // Token 统计
   promptTokens?: number
   completionTokens?: number
+  // Runtime model attribution (assistant messages): the model that actually produced this reply
+  runtimeModel?: string
+  runtimeProvider?: string
   // 前端临时字段
   streaming?: boolean  // 内部动画控制，UI 渲染以 status 为准
   attachments?: ChatAttachment[]
@@ -197,6 +200,36 @@ export interface MessageMetadata {
     durationMs: number
     timestamp: number
   }>
+  /**
+   * Multimodal sidecar routing snapshot for this turn — written by the backend
+   * when the user uploaded an image / video the primary model couldn't handle
+   * natively. The chat bubble renders a "primary 🔀 sidecar" badge from this.
+   */
+  routing?: RoutingMeta
+}
+
+export interface RoutingMeta {
+  /** "none" | "sidecar" | "native" — lowercased on the wire to keep the JSON small. */
+  strategy: 'none' | 'sidecar' | 'native'
+  sidecarModelId?: number
+  sidecarModel?: string
+  sidecarProvider?: string
+  /** Modality names like ["VISION"] / ["VIDEO"] / ... — uppercase to match the backend enum. */
+  requiredModalities?: string[]
+  primaryMissing?: string[]
+  skipped?: Array<{ type: string; fileName?: string; reason: string }>
+}
+
+export interface AgentCapabilities {
+  agentId: number
+  modelName: string
+  providerId: string
+  /** Modality enum values: TEXT / VISION / VIDEO / AUDIO. */
+  modalities: string[]
+  defaultVisionModelId?: number | null
+  defaultVisionModelLabel?: string | null
+  defaultVideoModelId?: number | null
+  defaultVideoModelLabel?: string | null
 }
 
 export interface MessageContentPart {
@@ -742,6 +775,24 @@ export interface ProviderInfo {
   cooldownRemainingMs?: number
   /** RFC-074: whether the user has explicitly opted this provider into the dropdown. */
   enabled?: boolean
+
+  // Issue #81: derived liveness fields powering the chat-console popup state machine.
+  /** CONFIGURED / MISSING / NOT_REQUIRED / OAUTH_PENDING. */
+  authStatus?: string
+  /** null = base url N/A; true/false = applicable and complete/incomplete. */
+  baseUrlComplete?: boolean | null
+  /** Comma-joined missing field names ("apiKey", "baseUrl"); empty when nothing missing. */
+  missingFields?: string
+  /**
+   * Machine-readable next-step key driving the popup primary button.
+   * fill_base_url / fill_api_key / start_oauth / configure_required_fields /
+   * test_connection / pull_model / wait_cooldown / reprobe / none.
+   */
+  suggestedAction?: string
+  /** i18n key for the actionable hint, e.g. "provider.hint.llamacppBaseUrlExample". */
+  suggestedActionHintKey?: string | null
+  /** Template params for vue-i18n t(key, args). */
+  suggestedActionHintArgs?: Record<string, unknown>
 }
 
 /**

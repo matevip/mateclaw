@@ -7,6 +7,7 @@ import com.slack.api.bolt.AppConfig;
 import com.slack.api.bolt.socket_mode.SocketModeApp;
 import com.slack.api.methods.SlackApiException;
 import com.slack.api.methods.response.chat.ChatPostMessageResponse;
+import com.slack.api.methods.response.files.FilesUploadV2Response;
 import com.slack.api.model.event.MessageEvent;
 import lombok.extern.slf4j.Slf4j;
 import vip.mate.channel.AbstractChannelAdapter;
@@ -14,8 +15,16 @@ import vip.mate.channel.ChannelMessage;
 import vip.mate.channel.ChannelMessageRouter;
 import vip.mate.channel.ExponentialBackoff;
 import vip.mate.channel.model.ChannelEntity;
+import vip.mate.workspace.conversation.model.MessageContentPart;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -294,5 +303,200 @@ public class SlackChannelAdapter extends AbstractChannelAdapter {
         // # Header -> *Header*
         result = result.replaceAll("(?m)^#{1,6}\\s+(.+)$", "*$1*");
         return result;
+    }
+
+    /**
+     * Lazily-initialised JDK HTTP client for fetching media bytes from
+     * fully-qualified {@code fileUrl} fields. Only used when
+     * {@link MessageContentPart#getPath()} isn't set.
+     */
+    private volatile HttpClient httpClient;
+
+    private HttpClient getHttpClient() {
+        HttpClient hc = httpClient;
+        if (hc == null) {
+            synchronized (this) {
+                hc = httpClient;
+                if (hc == null) {
+                    hc = HttpClient.newBuilder()
+                            .connectTimeout(Duration.ofSeconds(10))
+                            .build();
+                    httpClient = hc;
+                }
+            }
+        }
+        return hc;
+    }
+
+    /**
+     * Dispatch a list of {@link MessageContentPart}s to Slack. Text parts
+     * fall through to the existing {@link #sendMessage} chat-post path;
+     * media parts (image / audio / video / file / model3d) ride
+     * {@code filesUploadV2} so users see a native file card with thumbnail
+     * preview rather than an unopenable markdown link.
+     * <p>
+     * Wired by {@link vip.mate.channel.AsyncTaskMediaDispatcher} so async
+     * tool results (image generation / video generation / etc.) reach
+     * Slack channels the same way they reach WeCom / DingTalk / Feishu.
+     */
+    @Override
+    public void sendContentParts(String targetId, List<MessageContentPart> parts) {
+        if (parts == null || parts.isEmpty()) return;
+
+        for (MessageContentPart part : parts) {
+            if (part == null) continue;
+            String type = part.getType();
+            try {
+                switch (type == null ? "" : type) {
+                    case "text", "thinking" -> {
+                        String text = part.getText();
+                        if (text != null && !text.isBlank()) {
+                            sendMessage(targetId, text);
+                        }
+                    }
+                    case "refusal" -> {
+                        String text = part.getText();
+                        if (text != null && !text.isBlank()) {
+                            sendMessage(targetId, "⚠️ " + text);
+                        }
+                    }
+                    case "image", "audio", "video", "file", "model3d" -> uploadFilePart(targetId, part);
+                    default -> {
+                        // Unknown part type — fall back to its text body if any.
+                        if (part.getText() != null && !part.getText().isBlank()) {
+                            sendMessage(targetId, part.getText());
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[slack] Failed to send {} part to {}: {}", type, targetId, e.getMessage());
+                sendFallbackText(targetId, part);
+            }
+        }
+    }
+
+    /**
+     * Upload a media part to Slack via {@code files.uploadV2}. Resolves
+     * bytes from the part's local {@code path} first (set by image / video
+     * / music / 3D generation services), falling back to an HTTP fetch of
+     * a fully-qualified {@code fileUrl}. Returns silently after sending a
+     * markdown fallback if no bytes are recoverable.
+     */
+    private void uploadFilePart(String targetId, MessageContentPart part) {
+        byte[] bytes = resolveBytes(part);
+        if (bytes == null || bytes.length == 0) {
+            log.warn("[slack] No bytes resolvable for {} part (path={}, fileUrl={}), falling back to text",
+                    part.getType(), part.getPath(), part.getFileUrl());
+            sendFallbackText(targetId, part);
+            return;
+        }
+
+        String botToken = getConfigString("bot_token");
+        if (botToken == null || botToken.isBlank()) {
+            log.warn("[slack] Missing bot_token, cannot upload {} part", part.getType());
+            return;
+        }
+
+        String filename = part.getFileName();
+        if (filename == null || filename.isBlank()) {
+            filename = defaultFilenameFor(part.getType());
+        }
+        String threadTs = lookupThreadTs(targetId);
+        // Slack derives the MIME from the filename's extension; passing
+        // contentType here is unnecessary and not part of the V2 API.
+        final String finalFilename = filename;
+        final byte[] finalBytes = bytes;
+        try {
+            FilesUploadV2Response response = slack.methods(botToken).filesUploadV2(req -> {
+                var b = req
+                        .channel(targetId)
+                        .fileData(finalBytes)
+                        .filename(finalFilename);
+                if (threadTs != null && !threadTs.isBlank()) {
+                    b.threadTs(threadTs);
+                }
+                return b;
+            });
+            if (!response.isOk()) {
+                log.warn("[slack] filesUploadV2 failed for {} ({}): {}",
+                        finalFilename, finalBytes.length, response.getError());
+                sendFallbackText(targetId, part);
+                return;
+            }
+            log.info("[slack] Uploaded {} part ({} bytes) to {}", part.getType(), finalBytes.length, targetId);
+        } catch (IOException | SlackApiException e) {
+            log.warn("[slack] filesUploadV2 error for {}: {}", finalFilename, e.getMessage());
+            sendFallbackText(targetId, part);
+        }
+    }
+
+    /**
+     * Read the part's bytes from disk first (paths set by the generation
+     * services + the WeCom inbound pipeline both populate this), or fetch
+     * via HTTP when only an external {@code fileUrl} is available. Returns
+     * null when neither path nor URL yields bytes.
+     */
+    private byte[] resolveBytes(MessageContentPart part) {
+        String path = part.getPath();
+        if (path != null && !path.isBlank()) {
+            try {
+                Path p = Path.of(path);
+                if (Files.exists(p)) {
+                    return Files.readAllBytes(p);
+                }
+            } catch (Exception e) {
+                log.debug("[slack] Reading local path failed ({}): {}", path, e.getMessage());
+            }
+        }
+        String url = part.getFileUrl();
+        if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
+            try {
+                HttpRequest req = HttpRequest.newBuilder()
+                        .uri(URI.create(url))
+                        .timeout(Duration.ofSeconds(30))
+                        .GET()
+                        .build();
+                HttpResponse<byte[]> resp = getHttpClient().send(req, HttpResponse.BodyHandlers.ofByteArray());
+                if (resp.statusCode() == 200) {
+                    return resp.body();
+                }
+                log.debug("[slack] HTTP fetch returned status {} for {}", resp.statusCode(), url);
+            } catch (Exception e) {
+                log.debug("[slack] HTTP fetch failed for {}: {}", url, e.getMessage());
+            }
+        }
+        return null;
+    }
+
+    private static String defaultFilenameFor(String type) {
+        return switch (type == null ? "" : type) {
+            case "image" -> "image.png";
+            case "audio" -> "audio.mp3";
+            case "video" -> "video.mp4";
+            case "model3d" -> "model.glb";
+            default -> "file.bin";
+        };
+    }
+
+    /** Thread-aware reply: same lookup pattern as {@link #sendMessage}. */
+    private String lookupThreadTs(String channelId) {
+        for (var entry : threadTsCache.entrySet()) {
+            if (entry.getKey().contains(channelId)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    /** Final fallback when both upload and resolve fail — keep the user
+     *  informed instead of dropping the message silently. */
+    private void sendFallbackText(String targetId, MessageContentPart part) {
+        String url = part.getFileUrl();
+        String fileName = part.getFileName() != null ? part.getFileName() : part.getType();
+        if (url != null && !url.isBlank()) {
+            sendMessage(targetId, "📎 " + fileName + ": " + url);
+        } else {
+            sendMessage(targetId, "[" + fileName + "]");
+        }
     }
 }

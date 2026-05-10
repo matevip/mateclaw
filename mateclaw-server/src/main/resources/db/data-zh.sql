@@ -50,6 +50,13 @@ MERGE INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, a
 KEY (provider_id)
 VALUES ('dashscope', 'DashScope', 'sk-', 'DashScopeChatModel', '', '', '{}', FALSE, FALSE, TRUE, TRUE, FALSE, TRUE, NOW(), NOW());
 
+-- DashScope OpenAI 兼容端点：与 dashscope provider 共用同一把 sk- key，但走
+-- compatible-mode/v1 路径。带点号版本号的 qwen 系列（qwen3.5-*, qwen3.6-*）只在
+-- 这里能调通——native 端点会返回 400 InvalidParameter。
+MERGE INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+KEY (provider_id)
+VALUES ('dashscope-compat', 'DashScope (兼容模式)', 'sk-', 'OpenAIChatModel', '', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '{}', FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, NOW(), NOW());
+
 MERGE INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
 KEY (provider_id)
 VALUES ('modelscope', 'ModelScope', 'ms', 'OpenAIChatModel', '', 'https://api-inference.modelscope.cn/v1', '{}', FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, NOW(), NOW());
@@ -187,12 +194,18 @@ MERGE INTO mate_model_config (id, name, provider, model_name, description, tempe
 (1000000101, 'Qwen3 Max', 'dashscope', 'qwen3-max', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000102, 'Qwen3 235B A22B Thinking', 'dashscope', 'qwen3-235b-a22b-thinking-2507', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000103, 'DeepSeek-V3.2', 'dashscope', 'deepseek-v3.2', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
--- 注意: qwen3-plus / qwen3.5-plus / qwen3.5-max / qwen3.6-* 等带点号的版本只在 OpenAI 兼容端点上线，
--- DashScope native（text-generation/generation）调用会返回 400 InvalidParameter，请使用 bailian-team 等 OpenAI-compat provider。
+-- 注意: qwen3-plus / qwen3.5-plus / qwen3.5-max / qwen3.6-* 等带点号的版本只在 OpenAI 兼容端点上线。
+-- DashScope native（text-generation/generation）调用会返回 400 InvalidParameter。
+-- 这些模型挂在 dashscope-compat provider 下，复用同一把 sk- key 但走 compatible-mode/v1 端点。
 (1000000173, 'Qwen Long', 'dashscope', 'qwen-long', '长文本模型，支持超长上下文', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000174, 'Qwen Plus (latest)',  'dashscope', 'qwen-plus-latest',  '通义千问 Plus 最新稳定快照，自动跟随官方更新', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000175, 'Qwen Max (latest)',   'dashscope', 'qwen-max-latest',   '通义千问 Max 最新稳定快照，最强推理能力',     0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000176, 'Qwen Turbo (latest)', 'dashscope', 'qwen-turbo-latest', '通义千问 Turbo 最新稳定快照，低延迟、高并发', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+-- DashScope 兼容模式专属模型（点号版本号系列）—— 与 dashscope provider 共用同一把 sk- key。
+-- 仅收录在通用账号上确实可调通的 -plus 版本；-max / -vl-max 在 model market 可见但 API 返回 404。
+(1000000601, 'Qwen3.6 Plus',  'dashscope-compat', 'qwen3.6-plus',  '通义千问 3.6 Plus 旗舰，平衡推理与速度（兼容模式专属）',          0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000603, 'Qwen3.5 Plus',  'dashscope-compat', 'qwen3.5-plus',  '通义千问 3.5 Plus（兼容模式专属）',                                0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000605, 'Qwen3 VL Plus', 'dashscope-compat', 'qwen3-vl-plus', '通义千问 3 视觉理解 Plus，支持图像、视频输入（兼容模式专属）',     0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000104, 'Qwen3.5-122B-A10B', 'modelscope', 'Qwen/Qwen3.5-122B-A10B', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000105, 'GLM-5', 'modelscope', 'ZhipuAI/GLM-5', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000106, 'Qwen3.5 Plus', 'aliyun-codingplan', 'qwen3.5-plus', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),

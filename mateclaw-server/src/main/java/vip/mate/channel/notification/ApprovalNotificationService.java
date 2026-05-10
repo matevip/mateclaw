@@ -57,29 +57,42 @@ public class ApprovalNotificationService {
     }
 
     /**
-     * 从 ApprovalNotice 构建文本
+     * 从 ApprovalNotice 构建文本（实例方法，保留供历史调用方使用）
      */
     public String buildApprovalText(ApprovalNotice notice) {
+        return staticBuildText(notice);
+    }
+
+    /**
+     * Static text renderer — used by the {@code AbstractChannelAdapter}
+     * default {@code sendApprovalNotice} implementation, which has no
+     * Spring-managed reference to the service instance.
+     *
+     * <p>Logic is identical to {@link #buildApprovalText(ApprovalNotice)};
+     * the instance method delegates here so the two paths can never
+     * drift.
+     */
+    public static String staticBuildText(ApprovalNotice notice) {
         StringBuilder sb = new StringBuilder();
         sb.append("🔐 **工具需要审批**\n\n");
         sb.append("**工具名称**: ").append(notice.toolName()).append("\n");
 
-        // 风险等级
+        // Risk severity
         if (notice.maxSeverity() != null) {
-            sb.append("**风险等级**: ").append(severityLabel(notice.maxSeverity())).append("\n");
+            sb.append("**风险等级**: ").append(staticSeverityLabel(notice.maxSeverity())).append("\n");
         }
 
-        // 摘要
+        // Summary
         if (notice.summary() != null && !notice.summary().isEmpty()) {
             sb.append("**摘要**: ").append(notice.summary()).append("\n");
         }
 
-        // 参数预览
+        // Args preview
         if (notice.argumentsPreview() != null && !notice.argumentsPreview().isEmpty()) {
             sb.append("**参数**: `").append(notice.argumentsPreview()).append("`\n");
         }
 
-        // Findings 摘要（最多显示 3 条）
+        // Findings (top 3)
         if (notice.findings() != null && !notice.findings().isEmpty()) {
             sb.append("\n**发现的问题**:\n");
             int shown = 0;
@@ -98,6 +111,18 @@ public class ApprovalNotificationService {
         sb.append("\n输入 `").append(notice.approveCommand()).append("` 批准执行，或 `")
                 .append(notice.denyCommand()).append("` 拒绝。");
         return sb.toString();
+    }
+
+    private static String staticSeverityLabel(String severity) {
+        if (severity == null) return "";
+        return switch (severity) {
+            case "CRITICAL" -> "🔴 CRITICAL";
+            case "HIGH" -> "🟠 HIGH";
+            case "MEDIUM" -> "🟡 MEDIUM";
+            case "LOW" -> "🔵 LOW";
+            case "INFO" -> "⚪ INFO";
+            default -> severity;
+        };
     }
 
     /**

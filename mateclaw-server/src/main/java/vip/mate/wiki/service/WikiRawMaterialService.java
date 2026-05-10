@@ -411,9 +411,13 @@ public class WikiRawMaterialService {
             log.warn("[Wiki] Failed to cascade-delete chunks for raw={}: {}", id, e.getMessage());
         }
 
-        // Source file last — DB pointer is gone, no other row references this
-        // path (each upload gets a timestamp-prefixed unique name), so
-        // leaving it on disk would just accumulate as the upload tree grows.
+        // Source file last. cleanupFile is sandboxed to the upload dir, so:
+        //   - uploaded raws (server-managed copy under uploadDir) are removed —
+        //     each upload has a timestamp-prefixed unique name, no other row
+        //     references it, leaving it would just accumulate disk garbage.
+        //   - directory-scanned raws (sourcePath points at the user's own file
+        //     outside uploadDir) are left untouched — the scanner references
+        //     the original in place; the user's file is theirs to keep.
         // Failure here is soft-logged and non-blocking — operator can run a
         // sweep later if disk usage matters more than the delete RTT.
         if (entity != null) {
@@ -636,16 +640,37 @@ public class WikiRawMaterialService {
     }
 
     /**
-     * Best-effort delete of an upload-tree file. Used both when a fresh
-     * upload turns out to be a duplicate (the new file is redundant) and
-     * when a raw material row is deleted (its source file becomes a
-     * disk orphan with no DB pointer to it). Idempotent — silently
-     * succeeds when the path is null or the file is already gone.
+     * Best-effort delete of a raw material's source file on disk. Used both
+     * when a fresh upload turns out to be a duplicate (the new file is
+     * redundant) and when a raw material row is deleted (its source file
+     * becomes a disk orphan with no DB pointer to it).
+     * <p>
+     * Sandboxed to {@link WikiProperties#getUploadDir()}: only deletes files
+     * that live under the configured upload directory — i.e. files this
+     * service is responsible for (uploaded raws + KB pipeline outputs).
+     * Files outside the upload tree are left alone, because the directory
+     * scanner imports raws by referencing the user's local file in place
+     * (no copy); deleting them would wipe the user's original document, not
+     * just our internal cache. See {@code WikiDirectoryScanService}.
+     * <p>
+     * Idempotent — silently succeeds when the path is null, the file is
+     * already gone, or the path is outside the upload sandbox.
      */
     private void cleanupFile(String path) {
         if (path == null || path.isBlank()) return;
         try {
-            java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(path));
+            java.nio.file.Path target = java.nio.file.Paths.get(path).toAbsolutePath().normalize();
+            java.nio.file.Path uploadRoot = java.nio.file.Paths.get(properties.getUploadDir())
+                    .toAbsolutePath().normalize();
+            if (!target.startsWith(uploadRoot)) {
+                // User-owned file (imported by directory scan in place). The DB row is
+                // gone but the file on the user's disk must stay — that's their data,
+                // not ours.
+                log.info("[Wiki] Skip file delete (outside upload dir, user-owned): path={} uploadDir={}",
+                        target, uploadRoot);
+                return;
+            }
+            java.nio.file.Files.deleteIfExists(target);
         } catch (Exception e) {
             log.warn("[Wiki] Failed to clean up upload file {}: {}", path, e.getMessage());
         }

@@ -14,6 +14,7 @@ import vip.mate.llm.event.ModelConfigChangedEvent;
 import vip.mate.llm.failover.AvailableProviderPool;
 import vip.mate.llm.failover.ProviderHealthTracker;
 import vip.mate.llm.failover.ProviderInitProbe;
+import vip.mate.llm.failover.ProviderRequirements;
 import vip.mate.llm.model.*;
 import vip.mate.llm.repository.ModelProviderMapper;
 
@@ -128,6 +129,9 @@ public class ModelProviderService {
         provider.setBaseUrl(request.getBaseUrl());
         provider.setChatModel(ModelProtocol.resolveChatModel(request.getProtocol(), request.getChatModel()));
         provider.setGenerateKwargs(writeJson(request.getGenerateKwargs()));
+        if (request.getRequireApiKey() != null) {
+            provider.setRequireApiKey(request.getRequireApiKey());
+        }
         // RFC-009 P3.5: only update fallback priority when the caller explicitly
         // sends a value. null leaves it untouched (existing chain unchanged).
         if (request.getFallbackPriority() != null) {
@@ -168,7 +172,7 @@ public class ModelProviderService {
         provider.setSupportModelDiscovery(false);
         provider.setSupportConnectionCheck(false);
         provider.setFreezeUrl(false);
-        provider.setRequireApiKey(true);
+        provider.setRequireApiKey(request.getRequireApiKey() == null || Boolean.TRUE.equals(request.getRequireApiKey()));
         modelProviderMapper.insert(provider);
 
         if (request.getModels() != null) {
@@ -240,11 +244,21 @@ public class ModelProviderService {
     public String getProviderUnavailableReason(String providerId) {
         ModelProviderEntity provider = getProvider(providerId);
         if (!isProviderConfigured(provider)) {
-            if (Boolean.TRUE.equals(provider.getRequireApiKey())) {
-                return "Provider 未配置有效的 API Key";
+            // Issue #81: emit a precise reason based on which row-level fields are
+            // missing, rather than the previous protocol-blind heuristic. The new
+            // frontend reads suggestedActionHintKey/Args; this string remains for
+            // logs and legacy callers.
+            ProviderRequirements.Required req = ProviderRequirements.of(provider);
+            boolean hasBaseUrl = StringUtils.hasText(provider.getBaseUrl());
+            boolean hasApiKey  = hasUsableApiKey(provider.getApiKey());
+            if (req.needsBaseUrl() && !hasBaseUrl && req.needsApiKey() && !hasApiKey) {
+                return "Provider 未配置 Base URL 和 API Key";
             }
-            if (Boolean.TRUE.equals(provider.getIsCustom()) || !Boolean.TRUE.equals(provider.getIsLocal())) {
+            if (req.needsBaseUrl() && !hasBaseUrl) {
                 return "Provider 未配置 Base URL";
+            }
+            if (req.needsApiKey() && !hasApiKey) {
+                return "Provider 未配置 API Key";
             }
             return "Provider 未完成配置";
         }
@@ -416,7 +430,83 @@ public class ModelProviderService {
         }
         dto.setModels(builtinModels);
         dto.setExtraModels(extraModels);
+        applySuggestedAction(dto, provider, providerLiveness);
         return dto;
+    }
+
+    /**
+     * Issue #81: derive the chat-popup recovery hint from row + liveness, so the
+     * frontend can render a precise "next step" instead of a generic
+     * "model unavailable" toast. Six fields populated:
+     *   - authStatus: CONFIGURED / MISSING / NOT_REQUIRED / OAUTH_PENDING
+     *   - baseUrlComplete: null when not applicable, true/false otherwise
+     *   - missingFields: comma-joined ("apiKey", "baseUrl") for required-field UX
+     *   - suggestedAction: machine-readable next-step key (frontend switches on this)
+     *   - suggestedActionHintKey + suggestedActionHintArgs: i18n key/args, no raw text
+     */
+    private void applySuggestedAction(ProviderInfoDTO dto, ModelProviderEntity provider, Liveness liveness) {
+        ProviderRequirements.Required req = ProviderRequirements.of(provider);
+        boolean hasBaseUrl = StringUtils.hasText(provider.getBaseUrl());
+        boolean hasApiKey  = hasUsableApiKey(provider.getApiKey());
+        boolean hasModels  = (dto.getModels() != null && !dto.getModels().isEmpty())
+                          || (dto.getExtraModels() != null && !dto.getExtraModels().isEmpty());
+
+        // 1. authStatus
+        if ("oauth".equals(provider.getAuthType())) {
+            dto.setAuthStatus(Boolean.TRUE.equals(dto.getOauthConnected()) ? "CONFIGURED" : "OAUTH_PENDING");
+        } else if (req.needsApiKey()) {
+            dto.setAuthStatus(hasApiKey ? "CONFIGURED" : "MISSING");
+        } else {
+            dto.setAuthStatus("NOT_REQUIRED");
+        }
+
+        // 2. baseUrlComplete: null when this provider doesn't need a base URL.
+        dto.setBaseUrlComplete(req.needsBaseUrl() ? hasBaseUrl : null);
+
+        // 3. missingFields
+        java.util.List<String> missing = new ArrayList<>();
+        if (req.needsApiKey()  && !hasApiKey)  missing.add("apiKey");
+        if (req.needsBaseUrl() && !hasBaseUrl) missing.add("baseUrl");
+        dto.setMissingFields(String.join(",", missing));
+
+        // 4. suggestedAction
+        String action;
+        if (liveness == Liveness.UNCONFIGURED) {
+            if ("oauth".equals(provider.getAuthType())) {
+                action = "start_oauth";
+            } else if (missing.size() == 1 && missing.get(0).equals("baseUrl")) {
+                action = "fill_base_url";
+            } else if (missing.size() == 1 && missing.get(0).equals("apiKey")) {
+                action = "fill_api_key";
+            } else {
+                action = "configure_required_fields";
+            }
+        } else if (liveness == Liveness.REMOVED) {
+            action = "reprobe";
+        } else if (liveness == Liveness.COOLDOWN) {
+            action = "wait_cooldown";
+        } else if (liveness == Liveness.UNPROBED) {
+            action = "reprobe";
+        } else if (liveness == Liveness.LIVE && !hasModels) {
+            action = Boolean.TRUE.equals(provider.getSupportModelDiscovery())
+                    ? "pull_model"
+                    : "configure_required_fields";
+        } else {
+            action = "none";
+        }
+        dto.setSuggestedAction(action);
+
+        // 5. hint key + args (NOT raw text). Frontend renders via t(key, args).
+        // Only emit hint when it actually applies to the action; suppress for
+        // REMOVED / COOLDOWN / UNPROBED to keep the popup clean.
+        if ("fill_base_url".equals(action) || "configure_required_fields".equals(action)) {
+            dto.setSuggestedActionHintKey(req.hintKey());
+            dto.setSuggestedActionHintArgs(req.hintArgs() == null ? new java.util.LinkedHashMap<>()
+                                                                  : new java.util.LinkedHashMap<>(req.hintArgs()));
+        } else {
+            dto.setSuggestedActionHintKey(null);
+            dto.setSuggestedActionHintArgs(new java.util.LinkedHashMap<>());
+        }
     }
 
     private boolean hasModels(String providerId) {
@@ -427,13 +517,11 @@ public class ModelProviderService {
         if (provider == null) {
             return false;
         }
-        if (Boolean.TRUE.equals(provider.getIsLocal())) {
-            return true;
-        }
 
-        // OAuth 认证的 provider：检查 OAuth token 是否存在
+        // OAuth providers store credentials elsewhere (DB column or disk for
+        // Claude Code). Resolve them via the OAuth service rather than the
+        // base-URL / api-key columns.
         if ("oauth".equals(provider.getAuthType())) {
-            // Claude Code OAuth (RFC-062) — token lives on disk, not in DB.
             if (CLAUDE_CODE_PROVIDER_ID.equals(provider.getProviderId())) {
                 ClaudeCodeOAuthService svc = claudeCodeOAuthServiceProvider.getIfAvailable();
                 return svc != null && svc.isLoggedIn();
@@ -441,16 +529,21 @@ public class ModelProviderService {
             return StringUtils.hasText(provider.getOauthAccessToken());
         }
 
-        boolean hasBaseUrl = StringUtils.hasText(provider.getBaseUrl());
-        boolean hasApiKey = hasUsableApiKey(provider.getApiKey());
-
-        if (Boolean.TRUE.equals(provider.getIsCustom())) {
-            return hasBaseUrl && (!Boolean.TRUE.equals(provider.getRequireApiKey()) || hasApiKey);
+        // Issue #81: decide required fields from the provider row, not from the
+        // protocol enum. Every OpenAI-compatible provider (cloud or local) shares
+        // OPENAI_COMPATIBLE, so a protocol-keyed table cannot tell OpenAI cloud
+        // (needs api_key, no base url) apart from llama.cpp local (no api_key,
+        // needs base url). Without this, isLocal=true short-circuited to true
+        // for llama.cpp regardless of an empty Base URL, hiding the real cause
+        // behind a confusing REMOVED state.
+        ProviderRequirements.Required req = ProviderRequirements.of(provider);
+        if (req.needsApiKey() && !hasUsableApiKey(provider.getApiKey())) {
+            return false;
         }
-        if (Boolean.FALSE.equals(provider.getRequireApiKey())) {
-            return hasBaseUrl;
+        if (req.needsBaseUrl() && !StringUtils.hasText(provider.getBaseUrl())) {
+            return false;
         }
-        return hasApiKey;
+        return true;
     }
 
     public boolean hasUsableApiKey(String apiKey) {

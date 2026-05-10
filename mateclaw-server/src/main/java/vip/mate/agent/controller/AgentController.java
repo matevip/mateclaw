@@ -11,7 +11,13 @@ import vip.mate.channel.web.Utf8SseEmitter;
 import vip.mate.agent.AgentService;
 import vip.mate.agent.AgentState;
 import vip.mate.agent.model.AgentEntity;
+import vip.mate.agent.vo.AgentCapabilitiesVO;
 import vip.mate.audit.service.AuditEventService;
+import vip.mate.llm.model.ModelConfigEntity;
+import vip.mate.llm.service.ModelCapabilityService;
+import vip.mate.llm.service.ModelConfigService;
+import vip.mate.system.model.SystemSettingsDTO;
+import vip.mate.system.service.SystemSettingService;
 import vip.mate.auth.model.UserEntity;
 import vip.mate.auth.service.AuthService;
 import vip.mate.common.result.R;
@@ -40,6 +46,9 @@ public class AgentController {
     private final AuditEventService auditEventService;
     private final AuthService authService;
     private final WorkspaceService workspaceService;
+    private final ModelConfigService modelConfigService;
+    private final ModelCapabilityService modelCapabilityService;
+    private final SystemSettingService systemSettingService;
     private final ExecutorService sseExecutor = Executors.newCachedThreadPool();
 
     @Operation(summary = "获取Agent列表")
@@ -60,6 +69,57 @@ public class AgentController {
         AgentEntity agent = agentService.getAgent(id);
         verifyResourceWorkspace(agent.getWorkspaceId(), workspaceId);
         return R.ok(agent);
+    }
+
+    @Operation(summary = "获取Agent当前能力（modality 集合 + sidecar 配置），用于聊天页提示条")
+    @GetMapping("/{id}/capabilities")
+    @RequireWorkspaceRole("viewer")
+    public R<AgentCapabilitiesVO> capabilities(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        AgentEntity agent = agentService.getAgent(id);
+        verifyResourceWorkspace(agent.getWorkspaceId(), workspaceId);
+
+        ModelConfigEntity primary;
+        try {
+            primary = modelConfigService.resolveModel(agent.getModelName());
+        } catch (Exception e) {
+            // No default model configured yet — return a capabilities snapshot that
+            // tells the UI "we can't say anything about this agent's modalities".
+            return R.ok(AgentCapabilitiesVO.builder()
+                    .agentId(id)
+                    .modelName("")
+                    .providerId("")
+                    .modalities(List.of())
+                    .build());
+        }
+        java.util.Set<ModelCapabilityService.Modality> modalities =
+                modelCapabilityService.resolve(primary.getModelName(), primary.getModalities());
+
+        SystemSettingsDTO settings = systemSettingService.getSettings();
+        Long visionId = settings.getDefaultVisionModelId();
+        Long videoId = settings.getDefaultVideoModelId();
+
+        return R.ok(AgentCapabilitiesVO.builder()
+                .agentId(id)
+                .modelName(primary.getModelName())
+                .providerId(primary.getProvider())
+                .modalities(modalities.stream().map(Enum::name).toList())
+                .defaultVisionModelId(visionId)
+                .defaultVisionModelLabel(resolveSidecarLabel(visionId))
+                .defaultVideoModelId(videoId)
+                .defaultVideoModelLabel(resolveSidecarLabel(videoId))
+                .build());
+    }
+
+    private String resolveSidecarLabel(Long modelId) {
+        if (modelId == null) return null;
+        try {
+            ModelConfigEntity m = modelConfigService.getModel(modelId);
+            return m == null ? null : m.getProvider() + " / " + m.getModelName();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @Operation(summary = "创建Agent")

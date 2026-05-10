@@ -4,6 +4,8 @@ export default {
   },
   common: {
     save: '保存',
+    saving: '保存中...',
+    saved: '已保存',
     cancel: '取消',
     reset: '重置',
     edit: '编辑',
@@ -22,6 +24,8 @@ export default {
     close: '关闭',
     add: '添加',
     search: '搜索',
+    noResults: '没有匹配项',
+    noOptions: '暂无可选项',
     clear: '清除',
     expandSidebar: '展开侧边栏',
     collapseSidebar: '折叠侧边栏',
@@ -148,6 +152,23 @@ export default {
     copy: '复制',
     copied: '已复制',
     regenerate: '重新生成',
+    replyModel: '本条回复模型: {model}',
+    routing: {
+      kind: {
+        image: '图片',
+        video: '视频',
+        media: '附件',
+      },
+      tooltip: '本轮对话由「{primary}」处理；图片附件先经「{sidecar}」（{sidecarProvider}）转成文字后再交给主模型。',
+      hint: {
+        willRoute: '检测到{kind}附件。当前 Agent 模型「{primary}」不支持{kind}输入，将自动调用「{sidecar}」识别（旁路模式，不影响主模型）。',
+        notConfigured: '检测到{kind}附件。当前 Agent 模型不支持{kind}输入，且尚未配置旁路模型。',
+        videoReserved: '检测到视频附件。当前版本暂未接入视频旁路（已预留「{sidecar}」），建议切换到具备视频能力的多模态主模型。',
+        action: {
+          gotoSettings: '前往配置',
+        },
+      },
+    },
     ttsPlay: '朗读',
     ttsStop: '停止朗读',
     conversations: '会话列表',
@@ -180,6 +201,49 @@ export default {
     // RFC-074 PR-2: empty-state inside the model dropdown
     noProvidersConfigured: '还没有可用的模型',
     goConfigure: '去配置',
+    // Issue #81: liveness-aware popup state machine.
+    prompt: {
+      noActive: {
+        title: '请先选择一个模型',
+        desc: '当前没有激活模型，先到模型管理选一个再开始对话。',
+      },
+      unconfigured: {
+        title: '{name} 还没配置完',
+        desc: '缺少：{fields}。{hint}',
+      },
+      removed: {
+        title: '{name} 不可用',
+        descFallback: '上一次探测失败，请检查服务是否在运行。',
+      },
+      cooldown: {
+        title: '{name} 暂时不可用',
+        desc: '约 {seconds} 秒后自动重试。',
+      },
+      unprobed: {
+        title: '正在检查模型可用性',
+        desc: '稍候片刻或刷新重试。',
+      },
+      noModels: {
+        title: '{name} 下没有可用模型',
+        desc: '尝试发现模型或手动添加一个。',
+      },
+    },
+    promptAction: {
+      fillBaseUrl: '填写 Base URL',
+      fillApiKey: '填写 API Key',
+      fillRequiredFields: '完成必填项',
+      startOAuth: '登录授权',
+      testConnection: '测试连接',
+      pullModel: '发现模型',
+      waitCooldown: '立即重试',
+      reprobe: '重新探测',
+      switchToModel: '切换到 {name}',
+      fixThis: '修复',
+    },
+    recoverableBanner: {
+      message: '{name} 暂时不可用，发送时会自动用 {fallback} 兜底',
+      switched: '主模型不可用，已切换到 {fallback}',
+    },
     uploadFailed: '文件上传失败',
     dropToUpload: '拖放文件或文件夹到此处',
     copyFailed: '复制失败',
@@ -315,6 +379,22 @@ export default {
     roleUser: '用户',
     roleAdmin: '管理员',
   },
+  // Issue #81: provider-level hint / status text shared across chat popup and ModelSelector.
+  provider: {
+    hint: {
+      ollamaBaseUrlExample: '示例：{example}',
+      lmstudioBaseUrlExample: '示例：{example}（LM Studio 默认端口）',
+      llamacppBaseUrlExample: '示例：{example}（llama-server 默认端口）',
+      vllmBaseUrlExample: '示例：{example}',
+      openaiCompatBaseUrlExample: '示例：OpenAI 兼容端点，例如 {example}',
+    },
+    status: {
+      unconfigured: '未配置',
+      removed: '不可用',
+      cooldown: '{s}s 后重试',
+      unprobed: '检测中',
+    },
+  },
   settings: {
     title: '设置',
     kicker: '配置中心',
@@ -331,6 +411,25 @@ export default {
       featureFlags: '功能开关',
       about: '关于',
       advanced: '高级',
+    },
+    models: {
+      sidecar: {
+        title: '多模态旁路',
+        hint: '当主模型不支持图片/视频时，自动用下面配置的模型先把附件转成文字，再交给主模型回答。',
+        notConfigured: '未配置（不路由附件）',
+        idle: '未启用',
+        reserved: '预留',
+        vision: {
+          label: '视觉旁路模型',
+          desc: '用户上传图片时调用一次，把图片转成结构化描述。主对话模型不变。',
+          empty: '尚未发现支持图片输入的模型。请到上方"云端模型"中先添加一个视觉模型。',
+        },
+        video: {
+          label: '视频旁路模型（预留）',
+          desc: '用于未来版本：当用户上传视频时，由该模型负责拆帧和描述。当前版本暂不接入路由。',
+          empty: '尚未发现支持视频输入的模型。',
+        },
+      },
     },
     featureFlags: {
       title: '功能开关',
@@ -435,6 +534,7 @@ export default {
       protocolGemini: 'Gemini 原生',
       protocolDashScope: 'DashScope 原生',
       advancedHint: '用于补充 temperature、max_tokens、top_p 等生成参数。',
+      requireApiKeyHint: '公司内部或本地 OpenAI 兼容服务如果不需要鉴权，可以关闭此项；测试连接时将不会发送 Authorization 头。',
       fallbackPriorityHint: '池内尝试顺序（数字越小越先）：0 = 不参与；1 = 第一顺位；2 = 第二顺位，依此类推。多个提供商共用同一数字时按 ID 字典序。',
       fallbackBadge: '偏好 #{priority}',
       fallbackBadgeTitle: '可用池内的尝试顺序，数字越小越先尝试',
@@ -510,6 +610,7 @@ export default {
         providerName: '提供商名称',
         defaultBaseUrl: '默认 Base URL',
         apiKeyPrefix: 'API Key 前缀',
+        requireApiKey: '需要 API Key',
         protocol: '协议',
         generateKwargs: 'Generate Kwargs (JSON)',
         fallbackPriority: '池内尝试顺序',
@@ -585,6 +686,9 @@ export default {
       sttEnabled: '启用语音识别',
       sttProvider: '首选 STT 提供商',
       sttFallbackEnabled: '提供商回退',
+      // Issue #76: OpenAI-compat STT 端点路由
+      sttOpenAiCompatProviderId: 'OpenAI 兼容凭证',
+      sttOpenAiCompatModel: 'OpenAI 兼容模型名',
       // 音乐生成
       musicEnabled: '启用音乐生成',
       musicProvider: '首选音乐提供商',
@@ -638,6 +742,10 @@ export default {
       sttFallbackEnabled: '首选提供商失败时自动尝试其他已配置的提供商。',
       openaiSttInfo: '复用模型管理中的 OpenAI API Key。使用 Whisper 模型，支持多语言自动识别。',
       dashscopeSttInfo: '复用模型管理中的 DashScope API Key。使用 Paraformer Realtime（WebSocket 流式），中文识别效果优秀，亚秒级延迟。',
+      // Issue #76
+      sttOpenAiCompatProviderId: '从模型管理选一个 OpenAI 兼容 provider 行作为凭证（baseUrl + API Key）来源。除官方 OpenAI 外，FunASR 私有部署 / 硅基流动 / Groq / Together / 火山 / 七牛等都可以用——在模型管理新增自定义 provider 后即可在此选用。',
+      sttOpenAiCompatModel: '发送给端点的模型名（multipart "model" 字段）。OpenAI 默认 whisper-1；FunASR 通常是 paraformer-large；其他厂商按其文档填写。',
+      sttOpenAiCompatNote: '提示：要接私有 ASR 服务，先去模型管理 → 新增自定义 provider → 协议选 "OpenAI 兼容" → 填 Base URL + 可选 API Key，然后回到这里选它。',
       // 音乐生成
       musicEnabled: '开启后 Agent 可通过 music_generate 工具生成音乐。Google Lyria 复用 Google Key。',
       musicProvider: '选择首选音乐提供商，auto 模式优先使用 Google Lyria。',
@@ -1129,6 +1237,10 @@ export default {
         decision: '决策',
         remediation: '修复建议',
         priority: '优先级',
+      },
+      messages: {
+        ruleIdRequired: '规则 ID 不能为空',
+        saveFailed: '保存规则失败',
       },
     },
     fileGuard: {
@@ -2225,7 +2337,7 @@ export default {
   },
   channels: {
     title: '渠道管理',
-    desc: '将 Agent 连接到各消息平台和 API',
+    desc: '将数字员工连接到各消息平台和 API',
     newChannel: '新建渠道',
     addChannel: '添加渠道',
     status: {
@@ -2237,7 +2349,7 @@ export default {
     disable: '停用',
     empty: {
       title: '连接第一个渠道',
-      desc: '把你的 Agent 接入团队已经在用的 IM 工具——Slack、企业微信、Telegram 等。',
+      desc: '把你的数字员工接入团队已经在用的 IM 工具——Slack、企业微信、Telegram 等。',
       cta: '连接一个渠道',
     },
     stats: {
@@ -2297,12 +2409,12 @@ export default {
       name: '名称',
       type: '类型',
       description: '描述',
-      bindAgent: '绑定 Agent',
+      bindAgent: '绑定员工',
     },
     placeholders: {
       name: '渠道名称',
       description: '渠道用途说明',
-      selectAgent: '选择 Agent...',
+      selectAgent: '选择员工...',
     },
     types: {
       web: 'Web API',
@@ -2519,8 +2631,8 @@ export default {
       fixIt: '修复',
       retry: '重试',
       readyHeadline: '一切就绪',
-      readySubtitle: '绑定一个 Agent，发条测试消息确认。',
-      bindAgentLabel: '绑定 Agent',
+      readySubtitle: '绑定一个员工，发条测试消息确认。',
+      bindAgentLabel: '绑定员工',
       sendTest: '发送测试消息',
       sendTestHint: '打开 {service} 给机器人发条消息——回复应该几秒内到达。',
       saveFailed: '渠道保存失败',
@@ -2601,6 +2713,8 @@ export default {
     empty: '暂无技能',
     emptyDesc: '添加技能以增强 Agent 的能力',
     noDescription: '暂无描述',
+    // Issue #83: shown on the padlock that replaces the toggle for MCP/ACP virtual skills.
+    virtualReadonlyHint: 'MCP / ACP 衍生技能不能在此切换，请到 Settings ▸ 连接页面操作对应的服务',
     modal: {
       configureTitle: '配置技能',
       newTitle: '新建技能',

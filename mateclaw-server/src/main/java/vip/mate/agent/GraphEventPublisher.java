@@ -46,6 +46,15 @@ public final class GraphEventPublisher {
     public static final String EVENT_FINISH_REASON = "finish_reason";
 
     /**
+     * Multimodal sidecar routing decision for the current turn. Emitted once
+     * per turn before the graph starts streaming; the channel-side accumulator
+     * stores it under {@code metadata.routing} so the chat UI can show which
+     * sidecar (if any) was invoked. Underscore-prefixed name keeps it out of
+     * IM channel rebroadcast (see {@code ChannelMessageRouter}).
+     */
+    public static final String EVENT_ROUTING_DECISION = "_routing_decision";
+
+    /**
      * 事件记录
      */
     public record GraphEvent(String type, Map<String, Object> data, long timestamp) {}

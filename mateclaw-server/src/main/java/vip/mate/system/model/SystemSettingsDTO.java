@@ -108,6 +108,20 @@ public class SystemSettingsDTO {
     /** 首选 STT provider: auto / openai / dashscope */
     private String sttProvider;
     private Boolean sttFallbackEnabled;
+    /**
+     * Issue #76: which {@code mate_model_provider} row should the OpenAI STT
+     * provider read its baseUrl + apiKey from. Defaults to "openai" so existing
+     * deployments keep working; swap to a custom OpenAI-compatible provider row
+     * (FunASR / SiliconFlow / Groq / Together / Volcano / etc.) to point STT
+     * at any compatible endpoint without a code change.
+     */
+    private String sttOpenAiCompatProviderId;
+    /**
+     * Issue #76: model id sent in the multipart "model" field. Defaults to
+     * whisper-1; override with paraformer-large / FunAudioLLM-Whisper / etc.
+     * when the configured provider exposes a different identifier.
+     */
+    private String sttOpenAiCompatModel;
 
     // ===== 音乐生成配置 =====
     private Boolean musicEnabled;
@@ -120,4 +134,22 @@ public class SystemSettingsDTO {
     /** 首选 3D provider: auto / hunyuan-3d */
     private String model3dProvider;
     private Boolean model3dFallbackEnabled;
+
+    // ===== Multimodal sidecar routing =====
+    /**
+     * Default vision-capable model id used to caption image attachments when the
+     * agent's primary model lacks the VISION modality. References mate_model_config.id;
+     * provider+model_name pairs are not unique so we store the surrogate key.
+     * null / non-existent / disabled rows are treated as "not configured" — the
+     * runtime then leaves the attachment out and asks the user to pick a model.
+     */
+    private Long defaultVisionModelId;
+
+    /**
+     * Default video-capable model id used when the agent's primary model lacks
+     * the VIDEO modality. Same semantics as defaultVisionModelId. v1 routing does
+     * not yet implement video sidecar; this is reserved for the next iteration so
+     * the configuration surface is stable.
+     */
+    private Long defaultVideoModelId;
 }

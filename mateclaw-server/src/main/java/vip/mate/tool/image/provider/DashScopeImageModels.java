@@ -14,9 +14,10 @@ import java.util.Set;
  *
  * <p>Two transport families are present:
  * <ul>
- *   <li><b>Async legacy</b> ({@link #LEGACY_ASYNC_ENDPOINT}) — wanx 2.0/2.1 and
- *       wan 2.2/2.5 turbo/plus models that exclusively do text-to-image. The
- *       caller submits and polls {@code /api/v1/tasks/{id}}.</li>
+ *   <li><b>Async legacy</b> ({@link #LEGACY_ASYNC_ENDPOINT} —
+ *       {@code text2image/image-synthesis}) — wanx 2.0/2.1 and wan 2.2/2.5
+ *       turbo/plus models that exclusively do text-to-image. The caller
+ *       submits and polls {@code /api/v1/tasks/{id}}.</li>
  *   <li><b>Sync multimodal</b> ({@link #MULTIMODAL_ENDPOINT}) — wan 2.6/2.7,
  *       qwen-image, qwen-image-edit, z-image. Uses the OpenAI-style
  *       {@code messages.content[]} array and returns the generated image URL
@@ -27,8 +28,15 @@ import java.util.Set;
  */
 final class DashScopeImageModels {
 
+    /**
+     * Async text-to-image endpoint for the wanx 2.0/2.1 + wan 2.2/2.5 turbo/plus
+     * families. Despite Aliyun's docs occasionally describing a unified
+     * {@code image-generation/generation} path, the wanx-series turbo/plus
+     * models actually still go through {@code text2image/image-synthesis} and
+     * return {@code "url error, please check url"} on the other path.
+     */
     static final String LEGACY_ASYNC_ENDPOINT =
-            "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation";
+            "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis";
     static final String MULTIMODAL_ENDPOINT =
             "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
     static final String TASKS_ENDPOINT_PREFIX =

@@ -3,6 +3,7 @@ package vip.mate.llm.model;
 import lombok.Data;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -41,4 +42,35 @@ public class ProviderInfoDTO {
     private Long cooldownRemainingMs;
     /** RFC-074: whether the user has explicitly enabled this provider. False = lives in the catalog drawer only. */
     private Boolean enabled;
+
+    // Issue #81: derived fields powering the chat-console liveness-aware popup.
+    // All six are computed from existing columns; none are persisted.
+
+    /** Credential status: CONFIGURED / MISSING / NOT_REQUIRED / OAUTH_PENDING. */
+    private String authStatus;
+
+    /** Base URL completeness: null when not applicable; true/false when applicable. */
+    private Boolean baseUrlComplete;
+
+    /** Comma-joined missing field names ("apiKey", "baseUrl"); empty when nothing missing. */
+    private String missingFields;
+
+    /**
+     * Machine-readable next-step key. Switches the chat popup's primary button text + handler.
+     * Values: fill_base_url / fill_api_key / start_oauth / configure_required_fields /
+     *         test_connection / pull_model / wait_cooldown / reprobe / none.
+     */
+    private String suggestedAction;
+
+    /**
+     * i18n key for an actionable hint (e.g. "provider.hint.llamacppBaseUrlExample").
+     * Frontend renders via t(key, args). Null when no hint applies.
+     */
+    private String suggestedActionHintKey;
+
+    /**
+     * Template parameters for {@link #suggestedActionHintKey}. Frontend passes
+     * this directly to vue-i18n. Empty map means no parameters.
+     */
+    private Map<String, Object> suggestedActionHintArgs = new LinkedHashMap<>();
 }

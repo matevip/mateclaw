@@ -30,7 +30,7 @@ import java.util.Set;
  * DashScope image provider — routes per-model between two transports:
  *
  * <ul>
- *   <li><b>Async legacy</b> ({@code services/aigc/image-generation/generation})
+ *   <li><b>Async legacy</b> ({@code services/aigc/text2image/image-synthesis})
  *       for the wanx 2.0/2.1, wan 2.2/2.5 turbo/plus families. Submit returns a
  *       task id; the caller polls {@code /api/v1/tasks/{id}} until
  *       SUCCEEDED.</li>
@@ -174,8 +174,11 @@ public class DashScopeImageProvider implements ImageGenerationProvider {
      * editing but names a model that doesn't support edits (or names nothing),
      * fall back to {@link DashScopeImageModels#DEFAULT_EDIT_MODEL} so the call
      * doesn't silently degrade to a text-only generation.
+     *
+     * <p>Package-private for direct testing of the routing decision (the
+     * surrounding submit() goes over HTTP and is not a unit-test surface).
      */
-    private ImageModelSpec resolveSpec(ImageGenerationRequest request) {
+    ImageModelSpec resolveSpec(ImageGenerationRequest request) {
         boolean wantsEdit = request.getInputImages() != null && !request.getInputImages().isEmpty();
         String requested = request.getModel();
         ImageModelSpec spec = DashScopeImageModels.get(requested);

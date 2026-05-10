@@ -623,5 +623,27 @@
                 </pluginRepository>
             </pluginRepositories>
         </profile>
+
+        <!--
+          Profile: focused test run for image / video generation features.
+          Activate with `mvn test -P media-gen` (or `mvn verify -P media-gen`).
+          Limits surefire to JUnit 5 tests carrying @Tag("media-gen") so the
+          full ~50-min suite is skipped when iterating on this surface.
+          Add a tag to a new test with @Tag("media-gen") to opt it in.
+        -->
+        <profile>
+            <id>media-gen</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <groups>media-gen</groups>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 </project>

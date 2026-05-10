@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import vip.mate.channel.AsyncTaskMediaDispatcher;
 import vip.mate.system.model.SystemSettingsDTO;
 import vip.mate.system.service.SystemSettingService;
 import vip.mate.task.AsyncTaskService;
@@ -34,6 +35,12 @@ public class VideoGenerationService {
     private final ConversationService conversationService;
     private final VideoFileDownloader fileDownloader;
     private final ObjectMapper objectMapper;
+    /**
+     * Forward async-task completion to the conversation's bound IM channel
+     * adapter so WeCom / DingTalk / Feishu / etc. users actually receive the
+     * generated video as a native attachment. SSE remains the Web path.
+     */
+    private final AsyncTaskMediaDispatcher asyncTaskMediaDispatcher;
 
     private static final String TASK_TYPE = "video_generation";
 
@@ -176,18 +183,32 @@ public class VideoGenerationService {
                 String servingUrl = fileDownloader.toServingUrl(task.getConversationId(), localPath);
 
                 // 保存 assistant 消息（含 video content part）
-                MessageContentPart videoPart = MessageContentPart.video(null, localPath.getFileName().toString());
+                String videoFileName = localPath.getFileName().toString();
+                MessageContentPart videoPart = MessageContentPart.video(null, videoFileName);
                 videoPart.setFileUrl(servingUrl);
+                videoPart.setStoredName(videoFileName);
                 videoPart.setContentType("video/mp4");
+                // Set absolute disk path so IM adapters can read bytes locally
+                // instead of round-tripping through /api/v1/chat/files (auth).
+                videoPart.setPath(localPath.toAbsolutePath().toString());
+                try {
+                    videoPart.setFileSize(java.nio.file.Files.size(localPath));
+                } catch (Exception ignored) { /* best-effort */ }
 
+                List<MessageContentPart> parts = List.of(videoPart);
                 conversationService.saveMessage(
                         task.getConversationId(), "assistant",
                         "视频已生成完毕",
-                        List.of(videoPart), "completed");
+                        parts, "completed");
 
                 // SSE 广播
                 asyncTaskService.broadcastTaskEvent(task, "async_task_completed",
                         true, servingUrl, null);
+
+                // Forward to the conversation's bound IM channel adapter so
+                // WeCom / DingTalk / Feishu etc. users receive the video as a
+                // native attachment (the SSE broadcast above only reaches Web).
+                asyncTaskMediaDispatcher.forwardToImIfBound(task.getConversationId(), parts);
 
                 log.info("[VideoGen] Task {} completed, video saved: {}", task.getTaskId(), servingUrl);
             } catch (Exception e) {

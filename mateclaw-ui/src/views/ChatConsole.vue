@@ -174,18 +174,18 @@
           <div v-else class="no-agent-hint">{{ $t('chat.selectAgent') }}</div>
         </div>
         <div class="chat-header-right">
-          <!-- Model selector -->
+          <!-- Model selector — Issue #81 v2 R3: always pass full providers + show-all-states
+               so unhealthy rows render as dimmed entries with status chips and a Fix
+               button instead of disappearing entirely. -->
           <ModelSelector
-            v-if="eligibleModels.length > 0"
-            :providers="availableProviders"
+            :providers="providers"
             :active-value="activeModelValue"
             :active-label="activeModelLabel"
             :saving="modelSaving"
+            :show-all-states="true"
             @select="selectModel"
+            @navigate-fix="onModelSelectorFix"
           />
-          <button v-else class="header-btn" @click="goToModelSettings" :title="$t('chat.configModel')">
-            <el-icon><Setting /></el-icon>
-          </button>
           <!-- Overflow menu -->
           <div class="header-overflow-wrap">
             <button class="header-btn" @click="headerMenuOpen = !headerMenuOpen" :title="$t('common.more') || 'More'">
@@ -218,24 +218,45 @@
         :loading="isGenerating"
         :assistant-icon="currentAgent?.icon || '🤖'"
         :user-icon="userInitial"
-        :title="showModelPrompt ? modelPromptTitle : $t('app.title')"
-        :subtitle="showModelPrompt ? modelPromptDesc : $t('chat.subtitle')"
-        :suggestions="showModelPrompt ? [] : suggestions"
+        :title="blockingPrompt ? modelPromptText.title : $t('app.title')"
+        :subtitle="blockingPrompt ? modelPromptText.desc : $t('chat.subtitle')"
+        :suggestions="blockingPrompt ? [] : suggestions"
         @regenerate="handleRegenerate"
         @suggestion-click="sendSuggestion"
         @toggle-thinking="handleToggleThinking"
         @approve="handleApprove"
         @deny="handleDeny"
       >
-        <!-- 自定义模型提示空状态 -->
-        <template v-if="showModelPrompt" #empty>
+        <!-- Issue #81 v2 R2: blocking-only popup. Recoverable cases use the
+             non-blocking <RecoverableModelBanner> below instead. -->
+        <template v-if="blockingPrompt" #empty>
           <div class="model-prompt">
-            <div class="model-prompt-title">{{ modelPromptTitle }}</div>
-            <div class="model-prompt-desc">{{ modelPromptDesc }}</div>
-            <button class="btn-primary" @click="goToModelSettings">{{ $t('chat.goToModelSettings') }}</button>
+            <div class="model-prompt-title">{{ modelPromptText.title }}</div>
+            <div class="model-prompt-desc">{{ modelPromptText.desc }}</div>
+            <div class="model-prompt-actions">
+              <button class="btn-primary" @click="handlePrimaryAction">
+                {{ primaryActionLabel }}
+              </button>
+              <button
+                v-if="bestSwitchTarget"
+                class="btn-secondary"
+                @click="switchToBestTarget"
+              >
+                {{ $t('chat.promptAction.switchToModel', { name: bestSwitchTarget.label }) }}
+              </button>
+            </div>
           </div>
         </template>
       </MessageList>
+
+      <!-- Issue #81: non-blocking banner — active provider is unhealthy but the
+           backend fallback chain has a LIVE provider to take over. -->
+      <RecoverableModelBanner
+        v-if="recoverablePrompt && activeProvider && bestFallbackName"
+        :provider-name="activeProvider.name"
+        :fallback-name="bestFallbackName"
+        @dismiss="recoverableDismissed = true"
+      />
 
       <!-- Cron job in-flight placeholder — visible while T2 hasn't committed
            the assistant message yet. Populated by pollActivity → /cron-jobs/active-runs. -->
@@ -254,7 +275,7 @@
 
       <!-- 流式处理 Loading 栏（消息和输入框之间） -->
       <StreamLoadingBar
-        :is-loading="isGenerating && !showModelPrompt"
+        :is-loading="isGenerating && !blockingPrompt"
         :tool-count="toolCallCount"
         :completion-tokens="currentGeneratingTokens"
         :prompt-tokens="currentPromptTokens"
@@ -265,12 +286,19 @@
         :lifecycle-stage="lifecycleStage"
       />
 
+      <!-- Multimodal routing hint: shown when pending attachments require a
+           modality the primary model lacks. -->
+      <MultimodalRoutingHint
+        :attachments="pendingAttachments"
+        :capabilities="agentCapabilities"
+      />
+
       <!-- 使用组件化的 ChatInput -->
       <ChatInput
         ref="chatInputRef"
         v-model="inputText"
         :loading="isGenerating && !hasPendingApproval"
-        :disabled="showModelPrompt || !currentAgent"
+        :disabled="blockingPrompt || !currentAgent"
         :placeholder="$t('chat.messagePlaceholder')"
         :hint="currentRuntimeModel"
         :attachments="pendingAttachments"
@@ -325,10 +353,12 @@ import type { Conversation, Agent, ModelConfig, ProviderInfo, ActiveModelsInfo, 
 
 // 导入组件化组件
 import MessageList from '@/components/chat/MessageList.vue'
+import RecoverableModelBanner from '@/components/chat/RecoverableModelBanner.vue'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import { parsePrompt, deriveTagline } from '@/utils/agentPromptProfile'
 import { agentIconColor } from '@/utils/agentIconColor'
 import ChatInput from '@/components/chat/ChatInput.vue'
+import MultimodalRoutingHint from '@/components/chat/MultimodalRoutingHint.vue'
 import StreamLoadingBar from '@/components/chat/StreamLoadingBar.vue'
 import TalkMode from '@/components/chat/TalkMode.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
@@ -403,12 +433,23 @@ const selectedAgentId = ref<string | number>('')
 const currentConversationId = ref<string>('')
 const inputText = ref('')
 const modelSaving = ref(false)
-const showModelPrompt = ref(false)
+// Issue #81 v2 R2: split the single showModelPrompt boolean into two flags so
+// the chat surface can either hard-block (blockingPrompt) or warn but let the
+// backend fallback chain take over (recoverablePrompt). Driven by
+// recomputePromptFlags() — see the watcher below.
+const blockingPrompt = ref(false)
+const recoverablePrompt = ref(false)
+const recoverableDismissed = ref(false)
 const defaultModel = ref<ModelConfig | null>(null)
 const providers = ref<ProviderInfo[]>([])
 const activeModels = ref<ActiveModelsInfo | null>(null)
 const pendingAttachments = ref<ChatAttachment[]>([])
 const uploadingAttachment = ref(false)
+
+// Per-agent capability snapshot for the multimodal routing hint above the
+// input box. Refetched whenever the active agent changes; cached locally to
+// avoid an extra request per attachment change.
+const agentCapabilities = ref<import('@/types').AgentCapabilities | null>(null)
 
 // 思考模式：只有两个状态 — 开或关
 const thinkingEnabled = ref(localStorage.getItem('mateclaw_thinking') !== 'off')
@@ -812,25 +853,106 @@ const activeProvider = computed(() => {
   return providerId ? providers.value.find((provider) => provider.id === providerId) || null : null
 })
 
-const modelPromptTitle = computed(() => {
-  if (!activeModels.value?.activeLlm?.providerId || !activeModels.value?.activeLlm?.model) {
-    return t('chat.configModelFirst')
+// Issue #81: liveness-aware popup state machine. modelPromptKind picks one of
+// six branches; modelPromptText derives title + desc; primaryActionLabel +
+// handlePrimaryAction map to the suggestedAction the backend computed.
+type ModelPromptKind = 'no-active' | 'unconfigured' | 'removed' | 'cooldown' | 'unprobed' | 'no-models'
+
+const modelPromptKind = computed<ModelPromptKind>(() => {
+  if (!activeModels.value?.activeLlm?.providerId) return 'no-active'
+  const p = activeProvider.value
+  if (!p) return 'no-active'
+  switch (p.liveness) {
+    case 'UNCONFIGURED': return 'unconfigured'
+    case 'REMOVED':      return 'removed'
+    case 'COOLDOWN':     return 'cooldown'
+    case 'UNPROBED':     return 'unprobed'
+    case 'LIVE':         return 'no-models'
+    default:             return 'no-active'
   }
-  if (activeProvider.value && !activeProvider.value.available) {
-    return t('chat.modelUnavailable')
-  }
-  return t('chat.configModelFirst')
 })
 
-const modelPromptDesc = computed(() => {
-  if (!activeModels.value?.activeLlm?.providerId || !activeModels.value?.activeLlm?.model) {
-    return t('chat.noActiveModel')
-  }
-  if (activeProvider.value && !activeProvider.value.available) {
-    return t('chat.providerNotReady', { name: activeProvider.value.name })
-  }
-  return t('chat.noAvailableModel')
+const hintText = computed(() => {
+  const p = activeProvider.value
+  if (!p?.suggestedActionHintKey) return ''
+  return t(p.suggestedActionHintKey, (p.suggestedActionHintArgs || {}) as Record<string, unknown>)
 })
+
+const modelPromptText = computed<{ title: string; desc: string }>(() => {
+  const p = activeProvider.value
+  switch (modelPromptKind.value) {
+    case 'no-active':
+      return { title: t('chat.prompt.noActive.title'), desc: t('chat.prompt.noActive.desc') }
+    case 'unconfigured':
+      return {
+        title: t('chat.prompt.unconfigured.title', { name: p?.name || '' }),
+        desc:  t('chat.prompt.unconfigured.desc', { fields: p?.missingFields || '', hint: hintText.value }),
+      }
+    case 'removed':
+      return {
+        title: t('chat.prompt.removed.title', { name: p?.name || '' }),
+        desc:  p?.unavailableReason || t('chat.prompt.removed.descFallback'),
+      }
+    case 'cooldown':
+      return {
+        title: t('chat.prompt.cooldown.title', { name: p?.name || '' }),
+        desc:  t('chat.prompt.cooldown.desc', {
+          seconds: Math.max(1, Math.ceil((p?.cooldownRemainingMs || 0) / 1000)),
+        }),
+      }
+    case 'unprobed':
+      return { title: t('chat.prompt.unprobed.title'), desc: t('chat.prompt.unprobed.desc') }
+    case 'no-models':
+      return {
+        title: t('chat.prompt.noModels.title', { name: p?.name || '' }),
+        desc:  t('chat.prompt.noModels.desc'),
+      }
+  }
+})
+
+const primaryActionLabel = computed(() => {
+  const action = activeProvider.value?.suggestedAction || 'configure_required_fields'
+  switch (action) {
+    case 'fill_base_url':              return t('chat.promptAction.fillBaseUrl')
+    case 'fill_api_key':               return t('chat.promptAction.fillApiKey')
+    case 'start_oauth':                return t('chat.promptAction.startOAuth')
+    case 'test_connection':            return t('chat.promptAction.testConnection')
+    case 'pull_model':                 return t('chat.promptAction.pullModel')
+    case 'wait_cooldown':              return t('chat.promptAction.waitCooldown')
+    case 'reprobe':                    return t('chat.promptAction.reprobe')
+    case 'configure_required_fields':
+    default:                           return t('chat.goToModelSettings')
+  }
+})
+
+function handlePrimaryAction() {
+  goToModelSettings(activeProvider.value?.id)
+}
+
+/** First eligible model that is NOT the active one — what the secondary button switches to. */
+const bestSwitchTarget = computed<{ value: string; label: string } | null>(() => {
+  for (const m of eligibleModels.value) {
+    if (m.value !== activeModelValue.value) return m
+  }
+  return null
+})
+
+/** First LIVE provider name — used by RecoverableModelBanner. */
+const bestFallbackName = computed<string>(() => {
+  const target = bestSwitchTarget.value
+  if (!target) return ''
+  const [providerId] = target.value.split('::')
+  return providers.value.find(p => p.id === providerId)?.name || ''
+})
+
+function switchToBestTarget() {
+  const t = bestSwitchTarget.value
+  if (t) selectModel(t.value)
+}
+
+function onModelSelectorFix(provider: { id: string }) {
+  goToModelSettings(provider.id)
+}
 
 const availableProviders = computed(() =>
   providers.value.filter((p) => p.available && [...(p.models || []), ...(p.extraModels || [])].length > 0)
@@ -1025,6 +1147,19 @@ watch([selectedAgentId, currentConversationId], () => {
   syncRouteState()
 })
 
+// Refetch agent capabilities (modalities + sidecar config) on agent change so
+// the multimodal routing hint above the input box can react synchronously when
+// the user attaches an image / video.
+watch(selectedAgentId, async (id) => {
+  if (!id) { agentCapabilities.value = null; return }
+  try {
+    const res: any = await agentApi.getCapabilities(id)
+    agentCapabilities.value = res.data || null
+  } catch {
+    agentCapabilities.value = null
+  }
+}, { immediate: true })
+
 // ============ 方法 ============
 async function loadAgents() {
   try {
@@ -1049,18 +1184,52 @@ async function loadModelState() {
     defaultModel.value = defaultRes.data || null
     providers.value = providersRes.data || []
     activeModels.value = activeRes.data || null
-    const providerId = activeModels.value?.activeLlm?.providerId
-    const activeProviderInfo = providerId
-      ? providers.value.find((provider) => provider.id === providerId)
-      : null
-    showModelPrompt.value = !activeModels.value?.activeLlm?.providerId
-      || !activeModels.value?.activeLlm?.model
-      || (Boolean(providerId) && !activeProviderInfo?.available)
+    recomputePromptFlags()
   } catch (e) {
     ElMessage.error(t('chat.loadModelFailed'))
-    showModelPrompt.value = true
+    blockingPrompt.value = true
+    recoverablePrompt.value = false
   }
 }
+
+/**
+ * Issue #81 v2 R2: derive blocking / recoverable prompt flags from the current
+ * providers + active model snapshot. Called from loadModelState after every
+ * /providers refresh, and from a watcher when the user switches model. The
+ * runtime fallback chain in NodeStreamingChatHelper picks the first LIVE
+ * provider regardless of which one is "active", so as long as ANY provider is
+ * LIVE we should NOT block — we just hint with a banner.
+ */
+function recomputePromptFlags() {
+  const active = activeModels.value?.activeLlm
+  if (!active?.providerId || !active?.model) {
+    blockingPrompt.value = true
+    recoverablePrompt.value = false
+    recoverableDismissed.value = false
+    return
+  }
+  const ap = providers.value.find(p => p.id === active.providerId) || null
+  const apHasModels = ap
+    ? ((ap.models?.length || 0) + (ap.extraModels?.length || 0)) > 0
+    : false
+  const activeUsable = ap?.liveness === 'LIVE' && apHasModels
+  if (activeUsable) {
+    blockingPrompt.value = false
+    recoverablePrompt.value = false
+    recoverableDismissed.value = false
+    return
+  }
+  const anyUsable = providers.value.some(p =>
+    p.liveness === 'LIVE'
+    && ((p.models?.length || 0) + (p.extraModels?.length || 0)) > 0)
+  blockingPrompt.value = !anyUsable
+  recoverablePrompt.value = anyUsable && !recoverableDismissed.value
+}
+
+// Issue #81 v2 R2: keep blocking/recoverable in sync with the providers list
+// and the active model selection without forcing every mutation site to call
+// recomputePromptFlags() manually.
+watch([providers, activeModels], recomputePromptFlags, { deep: true })
 
 async function loadConversations() {
   try {
@@ -1315,8 +1484,12 @@ async function clearMessages() {
 
 // onModelChange removed — replaced by selectModel()
 
-function goToModelSettings() {
-  router.push('/settings/models')
+function goToModelSettings(providerId?: string) {
+  // Issue #81: when called with a providerId (e.g. from the unhealthy popup or
+  // ModelSelector's Fix button), pass it as a query param so a follow-up PR can
+  // scroll/focus the right card on the settings page. Today the consumer just
+  // ignores it; harmless meanwhile.
+  router.push({ path: '/settings/models', query: providerId ? { focus: providerId } : {} })
 }
 
 // ============ 计算属性：是否有待审批 ============
@@ -1370,7 +1543,7 @@ async function handleSendMessage(content: string) {
   // 允许在等待审批时发送审批命令
   const isApprovalCommand = /^\/(approve|deny)$/i.test(content.trim())
 
-  if ((!content && pendingAttachments.value.length === 0) || !selectedAgentId.value || showModelPrompt.value) return
+  if ((!content && pendingAttachments.value.length === 0) || !selectedAgentId.value || blockingPrompt.value) return
   // 不再阻止运行中发送 — useChat 会自动走 interrupt/queue 路径
 
   // 拦截 /approve 和 /deny 命令 —— 通过 SSE 流发送（和普通消息相同通道）
@@ -1421,12 +1594,15 @@ async function handleSendMessage(content: string) {
     currentConversationId.value = `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   }
 
+  // Issue #81 v2 R2: only abort when there is genuinely no usable provider.
+  // If the active provider is unhealthy but another is LIVE, let the request
+  // through — NodeStreamingChatHelper's fallback walker will pick it up and
+  // emit a "warning" SSE delta which the input handler surfaces as a toast.
   if (!activeModels.value?.activeLlm?.providerId || !activeModels.value?.activeLlm?.model) {
-    showModelPrompt.value = true
+    blockingPrompt.value = true
     return
   }
-  if (!activeProvider.value?.available) {
-    showModelPrompt.value = true
+  if (blockingPrompt.value) {
     return
   }
 
@@ -1624,6 +1800,8 @@ function normalizeMessage(raw: Message): Message {
   // 保留后端返回的 token 字段（MessageVO 新增）
   if ((raw as any).promptTokens) msg.promptTokens = (raw as any).promptTokens
   if ((raw as any).completionTokens) msg.completionTokens = (raw as any).completionTokens
+  if ((raw as any).runtimeModel) msg.runtimeModel = (raw as any).runtimeModel
+  if ((raw as any).runtimeProvider) msg.runtimeProvider = (raw as any).runtimeProvider
 
   if (msg.contentParts.length === 0 && msg.content) {
     if (msg.role === 'assistant') {
@@ -2521,6 +2699,30 @@ function handleCodeCopy(e: MouseEvent) {
 
 .btn-primary:hover {
   background: var(--mc-primary-hover);
+}
+
+/* Issue #81: side-by-side primary + secondary actions in the model prompt. */
+.model-prompt-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.btn-secondary {
+  padding: 8px 14px;
+  background: transparent;
+  color: var(--mc-text-primary);
+  border: 1px solid var(--mc-border);
+  border-radius: 12px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.btn-secondary:hover {
+  background: var(--mc-panel-raised);
+  border-color: var(--mc-primary);
 }
 
 /* ===== 移动端元素（桌面端隐藏） ===== */

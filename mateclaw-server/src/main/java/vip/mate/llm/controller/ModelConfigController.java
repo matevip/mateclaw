@@ -204,10 +204,12 @@ public class ModelConfigController {
 
     // ==================== Embedding 模型管理 ====================
 
-    @Operation(summary = "按类型筛选模型（chat / embedding）")
+    @Operation(summary = "按类型筛选模型（chat / embedding），可选 modality 过滤")
     @GetMapping("/by-type")
-    public R<List<ModelConfigEntity>> listByType(@RequestParam(defaultValue = "chat") String modelType) {
-        return R.ok(modelConfigService.listByType(modelType));
+    public R<List<ModelConfigEntity>> listByType(
+            @RequestParam(defaultValue = "chat") String modelType,
+            @RequestParam(required = false) String modality) {
+        return R.ok(modelConfigService.listByType(modelType, modality));
     }
 
     @Operation(summary = "测试 Embedding 模型连通性（嵌入一个短文本验证 API key）")

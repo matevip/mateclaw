@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import vip.mate.channel.AsyncTaskMediaDispatcher;
 import vip.mate.system.model.SystemSettingsDTO;
 import vip.mate.system.service.SystemSettingService;
 import vip.mate.task.AsyncTaskService;
@@ -44,6 +45,12 @@ public class Model3dGenerationService {
     private final ConversationService conversationService;
     private final Model3dFileDownloader fileDownloader;
     private final ObjectMapper objectMapper;
+    /**
+     * Forward async-task completion to the conversation's bound IM channel
+     * adapter so users on WeCom / DingTalk / Feishu / etc. receive the
+     * generated 3D model as a native attachment. SSE remains the Web path.
+     */
+    private final AsyncTaskMediaDispatcher asyncTaskMediaDispatcher;
 
     private static final String TASK_TYPE = "model3d_generation";
 
@@ -173,6 +180,7 @@ public class Model3dGenerationService {
             String fileName = localPath.getFileName().toString();
             MessageContentPart modelPart = MessageContentPart.model3d(null, fileName);
             modelPart.setFileUrl(servingUrl);
+            modelPart.setStoredName(fileName);
             // model/gltf-binary for .glb is the iana-registered MIME; downstream
             // <model-viewer> only cares about the URL, not the MIME header.
             if (fileName.endsWith(".glb")) {
@@ -184,17 +192,32 @@ public class Model3dGenerationService {
             } else if (fileName.endsWith(".usdz")) {
                 modelPart.setContentType("model/vnd.usdz+zip");
             }
+            // Set absolute disk path so IM adapters can read bytes locally
+            // instead of round-tripping through /api/v1/chat/files (auth).
+            modelPart.setPath(localPath.toAbsolutePath().toString());
+            try {
+                modelPart.setFileSize(java.nio.file.Files.size(localPath));
+            } catch (Exception ignored) { /* best-effort */ }
 
+            List<MessageContentPart> parts = List.of(modelPart);
             conversationService.saveMessage(
                     task.getConversationId(), "assistant",
                     "3D 模型已生成完毕",
-                    List.of(modelPart), "completed");
+                    parts, "completed");
 
             Map<String, Object> extra = new LinkedHashMap<>();
             extra.put("modelUrl", servingUrl);
             if (format != null) extra.put("format", format);
             asyncTaskService.broadcastTaskEventWithData(task, "async_task_completed",
                     true, extra, null);
+
+            // Forward to the conversation's bound IM channel adapter so
+            // WeCom / DingTalk / Feishu etc. users receive the model as a
+            // native attachment (the SSE broadcast above only reaches Web).
+            // Most IM channels will fall back to a markdown link via
+            // sendFallbackText if their adapter doesn't natively support
+            // model/* media — that's fine, the dispatcher logs and continues.
+            asyncTaskMediaDispatcher.forwardToImIfBound(task.getConversationId(), parts);
 
             log.info("[Model3dGen] Task {} completed, model saved: {}", task.getTaskId(), servingUrl);
         } catch (Exception e) {

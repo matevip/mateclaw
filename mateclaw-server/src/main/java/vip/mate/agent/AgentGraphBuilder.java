@@ -133,6 +133,8 @@ public class AgentGraphBuilder {
     private final vip.mate.llm.failover.AvailableProviderPool providerPool;
     /** PR-0b: DashScope-specific construction lives here now; we only call into it for the search-on log. */
     private final vip.mate.agent.chatmodel.AgentDashScopeChatModelBuilder dashScopeBuilder;
+    private final vip.mate.llm.routing.MultimodalRouter multimodalRouter;
+    private final vip.mate.llm.routing.MediaCaptionService mediaCaptionService;
 
     /**
      * Optional audit pipeline. Setter injection (rather than a constructor
@@ -293,6 +295,11 @@ public class AgentGraphBuilder {
         agent.modelCapabilities = modelCapabilityService.resolve(
                 runtimeModel.getModelName(), runtimeModel.getModalities());
         agent.runtimeProviderId = provider != null ? provider.getProviderId() : "";
+        agent.runtimeModelConfig = runtimeModel;
+        agent.toolSet = toolSet;
+        agent.multimodalRouter = multimodalRouter;
+        agent.mediaCaptionService = mediaCaptionService;
+        agent.userLocale = resolveLocale();
         agent.temperature = runtimeModel.getTemperature();
         agent.maxTokens = runtimeModel.getMaxTokens();
         agent.maxInputTokens = runtimeModel.getMaxInputTokens();
@@ -450,6 +457,8 @@ public class AgentGraphBuilder {
                     // 丢这个键，evidence_insufficient 检查会"静默地不生效" ——
                     // StateKeyRegistrationCoverageTest 专门兜这条。
                     .addStrategy(MateClawStateKeys.SOURCE_EVIDENCE_LEDGER, KeyStrategy.REPLACE)
+                    // Multimodal sidecar routing decision for the current turn.
+                    .addStrategy(MateClawStateKeys.ROUTING_DECISION, KeyStrategy.REPLACE)
                     .build();
 
             // Graph 拓扑：
@@ -636,6 +645,8 @@ public class AgentGraphBuilder {
                     // 丢这个键，evidence_insufficient 检查会"静默地不生效" ——
                     // StateKeyRegistrationCoverageTest 专门兜这条。
                     .addStrategy(MateClawStateKeys.SOURCE_EVIDENCE_LEDGER, KeyStrategy.REPLACE)
+                    // Multimodal sidecar routing decision for the current turn.
+                    .addStrategy(MateClawStateKeys.ROUTING_DECISION, KeyStrategy.REPLACE)
                     .build();
 
             StateGraph graph = new StateGraph("react-agent-v2", keyStrategyFactory)
@@ -699,6 +710,21 @@ public class AgentGraphBuilder {
      */
     public ChatModel buildRuntimeChatModel(ModelConfigEntity runtimeModel) {
         return buildRuntimeChatModel(runtimeModel, this.retryTemplate);
+    }
+
+    /**
+     * Resolve the user-facing locale used for sidecar caption prompts.
+     * Reads {@code language} from system settings; falls back to
+     * {@code zh-CN} so CN deployments stay consistent with the chat UI.
+     */
+    private java.util.Locale resolveLocale() {
+        try {
+            String lang = systemSettingService.getLanguage();
+            if (lang == null || lang.isBlank()) return java.util.Locale.SIMPLIFIED_CHINESE;
+            return java.util.Locale.forLanguageTag(lang);
+        } catch (Exception e) {
+            return java.util.Locale.SIMPLIFIED_CHINESE;
+        }
     }
 
     /**

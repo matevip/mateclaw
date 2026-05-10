@@ -50,6 +50,13 @@ MERGE INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, a
 KEY (provider_id)
 VALUES ('dashscope', 'DashScope', 'sk-', 'DashScopeChatModel', '', '', '{}', FALSE, FALSE, TRUE, TRUE, FALSE, TRUE, NOW(), NOW());
 
+-- DashScope OpenAI-compatible endpoint: shares the same sk- key as the
+-- dashscope provider but routes to compatible-mode/v1. Dot-versioned qwen
+-- families (qwen3.5-*, qwen3.6-*) are only callable here.
+MERGE INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
+KEY (provider_id)
+VALUES ('dashscope-compat', 'DashScope (OpenAI-compatible)', 'sk-', 'OpenAIChatModel', '', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '{}', FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, NOW(), NOW());
+
 MERGE INTO mate_model_provider (provider_id, name, api_key_prefix, chat_model, api_key, base_url, generate_kwargs, is_custom, is_local, support_model_discovery, support_connection_check, freeze_url, require_api_key, create_time, update_time)
 KEY (provider_id)
 VALUES ('modelscope', 'ModelScope', 'ms', 'OpenAIChatModel', '', 'https://api-inference.modelscope.cn/v1', '{}', FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, NOW(), NOW());
@@ -185,11 +192,18 @@ MERGE INTO mate_model_config (id, name, provider, model_name, description, tempe
 (1000000103, 'DeepSeek-V3.2', 'dashscope', 'deepseek-v3.2', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 -- Note: dotted Qwen3 versions (qwen3-plus / qwen3.5-plus / qwen3.5-max / qwen3.6-*) only ship on the
 -- OpenAI-compatible endpoint. Calling them through DashScope native (text-generation/generation)
--- returns 400 InvalidParameter — use the bailian-team OpenAI-compat provider instead.
+-- returns 400 InvalidParameter. They are registered under the dashscope-compat provider, which shares
+-- the same sk- key but routes to compatible-mode/v1.
 (1000000173, 'Qwen Long', 'dashscope', 'qwen-long', 'Long-context model with extended context support', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000174, 'Qwen Plus (latest)',  'dashscope', 'qwen-plus-latest',  'Latest stable snapshot of Qwen Plus — auto-updates as Bailian rolls new releases', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000175, 'Qwen Max (latest)',   'dashscope', 'qwen-max-latest',   'Latest stable snapshot of Qwen Max — strongest reasoning capability',              0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000176, 'Qwen Turbo (latest)', 'dashscope', 'qwen-turbo-latest', 'Latest stable snapshot of Qwen Turbo — low latency, high frequency',               0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+-- DashScope OpenAI-compat exclusive models (dot-versioned families) — share the same sk- key.
+-- Only the -plus variants are seeded; -max / -vl-max are visible in the model market but return
+-- 404 for general accounts. Users on a whitelist can add them via Settings → Models manually.
+(1000000601, 'Qwen3.6 Plus',  'dashscope-compat', 'qwen3.6-plus',  'Qwen3.6 Plus flagship — balanced reasoning and speed (compat-mode only)',     0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000603, 'Qwen3.5 Plus',  'dashscope-compat', 'qwen3.5-plus',  'Qwen3.5 Plus (compat-mode only)',                                              0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
+(1000000605, 'Qwen3 VL Plus', 'dashscope-compat', 'qwen3-vl-plus', 'Qwen3 vision-language Plus — accepts image / video input (compat-mode only)', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000104, 'Qwen3.5-122B-A10B', 'modelscope', 'Qwen/Qwen3.5-122B-A10B', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000105, 'GLM-5', 'modelscope', 'ZhipuAI/GLM-5', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),
 (1000000106, 'Qwen3.5 Plus', 'aliyun-codingplan', 'qwen3.5-plus', '', 0.7, 4096, 0.8, TRUE, TRUE, FALSE, NOW(), NOW(), 0),

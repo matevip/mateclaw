@@ -72,6 +72,8 @@ export function useProviderList() {
 
   const providerIconMap: Record<string, string> = {
     'dashscope': '/icons/providers/dashscope.png',
+    // dashscope-compat shares the same Aliyun DashScope brand — same logo.
+    'dashscope-compat': '/icons/providers/dashscope.png',
     'modelscope': '/icons/providers/modelscope.svg',
     'aliyun-codingplan': '/icons/providers/aliyun-codingplan.svg',
     'aliyun-codingplan-intl': '/icons/providers/aliyun-codingplan.svg',

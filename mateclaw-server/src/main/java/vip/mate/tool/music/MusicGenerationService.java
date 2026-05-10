@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import vip.mate.channel.AsyncTaskMediaDispatcher;
 import vip.mate.system.model.SystemSettingsDTO;
 import vip.mate.system.service.SystemSettingService;
 import vip.mate.task.AsyncTaskService;
@@ -48,6 +49,12 @@ public class MusicGenerationService {
     private final AsyncTaskService asyncTaskService;
     private final ConversationService conversationService;
     private final ObjectMapper objectMapper;
+    /**
+     * Forward async-task completion to the conversation's bound IM channel
+     * adapter so WeCom / DingTalk / Feishu / etc. users receive the generated
+     * audio as a native attachment. Web-class channels keep using SSE only.
+     */
+    private final AsyncTaskMediaDispatcher asyncTaskMediaDispatcher;
 
     private static final Path UPLOAD_ROOT = Paths.get("data", "chat-uploads");
     private static final String TASK_TYPE = "music_generation";
@@ -130,9 +137,10 @@ public class MusicGenerationService {
                 return;
             }
 
-            String audioUrl = persistAudio(conversationId, task.getTaskId(), result);
+            PersistedAudio persisted = persistAudio(conversationId, task.getTaskId(), result);
+            String audioUrl = persisted.servingUrl();
 
-            saveAssistantMessage(conversationId, audioUrl, result);
+            List<MessageContentPart> parts = saveAssistantMessage(conversationId, persisted, result);
 
             ObjectNode resultJson = objectMapper.createObjectNode();
             resultJson.put("audioUrl", audioUrl);
@@ -152,6 +160,11 @@ public class MusicGenerationService {
             asyncTaskService.broadcastTaskEventWithData(task, "async_task_completed",
                     true, extra, null);
 
+            // Forward to the conversation's bound IM channel adapter so
+            // WeCom / DingTalk / Feishu etc. users receive the audio as a
+            // native attachment (the SSE broadcast above only reaches Web).
+            asyncTaskMediaDispatcher.forwardToImIfBound(conversationId, parts);
+
             log.info("[Music] Task {} succeeded, audio at {}", task.getTaskId(), audioUrl);
         } catch (Exception e) {
             log.error("[Music] Task {} worker failed: {}", task.getTaskId(), e.getMessage(), e);
@@ -167,29 +180,48 @@ public class MusicGenerationService {
         }
     }
 
-    private String persistAudio(String conversationId, String taskId,
-                                  MusicGenerationResult result) throws IOException {
+    /**
+     * Stash audio bytes on disk and surface both the absolute local path and
+     * the browser-servable URL so callers can hand both to the
+     * {@link MessageContentPart}. The local path is what IM channel adapters
+     * read directly (faster, no auth round-trip); the serving URL is what
+     * the Web bubble renders.
+     */
+    private record PersistedAudio(Path localPath, String servingUrl, String fileName) {}
+
+    private PersistedAudio persistAudio(String conversationId, String taskId,
+                                         MusicGenerationResult result) throws IOException {
         Path dir = UPLOAD_ROOT.resolve(conversationId);
         Files.createDirectories(dir);
         String fileName = "music_" + taskId + "." + result.getFormat();
         Path filePath = dir.resolve(fileName);
         Files.write(filePath, result.getAudioData());
-        return "/api/v1/chat/files/" + conversationId + "/" + fileName;
+        String servingUrl = "/api/v1/chat/files/" + conversationId + "/" + fileName;
+        return new PersistedAudio(filePath, servingUrl, fileName);
     }
 
-    private void saveAssistantMessage(String conversationId, String audioUrl,
-                                        MusicGenerationResult result) {
-        MessageContentPart audioPart = MessageContentPart.audio(null,
-                audioUrl.substring(audioUrl.lastIndexOf('/') + 1));
-        audioPart.setFileUrl(audioUrl);
+    private List<MessageContentPart> saveAssistantMessage(String conversationId,
+                                                            PersistedAudio persisted,
+                                                            MusicGenerationResult result) {
+        MessageContentPart audioPart = MessageContentPart.audio(null, persisted.fileName());
+        audioPart.setFileUrl(persisted.servingUrl());
+        audioPart.setStoredName(persisted.fileName());
         audioPart.setContentType(result.getContentType());
+        // Set absolute disk path so IM adapters can read bytes locally
+        // instead of round-tripping through /api/v1/chat/files (auth).
+        audioPart.setPath(persisted.localPath().toAbsolutePath().toString());
+        try {
+            audioPart.setFileSize(Files.size(persisted.localPath()));
+        } catch (Exception ignored) { /* best-effort */ }
 
         StringBuilder content = new StringBuilder("音乐生成完成");
         if (result.getLyrics() != null && !result.getLyrics().isBlank()) {
             content.append("\n\n歌词:\n").append(result.getLyrics());
         }
+        List<MessageContentPart> parts = List.of(audioPart);
         conversationService.saveMessage(conversationId, "assistant",
-                content.toString(), List.of(audioPart), "completed");
+                content.toString(), parts, "completed");
+        return parts;
     }
 
     private MusicGenerationResult generateWithFallback(MusicGenerationRequest request,
