@@ -31,6 +31,26 @@ services:
       timeout: 5s
       retries: 5
 
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:16
+    container_name: mateclaw-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PGSQL_DB_NAME:-mateclaw}
+      POSTGRES_USER: ${PGSQL_DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${PGSQL_DB_PASSWORD:?PGSQL_DB_PASSWORD is required in .env}
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGSQL_DB_USERNAME:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # SearXNG 搜索引擎（keyless 搜索 provider）
   #
   # The custom image at docker/searxng/ bakes in settings.yml so the sidecar
@@ -100,4 +120,5 @@ services:
 
 volumes:
   mysql_data:
+  postgres_data:
   server_data:

@@ -140,6 +140,13 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- ===== PostgreSQL 驱动（生产环境） ===== -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- ===== MyBatis Plus（不引入 JPA，避免双 ORM 冲突） ===== -->
         <dependency>
             <groupId>com.baomidou</groupId>
@@ -404,6 +411,10 @@
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-mysql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
 
         <!-- ===== Spring Boot Test ===== -->
