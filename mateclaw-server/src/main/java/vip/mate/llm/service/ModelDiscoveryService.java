@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
@@ -13,6 +14,7 @@ import vip.mate.exception.MateClawException;
 import vip.mate.llm.model.*;
 import vip.mate.llm.oauth.OpenAIOAuthService;
 
+import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -413,7 +415,7 @@ public class ModelDiscoveryService {
         }
         String apiKey = provider.getApiKey();
 
-        RestClient client = RestClient.builder()
+        RestClient client = openAiCompatibleClientBuilder()
                 .baseUrl(baseUrl)
                 .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
                 .build();
@@ -623,7 +625,7 @@ public class ModelDiscoveryService {
         Map<String, Object> kwargs = modelProviderService.readProviderGenerateKwargs(provider);
         String completionsPath = resolveCompletionsPath(baseUrl, kwargs);
 
-        RestClient.RequestHeadersSpec<?> spec = RestClient.builder()
+        RestClient.RequestHeadersSpec<?> spec = openAiCompatibleClientBuilder()
                 .baseUrl(baseUrl)
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                 .build()
@@ -913,6 +915,23 @@ public class ModelDiscoveryService {
             normalized = normalized.substring(0, normalized.length() - 3);
         }
         return normalized;
+    }
+
+    /**
+     * Build a RestClient.Builder pinned to HTTP/1.1 for self-hosted OpenAI-compatible
+     * servers. Java's HttpClient defaults to HTTP/2 and over cleartext attempts an
+     * H2C upgrade ({@code Upgrade: h2c, Connection: Upgrade, HTTP2-Settings: ...}).
+     * Uvicorn-based stacks (vLLM, lmstudio, llama.cpp, ollama) reject the upgrade
+     * by closing the socket mid-handshake — surfacing as either
+     * "header parser received no bytes" on the chat path or, more subtly, a
+     * 400 with body=None on the test path because the body never makes it past
+     * the upgrade negotiation.
+     */
+    private RestClient.Builder openAiCompatibleClientBuilder() {
+        HttpClient httpClient = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .build();
+        return RestClient.builder().requestFactory(new JdkClientHttpRequestFactory(httpClient));
     }
 
     @SuppressWarnings("unchecked")
