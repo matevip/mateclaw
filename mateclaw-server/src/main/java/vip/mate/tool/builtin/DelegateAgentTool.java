@@ -71,12 +71,20 @@ public class DelegateAgentTool {
     static final int INHERITED_CONTEXT_MAX_MESSAGES = 10;
     static final int INHERITED_CONTEXT_PER_MESSAGE_CHARS = 1000;
     /**
-     * Per-child timeout — raised from 60 s to 120 s so that slow LLM models
-     * (kimi-code observed p99 ≈ 91 s) can complete before the parent gives up.
-     * The previous 60 s limit was structurally impossible to satisfy once any
-     * child called an LLM-backed tool.
+     * Wall-clock budget for one delegateParallel batch — applies to all children
+     * together, not per child (they run concurrently on virtual threads).
+     *
+     * <p>Configurable via {@code mateclaw.delegation.parallel-timeout-seconds};
+     * default 300 s (5 minutes). Earlier defaults (60 s → 120 s) were
+     * structurally too tight for thinking models: a single LLM turn against
+     * Kimi / GLM / MiniMax routinely takes 90–290 s when the child must
+     * produce multi-section structured output, so the parent gave up while the
+     * children were still happily streaming. 300 s matches the per-prompt
+     * ceiling used by ACP delegation and keeps headroom for one tool-call
+     * round trip on top of a single LLM turn.
      */
-    private static final int PARALLEL_TIMEOUT_SECONDS = 120;
+    @Value("${mateclaw.delegation.parallel-timeout-seconds:300}")
+    private int parallelTimeoutSeconds;
 
     /**
      * Default deny list for child agents. Names are matched against the
@@ -413,9 +421,9 @@ public class DelegateAgentTool {
         List<ChildResult> results = new ArrayList<>();
         try {
             CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0]))
-                    .get(PARALLEL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    .get(parallelTimeoutSeconds, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
-            log.warn("Parallel delegation timed out ({}s), collecting completed results", PARALLEL_TIMEOUT_SECONDS);
+            log.warn("Parallel delegation timed out ({}s), collecting completed results", parallelTimeoutSeconds);
         } catch (Exception e) {
             log.error("Parallel delegation error: {}", e.getMessage());
         }
@@ -444,7 +452,7 @@ public class DelegateAgentTool {
                 }
                 f.cancel(true);
                 // Use ofTimeout so outcome="timeout" is explicit and distinct from "error".
-                results.add(ChildResult.ofTimeout(idx, agentName, PARALLEL_TIMEOUT_SECONDS));
+                results.add(ChildResult.ofTimeout(idx, agentName, parallelTimeoutSeconds));
             }
         }
 
@@ -548,7 +556,7 @@ public class DelegateAgentTool {
                       .append("，trim 后 0 字符）。请勿将此误报为超时或失败——子 Agent 已正常完成，只是本次无输出。\n");
                 }
                 case "timeout" ->
-                    sb.append("❌ 超时（").append(PARALLEL_TIMEOUT_SECONDS).append("s 内未返回）\n");
+                    sb.append("❌ 超时（").append(parallelTimeoutSeconds).append("s 内未返回）\n");
                 default ->
                     sb.append("❌ 失败：").append(r.error).append("\n");
             }

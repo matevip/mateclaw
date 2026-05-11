@@ -171,6 +171,14 @@ mateclaw:
         enabled: true
         failure-threshold: 3
         cooldown-ms: 300000
+  # Multi-agent delegation (DelegateAgentTool).
+  delegation:
+    # Wall-clock budget for one delegateParallel batch (shared across all
+    # children — they run concurrently on virtual threads, so this is total
+    # latency, not per-child). 300 s headroom is needed because thinking
+    # models (Kimi / GLM / MiniMax) routinely take 90–290 s per LLM turn
+    # when the child must produce multi-section structured output.
+    parallel-timeout-seconds: 300
 
 # MateClaw Agent 配置
 mate:
