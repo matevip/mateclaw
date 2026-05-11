@@ -1611,6 +1611,7 @@ public class AgentGraphBuilder {
     private RestClient.Builder applyHttpTimeouts(RestClient.Builder builder, Integer readTimeoutOverride) {
         HttpClient httpClient = HttpClient.newBuilder()
                 .connectTimeout(vip.mate.llm.chatmodel.HttpTimeouts.CONNECT_TIMEOUT)
+                .version(HttpClient.Version.HTTP_1_1)
                 .build();
         JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
         rf.setReadTimeout(vip.mate.llm.chatmodel.HttpTimeouts.resolveReadTimeout(readTimeoutOverride));
@@ -1641,8 +1642,13 @@ public class AgentGraphBuilder {
      * {@link #applyHttpTimeouts(RestClient.Builder, Integer)}.
      */
     private WebClient.Builder applyHttpTimeoutsToWebClient(WebClient.Builder builder, Integer readTimeoutOverride) {
+        // Pin HTTP/1.1: many self-hosted OpenAI-compatible servers (vLLM, lmstudio,
+        // llama.cpp, ollama — all uvicorn/ASGI based) only speak HTTP/1.1 over
+        // cleartext and slam the socket on the JDK client's default H2C upgrade
+        // probe, surfacing as "header parser received no bytes" with no body sent.
         HttpClient httpClient = HttpClient.newBuilder()
                 .connectTimeout(vip.mate.llm.chatmodel.HttpTimeouts.CONNECT_TIMEOUT)
+                .version(HttpClient.Version.HTTP_1_1)
                 .build();
         org.springframework.http.client.reactive.JdkClientHttpConnector connector =
                 new org.springframework.http.client.reactive.JdkClientHttpConnector(httpClient);
