@@ -11,6 +11,7 @@ import vip.mate.wiki.model.WikiKnowledgeBaseEntity;
 import vip.mate.wiki.model.WikiTransformationEntity;
 import vip.mate.wiki.model.WikiTransformationRunEntity;
 import vip.mate.wiki.service.WikiKnowledgeBaseService;
+import vip.mate.wiki.service.WikiTransformationAggregator;
 import vip.mate.wiki.service.WikiTransformationExecutor;
 import vip.mate.wiki.service.WikiTransformationService;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
@@ -34,6 +35,7 @@ public class WikiTransformationController {
 
     private final WikiTransformationService transformationService;
     private final WikiTransformationExecutor executor;
+    private final WikiTransformationAggregator aggregator;
     private final WikiKnowledgeBaseService kbService;
 
     // ==================== Templates ====================
@@ -134,6 +136,36 @@ public class WikiTransformationController {
             executor.runOnPageAsync(t, pageId, "manual");
         }
         return R.ok();
+    }
+
+    @RequireWorkspaceRole("member")
+    @Operation(summary = "Aggregate all completed runs of a template into one KB-level synthesis page",
+               description = "Map-reduces across every completed run of the template within the given KB. "
+                           + "Upserts the merged document at slug '<template-name>-aggregate'.")
+    @PostMapping("/{id}/aggregate")
+    public R<Map<String, Object>> aggregate(@PathVariable Long id,
+                                             @RequestParam Long kbId,
+                                             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+        WikiTransformationEntity t = transformationService.getById(id);
+        if (t == null) return R.fail("Transformation not found");
+        verifyTemplateWorkspace(t, workspaceId);
+        verifyKBWorkspace(kbId, workspaceId != null ? workspaceId : 1L);
+
+        try {
+            WikiTransformationAggregator.Result res = aggregator.aggregate(t, kbId, "manual");
+            if (res.pageId() == null) {
+                return R.fail(res.title()); // when sources are empty we put the reason in title field
+            }
+            return R.ok(Map.of(
+                    "pageId", res.pageId(),
+                    "slug", res.slug(),
+                    "title", res.title(),
+                    "sourcesUsed", res.sourcesUsed(),
+                    "charsFed", res.charsFed(),
+                    "created", res.created()));
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return R.fail(e.getMessage());
+        }
     }
 
     // ==================== Runs ====================

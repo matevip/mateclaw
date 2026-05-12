@@ -72,6 +72,13 @@
             <span v-if="runningTemplateId === tpl.id">{{ t('wiki.transformations.running') }}</span>
             <span v-else>{{ t('wiki.transformations.runApply') }}</span>
           </button>
+          <button class="btn-secondary"
+                  :disabled="aggregatingTemplateId === tpl.id"
+                  @click="onAggregate(tpl)">
+            {{ aggregatingTemplateId === tpl.id
+                ? t('wiki.transformations.aggregating')
+                : t('wiki.transformations.aggregateBtn') }}
+          </button>
           <button class="btn-secondary" @click="openEdit(tpl)">{{ t('wiki.transformations.editBtn') }}</button>
           <button class="btn-secondary btn-danger" @click="onDelete(tpl)">{{ t('wiki.transformations.deleteBtn') }}</button>
         </div>
@@ -295,6 +302,7 @@ const saving = ref(false)
 const savingRunId = ref<number | null>(null)
 const cancellingRunId = ref<number | null>(null)
 const rerunningRunId = ref<number | null>(null)
+const aggregatingTemplateId = ref<number | null>(null)
 interface ModelOption { id: number; name: string; provider: string; modelName: string }
 const availableModels = ref<ModelOption[]>([])
 
@@ -511,6 +519,27 @@ async function onSaveRunAsPage(tpl: WikiTransformation, run: WikiTransformationR
     ElMessage.error(e?.message ?? t('wiki.transformations.saveAsPageFailed'))
   } finally {
     savingRunId.value = null
+  }
+}
+
+async function onAggregate(tpl: WikiTransformation) {
+  if (!store.currentKB) return
+  aggregatingTemplateId.value = tpl.id
+  try {
+    const resp: any = await wikiApi.aggregateTransformation(tpl.id, store.currentKB.id)
+    const payload = resp?.data ?? {}
+    if (payload && payload.pageId) {
+      ElMessage.success(`${t('wiki.transformations.aggregateDone')} · ${payload.sourcesUsed} sources`)
+      // Refresh the page list in the wiki store so the new aggregate page
+      // shows up in the sidebar without a manual reload.
+      try { await store.fetchPages(store.currentKB.id) } catch {}
+    } else {
+      ElMessage.info(t('wiki.transformations.aggregateNoRuns'))
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message ?? t('wiki.transformations.aggregateFailed'))
+  } finally {
+    aggregatingTemplateId.value = null
   }
 }
 

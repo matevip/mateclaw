@@ -68,6 +68,9 @@ public class WikiTool {
     @Autowired(required = false)
     private WikiTransformationExecutor transformationExecutor;
 
+    @Autowired(required = false)
+    private WikiTransformationAggregator transformationAggregator;
+
     public WikiTool(WikiPageService pageService,
                      WikiKnowledgeBaseService kbService,
                      WikiRawMaterialService rawService,
@@ -759,6 +762,55 @@ public class WikiTool {
         } catch (Exception e) {
             log.warn("[WikiTool] wiki_apply_transformation_to_page failed: {}", e.getMessage());
             return error("Apply failed: " + e.getMessage());
+        }
+    }
+
+    @Tool(description = """
+            Aggregate all completed runs of a transformation template across every
+            raw material in this KB into a single synthesis wiki page. Use this
+            after running a template against multiple sources to get a KB-level
+            unified document (e.g. one consolidated 题型库 across 5 different
+            mock exam PDFs, one customer-account brief across all sources for an
+            account). Idempotent — re-running upserts the same slug.
+            """)
+    public String wiki_aggregate_transformation(
+            @ToolParam(description = "Agent ID") Long agentId,
+            @ToolParam(description = "Transformation name (from wiki_list_transformations)") String name) {
+        if (name == null || name.isBlank()) return error("name is required");
+        Long kbId = resolveKbId(agentId);
+        if (kbId == null) return error("No wiki knowledge base found for this agent");
+        if (transformationService == null || transformationAggregator == null) {
+            return error("Transformations not available");
+        }
+
+        WikiKnowledgeBaseEntity kb = kbService.getById(kbId);
+        Long wsId = (kb == null || kb.getWorkspaceId() == null) ? 1L : kb.getWorkspaceId();
+
+        WikiTransformationEntity template = transformationService.findByName(kbId, wsId, name).orElse(null);
+        if (template == null) return error("Transformation not found: " + name);
+
+        try {
+            var res = transformationAggregator.aggregate(template, kbId, "agent_tool");
+            if (res.pageId() == null) {
+                return JSONUtil.createObj()
+                        .set("ok", true)
+                        .set("aggregated", false)
+                        .set("reason", res.title())
+                        .toString();
+            }
+            return JSONUtil.createObj()
+                    .set("ok", true)
+                    .set("aggregated", true)
+                    .set("pageSlug", res.slug())
+                    .set("pageTitle", res.title())
+                    .set("sourcesUsed", res.sourcesUsed())
+                    .set("created", res.created())
+                    .toString();
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return error(e.getMessage());
+        } catch (Exception e) {
+            log.warn("[WikiTool] wiki_aggregate_transformation failed: {}", e.getMessage());
+            return error("Aggregate failed: " + e.getMessage());
         }
     }
 

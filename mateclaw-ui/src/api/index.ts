@@ -707,6 +707,10 @@ export const wikiApi = {
     http.delete(`/wiki/transformations/${id}`),
   applyTransformation: (id: number, rawId: number, sync = true) =>
     http.post(`/wiki/transformations/${id}/apply`, { rawId }, { params: { sync } }),
+  applyTransformationToPage: (id: number, pageId: number, sync = true) =>
+    http.post(`/wiki/transformations/${id}/apply`, { pageId }, { params: { sync } }),
+  aggregateTransformation: (id: number, kbId: number) =>
+    http.post(`/wiki/transformations/${id}/aggregate`, undefined, { params: { kbId } }),
   listTransformationRuns: (params: { rawId?: number; kbId?: number; transformationId?: number; limit?: number }) =>
     http.get('/wiki/transformations/runs', { params }),
   getTransformationRun: (runId: number) =>
