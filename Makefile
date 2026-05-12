@@ -31,6 +31,12 @@ SEARXNG_GZ_IMAGE := ccr.ccs.tencentyun.com/connor-ai-lab/mateclaw-searxng:$(SEAR
 # SEARXNG_IMAGE := connor-mateclaw-registry.zeabur.app/mateclaw/searxng:$(IMAGE_TAG)
 # SEARXNG_TENCENT_IMAGE := ccr.ccs.tencentyun.com/connor-ai-lab/mateclaw/searxng:$(IMAGE_TAG)
 
+XRAY_IMAGE_TAG := 1.0.2-SNAPSHOT
+XRAY_GZ_IMAGE := ccr.ccs.tencentyun.com/connor-ai-lab/xray-client:$(XRAY_IMAGE_TAG)
+
+MIHOMO_IMAGE_TAG := 1.0.2-SNAPSHOT
+MIHOMO_IMAGE := ccr.ccs.tencentyun.com/connor-ai-lab/mihomo-client:$(MIHOMO_IMAGE_TAG)
+
 build:
 	docker buildx build \
 	  --platform linux/amd64 \
@@ -48,6 +54,24 @@ pull-searxng:
 build-searxng:
 	docker buildx build \
 	  --platform linux/amd64 \
+	  -f docker/searxng/Dockerfile \
 	  -t $(SEARXNG_SG_IMAGE) \
 	  -t $(SEARXNG_GZ_IMAGE) \
-	  --push .
+	  --push \
+	  --progress=plain .
+
+build-xray:
+	docker buildx build \
+	  --platform linux/amd64 \
+	  -f docker/xray/Dockerfile \
+	  -t $(XRAY_GZ_IMAGE) \
+	  --push \
+	  --progress=plain .
+
+build-mihomo:
+	docker buildx build \
+	  --platform linux/amd64 \
+	  -f docker/mihomo/Dockerfile \
+	  -t $(MIHOMO_IMAGE) \
+	  --push \
+	  --progress=plain .
