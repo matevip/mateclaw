@@ -64,6 +64,13 @@ public class WikiTransformationExecutor {
     @Autowired(required = false)
     private WikiEmbeddingService embeddingService;
 
+    /** Optional. When wired, the executor parses references like
+     *  {@code 第 5 题 / 第 14 页 / page 14} out of the output and writes
+     *  chunk-level citations binding the synthesis page back to the source
+     *  chunks the LLM said it relied on. */
+    @Autowired(required = false)
+    private WikiTransformationCitationExtractor citationExtractor;
+
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper =
             new com.fasterxml.jackson.databind.ObjectMapper();
 
@@ -494,6 +501,23 @@ public class WikiTransformationExecutor {
                 try { embeddingService.embedPage(pid); }
                 catch (Exception ee) {
                     log.warn("[WikiTransformation] post-save embedPage failed pageId={}: {}",
+                            pid, ee.getMessage());
+                }
+            });
+        }
+
+        // Fire-and-forget reverse-citation extraction. If the LLM cited
+        // specific page numbers / problem numbers, write precise chunk
+        // citations binding the synthesis page back to those source chunks.
+        if (citationExtractor != null) {
+            final Long pid = persisted.getId();
+            final Long kid = kbId;
+            final Long rid = raw.getId();
+            final String out = output;
+            WORKER.submit(() -> {
+                try { citationExtractor.extractAndApply(pid, kid, rid, out); }
+                catch (Exception ee) {
+                    log.warn("[WikiTransformation] post-save citation extract failed pageId={}: {}",
                             pid, ee.getMessage());
                 }
             });
