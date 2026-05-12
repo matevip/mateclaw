@@ -1,5 +1,6 @@
 package vip.mate.agent.graph;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -319,6 +320,8 @@ public class NodeStreamingChatHelper {
     private static final int MAX_RETRIES_RATE_LIMIT = 2;
     private static final long BACKOFF_BASE_MS = 3000;
     private static final long BACKOFF_CAP_MS = 60_000;
+
+    private static final ObjectMapper TOOL_ARG_JSON_MAPPER = new ObjectMapper();
 
     /**
      * 判断错误是否可重试（基于状态码/异常类型）
@@ -1841,9 +1844,47 @@ public class NodeStreamingChatHelper {
                     acc.id,
                     acc.type != null ? acc.type : "function",
                     acc.name,
-                    acc.arguments.toString()));
+                    sanitizeToolCallArguments(acc.name, acc.arguments.toString())));
         }
         return result;
+    }
+
+    /**
+     * Ensure {@code function.arguments} is always a well-formed JSON string.
+     * <p>
+     * Some providers (e.g. aliyun-codingplan) reject the entire follow-up
+     * request with HTTP 400 when the assistant message in history carries a
+     * tool call whose {@code arguments} is not parseable JSON. Streaming
+     * accumulation can produce such payloads when:
+     * <ul>
+     *   <li>The model emits zero-argument tool calls as {@code ""} instead
+     *       of {@code "{}"}.</li>
+     *   <li>The upstream stream is truncated mid-token, leaving a partial
+     *       JSON fragment like {@code "{\"a\":"}.</li>
+     * </ul>
+     * Both cases are normalized to {@code "{}"} so the chat-completions
+     * round-trip stays valid. Tool execution downstream still re-validates
+     * arguments and surfaces a per-tool error if the empty payload is wrong
+     * for that tool.
+     */
+    private static String sanitizeToolCallArguments(String toolName, String arguments) {
+        if (arguments == null || arguments.isBlank()) {
+            return "{}";
+        }
+        try {
+            TOOL_ARG_JSON_MAPPER.readTree(arguments);
+            return arguments;
+        } catch (Exception e) {
+            log.warn("Tool '{}' arguments are not valid JSON after stream aggregation "
+                            + "(len={}, head={}); replacing with empty object so the "
+                            + "follow-up chat-completions request stays well-formed. "
+                            + "Parse error: {}",
+                    toolName,
+                    arguments.length(),
+                    arguments.substring(0, Math.min(80, arguments.length())),
+                    e.getMessage());
+            return "{}";
+        }
     }
 
     private static class ToolCallAccumulator {
