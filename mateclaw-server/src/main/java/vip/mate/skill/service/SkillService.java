@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import vip.mate.exception.MateClawException;
 import vip.mate.skill.model.SkillEntity;
+import vip.mate.skill.repository.SkillFileMapper;
 import vip.mate.skill.repository.SkillMapper;
 import vip.mate.skill.runtime.SkillCatalogSort;
 import vip.mate.skill.runtime.SkillCatalogSorter;
@@ -42,6 +43,7 @@ import java.util.stream.Collectors;
 public class SkillService {
 
     private final SkillMapper skillMapper;
+    private final SkillFileMapper skillFileMapper;
     private final SkillWorkspaceManager workspaceManager;
     private final SkillWorkspaceProperties workspaceProperties;
     private final SkillSecretService skillSecretService;
@@ -440,6 +442,10 @@ public class SkillService {
                     "内置技能不可硬删除: " + skill.getName());
         }
         skillMapper.hardDeleteById(id); // bypass the logical-delete flag
+        int filesDropped = skillFileMapper.deleteBySkillId(id);
+        if (filesDropped > 0) {
+            log.info("Hard-deleted {} bundle file row(s) for skill {}", filesDropped, skill.getName());
+        }
         log.info("Hard-deleted skill (physical delete + purge): {}", skill.getName());
 
         // RFC-091 settings bridge — purge any per-skill secrets so a

@@ -42,6 +42,9 @@
           <div v-if="activeTab === 'hotCache'" class="tab-content tab-content--hot-cache">
             <HotCachePanel />
           </div>
+          <div v-if="activeTab === 'transformations'" class="tab-content">
+            <TransformationsPanel />
+          </div>
         </div>
       </div>
     </div>
@@ -57,6 +60,7 @@ import WikiPageViewer from './WikiPageViewer.vue'
 import WikiConfig from './WikiConfig.vue'
 import WikiGraphView from './WikiGraphView.vue'
 import HotCachePanel from './HotCachePanel.vue'
+import TransformationsPanel from './TransformationsPanel.vue'
 import WikiWorkspaceHeader from './WikiWorkspaceHeader.vue'
 import WikiPageSidebar from './WikiPageSidebar.vue'
 
@@ -72,6 +76,7 @@ const tabs = computed(() => [
   { key: 'pages', label: t('wiki.pages') },
   { key: 'graph', label: t('wiki.graph.tab') },
   { key: 'config', label: t('wiki.config') },
+  { key: 'transformations', label: t('wiki.transformations.tab') },
   { key: 'hotCache', label: t('wiki.hotCache.tab') },
 ])
 

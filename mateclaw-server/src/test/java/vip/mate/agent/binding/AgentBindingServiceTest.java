@@ -11,6 +11,7 @@ import org.springframework.test.context.TestPropertySource;
 import vip.mate.MateClawApplication;
 import vip.mate.agent.binding.model.AgentToolBinding;
 import vip.mate.agent.binding.service.AgentBindingService;
+import vip.mate.exception.MateClawException;
 
 import java.util.List;
 import java.util.Set;
@@ -47,8 +48,54 @@ class AgentBindingServiceTest {
 
     @BeforeEach
     void setUp() {
-        // 每个用例用独立 agent_id，互不干扰
+        // Each test gets its own agent id so concurrent runs don't clash.
         agentId = AGENT_ID_SEQ.getAndIncrement();
+        // Seed a real mate_agent row so AgentBindingService.requireSameWorkspace
+        // can resolve the agent's workspace during bindSkill/setSkillBindings.
+        // Tool-binding tests don't strictly need it but seeding is cheap and
+        // keeps every code path realistic.
+        seedAgent(agentId);
+    }
+
+    private void seedAgent(long id) {
+        jdbcTemplate.update(
+                "MERGE INTO mate_agent (id, name, agent_type, system_prompt, max_iterations, enabled, " +
+                        "workspace_id, create_time, update_time, deleted) " +
+                        "KEY(id) VALUES (?, ?, 'react', '', 10, TRUE, 1, " +
+                        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)",
+                id, "binding-test-agent-" + id);
+    }
+
+    private void seedSkill(long id) {
+        seedSkill(id, 1L);
+    }
+
+    /**
+     * Skill seeder with explicit workspace_id so the cross-workspace
+     * rejection path can be exercised.
+     */
+    private void seedSkill(long id, long workspaceId) {
+        jdbcTemplate.update(
+                "MERGE INTO mate_skill (id, name, skill_type, version, enabled, builtin, " +
+                        "workspace_id, create_time, update_time, deleted) " +
+                        "KEY(id) VALUES (?, ?, 'dynamic', '1.0.0', TRUE, FALSE, ?, " +
+                        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)",
+                id, "binding-test-skill-" + id, workspaceId);
+    }
+
+    /**
+     * ACP endpoint seeder. The bridge synthesizes a virtual skill with id
+     * {@code AcpSkillBridge.VIRTUAL_ID_BASE + endpointId} and inherits
+     * {@code workspaceId} from the row, so this is the lever for testing
+     * the bridge-backed workspace check in {@code requireSameWorkspace}.
+     */
+    private void seedAcpEndpoint(long endpointId, long workspaceId) {
+        jdbcTemplate.update(
+                "MERGE INTO mate_acp_endpoint (id, name, command, builtin, trusted, enabled, " +
+                        "workspace_id, create_time, update_time, deleted) " +
+                        "KEY(id) VALUES (?, ?, 'echo', FALSE, TRUE, TRUE, ?, " +
+                        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)",
+                endpointId, "binding-test-acp-" + endpointId, workspaceId);
     }
 
     @Test
@@ -67,6 +114,7 @@ class AgentBindingServiceTest {
     @DisplayName("bindSkill → unbindSkill → bindSkill 同一 (agent, skill) 不抛异常")
     void rebindSkillAfterUnbind() {
         long skillId = 7_777_001L;
+        seedSkill(skillId);
         bindingService.bindSkill(agentId, skillId);
         bindingService.unbindSkill(agentId, skillId);
         assertDoesNotThrow(() -> bindingService.bindSkill(agentId, skillId));
@@ -79,6 +127,13 @@ class AgentBindingServiceTest {
     @Test
     @DisplayName("setToolBindings 连续调用两次相同列表不抛异常，状态收敛")
     void setToolBindingsIsIdempotent() {
+        // setToolBindings now refuses unknown tool names (so an API caller
+        // can't write a binding the runtime won't be able to resolve).
+        // Seed two real rows in mate_tool first so the validator considers
+        // the names bindable; the test's intent — idempotent persistence —
+        // is unchanged.
+        seedBuiltinTool("tool_a");
+        seedBuiltinTool("tool_b");
         List<String> desired = List.of("tool_a", "tool_b");
         bindingService.setToolBindings(agentId, desired);
         assertDoesNotThrow(() -> bindingService.setToolBindings(agentId, desired));
@@ -89,10 +144,18 @@ class AgentBindingServiceTest {
         assertTrue(names.containsAll(desired));
     }
 
+    private void seedBuiltinTool(String name) {
+        jdbcTemplate.update(
+                "MERGE INTO mate_tool (id, name, display_name, description, tool_type, bean_name, icon, enabled, builtin, create_time, update_time, deleted) " +
+                        "KEY(name) VALUES (?, ?, ?, ?, 'builtin', ?, '🔧', TRUE, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)",
+                System.nanoTime(), name, name, "test fixture", name);
+    }
+
     @Test
     @DisplayName("setSkillBindings 连续调用两次相同列表不抛异常，状态收敛")
     void setSkillBindingsIsIdempotent() {
         List<Long> desired = List.of(7_777_101L, 7_777_102L);
+        desired.forEach(this::seedSkill);
         bindingService.setSkillBindings(agentId, desired);
         assertDoesNotThrow(() -> bindingService.setSkillBindings(agentId, desired));
 
@@ -122,6 +185,7 @@ class AgentBindingServiceTest {
     @DisplayName("唯一性回归：同一 (agent, skill) 直接 INSERT 第二行仍被唯一索引拦截")
     void uniqueIndexStillEnforcedForSkill() {
         long skillId = 7_777_201L;
+        seedSkill(skillId);
         bindingService.bindSkill(agentId, skillId);
 
         assertThrows(DuplicateKeyException.class, () ->
@@ -132,6 +196,142 @@ class AgentBindingServiceTest {
                         System.nanoTime(), agentId, skillId
                 )
         );
+    }
+
+    @Test
+    @DisplayName("bindSkill 拒绝跨 workspace 的真实 skill（防止 tenancy 越界）")
+    void bindSkillRejectsCrossWorkspaceRealSkill() {
+        // Agent lives in workspace 1 (set up in @BeforeEach). Seed a skill
+        // in workspace 2 — the new requireSameWorkspace check should refuse.
+        long otherWorkspaceSkillId = 7_777_301L;
+        seedSkill(otherWorkspaceSkillId, 2L);
+
+        MateClawException ex = assertThrows(MateClawException.class,
+                () -> bindingService.bindSkill(agentId, otherWorkspaceSkillId));
+        assertEquals(403, ex.getCode(), "应返回 403 业务码（跨 workspace 越界）");
+        assertEquals("err.skill.cross_workspace_binding", ex.getMsgKey(),
+                "应使用专用 i18n key，前端可精确分支");
+
+        // No row should have been written before the check failed.
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM mate_agent_skill WHERE agent_id = ? AND skill_id = ?",
+                Integer.class, agentId, otherWorkspaceSkillId);
+        assertNotNull(count);
+        assertEquals(0, count, "拒绝时不能写入绑定行");
+    }
+
+    @Test
+    @DisplayName("bindSkill 允许 MCP 虚拟 skill（McpServerEntity 无 workspace，全局共享）")
+    void bindSkillAllowsVirtualMcpSkill() {
+        // Virtual MCP id range starts at McpSkillBridge.VIRTUAL_ID_BASE (9e18).
+        // No mate_skill or mate_mcp_server seeding needed — the bridge is
+        // bypassed entirely for MCP because there's no workspace to compare.
+        long virtualMcpId = vip.mate.skill.mcp.McpSkillBridge.VIRTUAL_ID_BASE + 42L;
+        assertDoesNotThrow(() -> bindingService.bindSkill(agentId, virtualMcpId));
+
+        Set<Long> ids = bindingService.getBoundSkillIds(agentId);
+        assertNotNull(ids);
+        assertTrue(ids.contains(virtualMcpId), "MCP virtual binding 应当落到 mate_agent_skill");
+    }
+
+    @Test
+    @DisplayName("bindSkill 允许同 workspace 的 ACP 虚拟 skill（走 AcpSkillBridge 解析 workspace）")
+    void bindSkillAllowsVirtualAcpSkillSameWorkspace() {
+        long endpointId = 4_242_001L;
+        seedAcpEndpoint(endpointId, 1L); // matches the agent's workspace
+        long virtualAcpId = vip.mate.skill.acp.AcpSkillBridge.VIRTUAL_ID_BASE + endpointId;
+
+        assertDoesNotThrow(() -> bindingService.bindSkill(agentId, virtualAcpId));
+
+        Set<Long> ids = bindingService.getBoundSkillIds(agentId);
+        assertNotNull(ids);
+        assertTrue(ids.contains(virtualAcpId), "ACP virtual binding 应当落到 mate_agent_skill");
+    }
+
+    @Test
+    @DisplayName("bindSkill 拒绝跨 workspace 的 ACP 虚拟 skill（endpoint 的 workspace 与 agent 不一致）")
+    void bindSkillRejectsVirtualAcpSkillCrossWorkspace() {
+        long endpointId = 4_242_002L;
+        seedAcpEndpoint(endpointId, 2L); // different workspace from the agent (=1)
+        long virtualAcpId = vip.mate.skill.acp.AcpSkillBridge.VIRTUAL_ID_BASE + endpointId;
+
+        MateClawException ex = assertThrows(MateClawException.class,
+                () -> bindingService.bindSkill(agentId, virtualAcpId));
+        assertEquals(403, ex.getCode());
+        assertEquals("err.skill.cross_workspace_binding", ex.getMsgKey());
+    }
+
+    @Test
+    @DisplayName("setSkillBindings 在批量中先做完所有校验，再删旧绑定（半成品保护）")
+    void setSkillBindingsValidatesBeforeMutating() {
+        // Seed one good skill (ws=1, same as agent) so getBoundSkillIds
+        // is non-empty before the failing batch. Then call setSkillBindings
+        // with one good + one cross-workspace id — the whole batch must be
+        // refused and the original binding must survive untouched.
+        long goodSkill = 7_777_401L;
+        seedSkill(goodSkill, 1L);
+        bindingService.bindSkill(agentId, goodSkill);
+
+        long badSkill = 7_777_402L;
+        seedSkill(badSkill, 2L);
+
+        assertThrows(MateClawException.class,
+                () -> bindingService.setSkillBindings(agentId, List.of(goodSkill, badSkill)));
+
+        // The pre-existing binding to goodSkill must still be there —
+        // validation should have failed before the DELETE ran.
+        Set<Long> remaining = bindingService.getBoundSkillIds(agentId);
+        assertNotNull(remaining);
+        assertTrue(remaining.contains(goodSkill),
+                "validation 必须在 delete 旧绑定之前完成，否则会留下空绑定状态");
+    }
+
+    /**
+     * Seed a connected MCP server with one cached tool so
+     * {@link vip.mate.tool.service.AvailableToolService#listAvailable()}
+     * returns at least one bindable MCP row.
+     */
+    private void seedMcpServerWithOneTool(long id, String serverName, String rawToolName) {
+        String toolsCacheJson = "[{\"name\":\"" + rawToolName + "\",\"description\":\"fixture\"}]";
+        jdbcTemplate.update(
+                "MERGE INTO mate_mcp_server (id, name, description, transport, enabled, " +
+                        "connect_timeout_seconds, read_timeout_seconds, last_status, tool_count, " +
+                        "builtin, tools_cache_json, create_time, update_time, deleted) " +
+                        "KEY(id) VALUES (?, ?, '', 'stdio', TRUE, 30, 30, 'connected', 1, FALSE, ?, " +
+                        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)",
+                id, serverName, toolsCacheJson);
+    }
+
+    @Test
+    @DisplayName("Issue #108: 绑定任意 builtin tool 后，enabled MCP 工具仍自动出现在 effective allowlist")
+    void mcpToolsAutoIncludedWhenAnyBindingExists() {
+        // Reproduce the user-reported scenario: agent has one built-in tool
+        // bound (e.g. by template), no MCP tools ticked. Before the fix this
+        // returned a whitelist that excluded every MCP tool; after the fix
+        // MCP tools auto-join the allowlist.
+        seedBuiltinTool("builtin_probe");
+        seedMcpServerWithOneTool(8_888_001L, "issue108-server", "search_web");
+        bindingService.setToolBindings(agentId, List.of("builtin_probe"));
+
+        Set<String> effective = bindingService.getEffectiveToolNames(agentId);
+        assertNotNull(effective, "binding 非空时应返回 allowlist（非 null）");
+        assertTrue(effective.contains("builtin_probe"), "用户显式勾选的工具必须在 allowlist 中");
+        boolean hasMcpEntry = effective.stream().anyMatch(n -> n != null && n.startsWith("mcp_"));
+        assertTrue(hasMcpEntry,
+                "enabled MCP server 的工具必须自动并入 allowlist；缺失会让用户在 chat 时只见到 built-in 工具，"
+                        + "即 issue #108 描述的现象。实际 allowlist: " + effective);
+    }
+
+    @Test
+    @DisplayName("Issue #108: agent 完全没绑定时 effective allowlist 返回 null（不要意外改成 strict）")
+    void noBindingsStillReturnsNull() {
+        // The auto-union must not flip the three-state contract: an agent
+        // with zero bindings still means "no agent-level restriction".
+        seedMcpServerWithOneTool(8_888_002L, "issue108-no-binding-server", "search_web");
+
+        Set<String> effective = bindingService.getEffectiveToolNames(agentId);
+        assertNull(effective, "完全没有 skill / tool 绑定时必须返回 null（= 不过滤），"
+                + "否则 AgentToolSet.withAllowedToolsOnly 会变成空集禁掉所有工具");
     }
 
     @Test

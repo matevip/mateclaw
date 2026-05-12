@@ -7,6 +7,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import vip.mate.skill.installer.model.*;
 import vip.mate.skill.model.SkillEntity;
+import vip.mate.skill.service.SkillFileService;
 import vip.mate.skill.service.SkillService;
 import vip.mate.skill.workspace.SkillWorkspaceEvent;
 import vip.mate.skill.workspace.SkillWorkspaceManager;
@@ -36,6 +37,7 @@ public class SkillInstaller {
     private final SkillHubClient skillHubClient;
     private final SkillWorkspaceManager workspaceManager;
     private final SkillService skillService;
+    private final SkillFileService skillFileService;
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -146,79 +148,35 @@ public class SkillInstaller {
                 return CompletableFuture.completedFuture(null);
             }
 
-            // 4. 写入 workspace 目录
-            //    overwrite 时先清理旧 references/ 和 scripts/，防止残留过期文件
-            if (exists) {
-                workspaceManager.cleanWorkspaceDataDirs(skillName);
-            }
-            // 重装时 (exists=true) 覆写 SKILL.md；否则保留已有内容（向后兼容首次创建语义）
+            // 4. Materialize SKILL.md (overwrite on reinstall, keep on first create).
             workspaceManager.initWorkspace(skillName, bundle.content(), exists);
 
-            // 写入 references/
-            if (bundle.references() != null) {
-                for (var entry : bundle.references().entrySet()) {
-                    workspaceManager.writeWorkspaceFile(skillName, "references/" + entry.getKey(), entry.getValue());
-                }
-            }
-
-            // 写入 scripts/
-            if (bundle.scripts() != null) {
-                for (var entry : bundle.scripts().entrySet()) {
-                    workspaceManager.writeWorkspaceFile(skillName, "scripts/" + entry.getKey(), entry.getValue());
-                }
-            }
-
-            // cancel check: 文件已落盘，但数据库尚未写入 —— 归档已写入的目录后退出
             if (task.isCancelRequested()) {
                 workspaceManager.archiveWorkspace(skillName);
                 task.markCancelled();
                 return CompletableFuture.completedFuture(null);
             }
 
-            // 5. 注册/更新数据库
-            SkillEntity skillEntity;
-            if (exists) {
-                // 更新已有记录
-                skillEntity = skillService.listSkills().stream()
-                        .filter(s -> s.getName().equals(skillName))
-                        .findFirst().orElseThrow();
-                skillEntity.setSkillContent(bundle.content());
-                skillEntity.setDescription(bundle.description());
-                skillEntity.setVersion(bundle.version());
-                skillEntity.setAuthor(bundle.author());
-                skillEntity.setIcon(bundle.icon());
-                skillEntity.setConfigJson(buildConfigJson(bundle));
-                if (Boolean.TRUE.equals(request.getEnable())) {
-                    skillEntity.setEnabled(true);
-                }
-                skillService.updateSkill(skillEntity);
-            } else {
-                // 创建新记录
-                skillEntity = new SkillEntity();
-                skillEntity.setName(skillName);
-                skillEntity.setDescription(bundle.description());
-                skillEntity.setSkillType("dynamic");
-                skillEntity.setVersion(bundle.version());
-                skillEntity.setAuthor(bundle.author());
-                skillEntity.setIcon(bundle.icon());
-                skillEntity.setSkillContent(bundle.content());
-                skillEntity.setConfigJson(buildConfigJson(bundle));
-                skillEntity.setEnabled(Boolean.TRUE.equals(request.getEnable()));
-                skillService.createSkill(skillEntity);
-            }
+            // 5. Register/update the skill row first so we have an id for the file rows.
+            SkillEntity skillEntity = upsertSkillRow(bundle, skillName, exists,
+                    Boolean.TRUE.equals(request.getEnable()));
 
-            // cancel check: DB 已写入，此时取消不再回滚数据库，但标记任务为 cancelled
             if (task.isCancelRequested()) {
                 task.markCancelled();
                 return CompletableFuture.completedFuture(null);
             }
 
-            // 6. 发布事件
+            // 6. Persist bundle files: DB is canonical, FS is the materialized cache.
+            //    Empty-bundle guard protects both sides from a malformed bundle
+            //    silently wiping pre-existing scripts/references.
+            boolean force = Boolean.TRUE.equals(request.getForcePrune());
+            persistBundleFiles(skillEntity, bundle, force, "url");
+
+            // 7. Publish event for runtime refresh / sibling-node materialization.
             eventPublisher.publishEvent(new SkillWorkspaceEvent(
                     skillName, SkillWorkspaceEvent.Type.INSTALLED,
                     workspaceManager.resolveConventionPath(skillName)));
 
-            // 7. 完成
             task.markCompleted(InstallResult.builder()
                     .name(skillName)
                     .enabled(Boolean.TRUE.equals(request.getEnable()))
@@ -254,28 +212,37 @@ public class SkillInstaller {
                     "Skill '" + skillName + "' already exists. Enable overwrite to replace.");
         }
 
-        // 写入 workspace
-        if (exists) {
-            workspaceManager.cleanWorkspaceDataDirs(skillName);
-        }
-        workspaceManager.initWorkspace(skillName, bundle.content());
+        // Materialize SKILL.md (always overwrite on reinstall path).
+        workspaceManager.initWorkspace(skillName, bundle.content(), exists);
 
-        if (bundle.references() != null) {
-            for (var entry : bundle.references().entrySet()) {
-                String key = entry.getKey();
-                if (!key.startsWith("references/")) key = "references/" + key;
-                workspaceManager.writeWorkspaceFile(skillName, key, entry.getValue());
-            }
-        }
-        if (bundle.scripts() != null) {
-            for (var entry : bundle.scripts().entrySet()) {
-                String key = entry.getKey();
-                if (!key.startsWith("scripts/")) key = "scripts/" + key;
-                workspaceManager.writeWorkspaceFile(skillName, key, entry.getValue());
-            }
-        }
+        // Register/update skill row first so we have an id to anchor the file rows.
+        SkillEntity skillEntity = upsertSkillRow(bundle, skillName, exists, enable);
 
-        // 注册/更新 DB
+        // DB-canonical, FS-cache. Empty-bundle guard on both sides.
+        persistBundleFiles(skillEntity, bundle, false, "zip");
+
+        eventPublisher.publishEvent(new SkillWorkspaceEvent(
+                skillName, SkillWorkspaceEvent.Type.INSTALLED,
+                workspaceManager.resolveConventionPath(skillName)));
+
+        int filesCount = (bundle.references() != null ? bundle.references().size() : 0)
+                + (bundle.scripts() != null ? bundle.scripts().size() : 0) + 1;
+
+        log.info("Skill '{}' installed from ZIP (v{}, {} files)", skillName, bundle.version(), filesCount);
+
+        return Map.of(
+                "skillId", skillEntity.getId(),
+                "name", skillName,
+                "version", bundle.version() != null ? bundle.version() : "",
+                "filesCount", filesCount
+        );
+    }
+
+    /**
+     * Insert or update the {@code mate_skill} row from a bundle. Returns the
+     * persisted entity so callers have its id for downstream file writes.
+     */
+    private SkillEntity upsertSkillRow(SkillBundle bundle, String skillName, boolean exists, boolean enable) {
         SkillEntity skillEntity;
         if (exists) {
             skillEntity = skillService.listSkills().stream()
@@ -302,22 +269,40 @@ public class SkillInstaller {
             skillEntity.setEnabled(enable);
             skillService.createSkill(skillEntity);
         }
+        return skillEntity;
+    }
 
-        eventPublisher.publishEvent(new SkillWorkspaceEvent(
-                skillName, SkillWorkspaceEvent.Type.INSTALLED,
-                workspaceManager.resolveConventionPath(skillName)));
+    /**
+     * Write bundle files to both DB (canonical) and FS (cache) using the
+     * same prefixed-key map. Logs a single combined summary so multi-instance
+     * deployments can see what each node persisted vs preserved.
+     */
+    private void persistBundleFiles(SkillEntity skillEntity, SkillBundle bundle, boolean force, String origin) {
+        Map<String, String> combined = new LinkedHashMap<>();
+        if (bundle.references() != null) {
+            for (var e : bundle.references().entrySet()) {
+                String key = e.getKey().startsWith("references/") ? e.getKey() : "references/" + e.getKey();
+                combined.put(key, e.getValue());
+            }
+        }
+        if (bundle.scripts() != null) {
+            for (var e : bundle.scripts().entrySet()) {
+                String key = e.getKey().startsWith("scripts/") ? e.getKey() : "scripts/" + e.getKey();
+                combined.put(key, e.getValue());
+            }
+        }
 
-        int filesCount = (bundle.references() != null ? bundle.references().size() : 0)
-                + (bundle.scripts() != null ? bundle.scripts().size() : 0) + 1;
+        var dbApply = skillFileService.applyBundleFiles(skillEntity.getId(), combined, force);
+        var fsApply = workspaceManager.applyBundleFiles(skillEntity.getName(),
+                bundle.references(), bundle.scripts(), force);
 
-        log.info("Skill '{}' installed from ZIP (v{}, {} files)", skillName, bundle.version(), filesCount);
-
-        return Map.of(
-                "skillId", skillEntity.getId(),
-                "name", skillName,
-                "version", bundle.version() != null ? bundle.version() : "",
-                "filesCount", filesCount
-        );
+        log.info("Persisted bundle for '{}' ({}): db(write={}, prune={}, preservedScripts={}, preservedRefs={}) " +
+                        "fs(refs write={}, prune={}, preserved={} | scripts write={}, prune={}, preserved={})",
+                skillEntity.getName(), origin,
+                dbApply.rowsWritten(), dbApply.rowsPruned(),
+                dbApply.scriptsPreservedDueToEmptyBundle(), dbApply.referencesPreservedDueToEmptyBundle(),
+                fsApply.referencesWritten(), fsApply.referencesPruned(), fsApply.referencesPreservedDueToEmptyBundle(),
+                fsApply.scriptsWritten(), fsApply.scriptsPruned(), fsApply.scriptsPreservedDueToEmptyBundle());
     }
 
     // ==================== 工具方法 ====================

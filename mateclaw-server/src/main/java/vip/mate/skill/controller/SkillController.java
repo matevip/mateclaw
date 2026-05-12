@@ -23,6 +23,7 @@ import vip.mate.skill.synthesis.SkillSynthesisService;
 import vip.mate.skill.runtime.SkillRuntimeService;
 import vip.mate.skill.runtime.model.ResolvedSkill;
 import vip.mate.skill.workspace.BundledSkillSyncer;
+import vip.mate.skill.workspace.SkillFileSyncer;
 import vip.mate.skill.workspace.SkillWorkspaceManager;
 
 import java.util.ArrayList;
@@ -49,6 +50,7 @@ public class SkillController {
     private final SkillRuntimeService skillRuntimeService;
     private final SkillWorkspaceManager workspaceManager;
     private final BundledSkillSyncer bundledSkillSyncer;
+    private final SkillFileSyncer skillFileSyncer;
     private final SkillSynthesisService synthesisService;
     private final SkillDependencyChecker dependencyChecker;
     private final SkillLessonsService lessonsService;
@@ -251,6 +253,40 @@ public class SkillController {
     public R<SkillEntity> rescan(@PathVariable Long id) {
         rejectVirtualSkillMutation(id);
         return R.ok(skillService.rescanSecurity(id));
+    }
+
+    @Operation(summary = "Re-sync this skill's bundle files from DB → local workspace cache",
+            description = "Use after an out-of-band scripts/ change or to recover a missing local cache " +
+                    "in a multi-instance deployment. Pulls every mate_skill_file row owned by the skill " +
+                    "down to disk; if no rows exist yet but local files do, ingests them into the canonical store.")
+    @PostMapping("/{id}/sync-files")
+    public R<Map<String, Object>> syncFiles(@PathVariable Long id) {
+        rejectVirtualSkillMutation(id);
+        SkillEntity skill = skillService.getSkill(id);
+        var report = skillFileSyncer.syncOne(skill);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("skillId", id);
+        body.put("name", skill.getName());
+        body.put("filesMaterialized", report.filesMaterialized());
+        body.put("filesAlreadyCurrent", report.filesAlreadyCurrent());
+        body.put("filesBackfilledFromDisk", report.filesBackfilledFromDisk());
+        body.put("backfilledFromDisk", report.didBackfillFromDisk());
+        return R.ok(body);
+    }
+
+    @Operation(summary = "Re-sync every skill's bundle files (admin)",
+            description = "Bulk variant of /sync-files; primarily for ops debugging when you suspect " +
+                    "the local workspace is out of sync with the canonical store.")
+    @PostMapping("/sync-files")
+    public R<Map<String, Object>> syncAllFiles() {
+        var report = skillFileSyncer.syncAll();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("skillsConsidered", report.skillsConsidered());
+        body.put("skillsBackfilled", report.skillsBackfilled());
+        body.put("filesMaterialized", report.filesMaterialized());
+        body.put("filesAlreadyCurrent", report.filesAlreadyCurrent());
+        body.put("filesBackfilledFromDisk", report.filesBackfilledFromDisk());
+        return R.ok(body);
     }
 
     /**

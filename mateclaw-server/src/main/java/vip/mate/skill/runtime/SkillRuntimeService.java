@@ -395,10 +395,17 @@ public class SkillRuntimeService {
         int descLimit = promptDescriptionLimit(maxInputTokens);
         Set<String> recentNames = usageService.recentLoadedSkillNames(agentId, 8);
         Set<String> frequentNames = usageService.frequentlyLoadedSkillNames(8);
+        // Boost freshly installed skills for a short window so a skill the
+        // user *just* added is visible in the compact catalog before it has
+        // any usage history. Without this, qwen-turbo-style 8-entry budgets
+        // hide new skills behind 40+ existing ones, and the LLM tells the
+        // user "no such skill" minutes after they uploaded it.
+        java.time.LocalDateTime recencyCutoff = java.time.LocalDateTime.now().minus(NEW_SKILL_BOOST_WINDOW);
         List<ResolvedSkill> sorted = SkillCatalogSorter.sortResolved(visibleSkills, SkillCatalogSort.RECOMMENDED)
                 .stream()
                 .sorted(java.util.Comparator
-                        .comparingInt((ResolvedSkill s) -> recentNames.contains(s.getName()) ? 0 : 1)
+                        .comparingInt((ResolvedSkill s) -> isRecentlyInstalled(s, recencyCutoff) ? 0 : 1)
+                        .thenComparingInt(s -> recentNames.contains(s.getName()) ? 0 : 1)
                         .thenComparingInt(s -> frequentNames.contains(s.getName()) ? 0 : 1)
                         .thenComparing(SkillCatalogSorter.resolvedComparator(SkillCatalogSort.RECOMMENDED)))
                 .toList();
@@ -416,7 +423,12 @@ public class SkillRuntimeService {
         sb.append("\n\n## Skills\n");
         sb.append("This is a compact catalog. If a listed skill matches the task, ");
         sb.append("first call `readSkillFile(skillName=<name>, filePath=\"SKILL.md\")` and follow its instructions. ");
-        sb.append("If none of these skills match, call `listAvailableSkills()` to inspect the broader catalog. ");
+        sb.append("If none of these skills match, call `listAvailableSkills()` to inspect the broader catalog ");
+        sb.append("(it accepts `keyword=<part of name>` and `limit=` up to 50 — use them to search by topic ");
+        sb.append("when the default page is truncated). ");
+        sb.append("If the user names a specific skill that isn't in this table, ");
+        sb.append("call `readSkillFile(skillName=\"<exact-name>\", filePath=\"SKILL.md\")` directly — ");
+        sb.append("the catalog above is intentionally compact and doesn't list every active skill. ");
         sb.append("Skills are documentation packages — calling a skill name as a tool will fail. ");
         sb.append("Skills with a `scripts/` directory expose `runSkillScript`; SKILL.md will name the script when needed.\n\n");
         sb.append("| Skill | Status | Description |\n");
@@ -456,6 +468,28 @@ public class SkillRuntimeService {
         if (effectiveToolNames == null) return true;
         Set<String> tools = skill.getEffectiveAllowedTools();
         return tools == null || tools.isEmpty() || effectiveToolNames.containsAll(tools);
+    }
+
+    /**
+     * Treat skills installed within this window as "new" for the prompt
+     * catalog ranker. Long enough that a user who installs on Friday and
+     * comes back Monday still sees the boost; short enough that the
+     * catalog reverts to usage-based ordering before the boost slot
+     * crowds out genuinely useful skills.
+     */
+    public static final java.time.Duration NEW_SKILL_BOOST_WINDOW = java.time.Duration.ofDays(7);
+
+    /**
+     * Returns true if the skill's row was created after {@code cutoff}.
+     * Builtins and virtual MCP/ACP skills typically have no createTime;
+     * they are not boosted (the user didn't just install them). Public so
+     * the user-facing {@code listAvailableSkills} catalog can apply the
+     * same boost as the prompt enhancement.
+     */
+    public static boolean isRecentlyInstalled(ResolvedSkill skill, java.time.LocalDateTime cutoff) {
+        if (skill == null || skill.getCreateTime() == null) return false;
+        if (skill.isBuiltin()) return false;
+        return skill.getCreateTime().isAfter(cutoff);
     }
 
     private static int promptCatalogEntryLimit(Integer maxInputTokens) {
