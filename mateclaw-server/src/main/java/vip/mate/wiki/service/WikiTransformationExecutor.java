@@ -227,9 +227,10 @@ public class WikiTransformationExecutor {
         ChatModel chatModel = buildChatModel(resolvedModelId);
         run.setModelId(resolvedModelId);
 
-        String output = callOnce(chatModel, systemPrompt, userPrompt);
+        CallResult first = callOnce(chatModel, systemPrompt, userPrompt);
+        accumulateUsage(run, first);
         if (wantJson) {
-            String coerced = coerceToJson(output);
+            String coerced = coerceToJson(first.text());
             if (coerced != null) {
                 // Wrap in a fenced block so UI rendering and save-as-page
                 // keep the existing markdown contract. The raw JSON is the
@@ -240,18 +241,22 @@ public class WikiTransformationExecutor {
             log.info("[WikiTransformation] JSON parse failed for template={}; retrying with stricter reminder",
                     transformation.getName());
             String retryUserPrompt = userPrompt + "\n\n---\n\n上一次回复不是合法 JSON。请只返回一个合法 JSON 文档，前后不要有任何文字或代码块标记。";
-            String retry = callOnce(chatModel, systemPrompt, retryUserPrompt);
-            String coercedRetry = coerceToJson(retry);
+            CallResult retry = callOnce(chatModel, systemPrompt, retryUserPrompt);
+            accumulateUsage(run, retry);
+            String coercedRetry = coerceToJson(retry.text());
             if (coercedRetry != null) {
                 return "```json\n" + coercedRetry + "\n```";
             }
             throw new IllegalStateException("LLM output is not valid JSON after one retry");
         }
-        return output;
+        return first.text();
     }
 
-    /** One LLM call, returns the cleaned output. Throws when the call yields blank. */
-    private String callOnce(ChatModel chatModel, String systemPrompt, String userPrompt) {
+    /** Tuple returned from a single LLM call: cleaned text + usage (null when provider didn't surface usage). */
+    private record CallResult(String text, Long inputTokens, Long outputTokens, Long totalTokens) {}
+
+    /** One LLM call, returns the cleaned output + provider usage. Throws when the call yields blank. */
+    private CallResult callOnce(ChatModel chatModel, String systemPrompt, String userPrompt) {
         ChatResponse resp = chatModel.call(new Prompt(List.of(
                 new SystemMessage(systemPrompt), new UserMessage(userPrompt))));
         String rawOutput = (resp == null || resp.getResult() == null
@@ -264,7 +269,31 @@ public class WikiTransformationExecutor {
         if (output.isBlank()) {
             throw new IllegalStateException("LLM output was empty after cleanup");
         }
-        return output;
+        Long in = null, out = null, total = null;
+        try {
+            if (resp.getMetadata() != null && resp.getMetadata().getUsage() != null) {
+                var u = resp.getMetadata().getUsage();
+                in = u.getPromptTokens() == null ? null : u.getPromptTokens().longValue();
+                out = u.getCompletionTokens() == null ? null : u.getCompletionTokens().longValue();
+                total = u.getTotalTokens() == null ? null : u.getTotalTokens().longValue();
+            }
+        } catch (Exception ignored) {
+            // Usage extraction is best-effort — different providers expose it differently.
+        }
+        return new CallResult(output, in, out, total);
+    }
+
+    /** Add provider-reported usage onto the run row (accumulates across retries). */
+    private static void accumulateUsage(WikiTransformationRunEntity run, CallResult call) {
+        if (call.inputTokens() != null) {
+            run.setInputTokens((run.getInputTokens() == null ? 0L : run.getInputTokens()) + call.inputTokens());
+        }
+        if (call.outputTokens() != null) {
+            run.setOutputTokens((run.getOutputTokens() == null ? 0L : run.getOutputTokens()) + call.outputTokens());
+        }
+        if (call.totalTokens() != null) {
+            run.setTotalTokens((run.getTotalTokens() == null ? 0L : run.getTotalTokens()) + call.totalTokens());
+        }
     }
 
     private static final com.fasterxml.jackson.databind.ObjectMapper JSON_MAPPER =

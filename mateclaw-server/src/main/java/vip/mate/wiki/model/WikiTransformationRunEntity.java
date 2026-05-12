@@ -58,6 +58,15 @@ public class WikiTransformationRunEntity {
      */
     private Long outputPageId;
 
+    /** Prompt-side tokens reported by the provider (Spring AI Usage). */
+    private Long inputTokens;
+
+    /** Completion-side tokens reported by the provider. */
+    private Long outputTokens;
+
+    /** Provider's own total (usually input + output, but providers vary). */
+    private Long totalTokens;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 

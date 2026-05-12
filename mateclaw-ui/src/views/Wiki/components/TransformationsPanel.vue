@@ -95,6 +95,9 @@
                 {{ rawTitleFor(run.rawId) }}
                 · {{ formatTimestamp(run.completedAt || run.startedAt || run.createTime) }}
                 · {{ formatDuration(run.durationMs) }}
+                <span v-if="run.totalTokens" class="run-tokens">
+                  · {{ formatTokens(run.inputTokens) }}↑ / {{ formatTokens(run.outputTokens) }}↓
+                </span>
               </span>
               <span v-if="run.outputPageId" class="run-saved-badge">
                 {{ t('wiki.transformations.savedAsPage') }} #{{ run.outputPageId }}
@@ -299,6 +302,9 @@ interface WikiTransformationRun {
   createTime: string
   triggeredBy: string
   outputPageId: number | null
+  inputTokens: number | null
+  outputTokens: number | null
+  totalTokens: number | null
 }
 
 const { t } = useI18n()
@@ -371,6 +377,13 @@ function formatDuration(ms: number | null): string {
   if (ms == null) return '—'
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
+}
+
+function formatTokens(n: number | null): string {
+  if (n == null) return '—'
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k'
+  return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'm'
 }
 
 async function loadAll() {
@@ -746,6 +759,7 @@ onMounted(async () => {
 .run-status--running, .run-status--pending { background: var(--mc-bg-muted); color: var(--mc-text-secondary); }
 .run-status--cancelled { background: var(--mc-bg-muted); color: var(--mc-text-tertiary); }
 .run-meta { color: var(--mc-text-tertiary); }
+.run-tokens { color: var(--mc-text-tertiary); font-family: var(--mc-font-mono, ui-monospace, Menlo, monospace); font-size: 11px; }
 .run-output {
   margin-top: 6px;
   padding: 10px 12px;
