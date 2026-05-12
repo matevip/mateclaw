@@ -65,9 +65,26 @@ public class AgentService {
      * 按工作区列出 Agent
      */
     public List<AgentEntity> listAgentsByWorkspace(Long workspaceId) {
-        return agentMapper.selectList(new LambdaQueryWrapper<AgentEntity>()
-                .eq(AgentEntity::getWorkspaceId, workspaceId)
-                .orderByDesc(AgentEntity::getCreateTime));
+        return listAgentsByWorkspace(workspaceId, null);
+    }
+
+    /**
+     * 按工作区列出 Agent，可选过滤启用状态。
+     *
+     * @param enabled non-null restricts the result set to agents whose
+     *                {@code enabled} column matches the given value.
+     *                Pass {@code true} from chat selectors so disabled
+     *                agents disappear from the picker; the admin
+     *                management page passes {@code null} to keep
+     *                disabled rows visible for re-enabling.
+     */
+    public List<AgentEntity> listAgentsByWorkspace(Long workspaceId, Boolean enabled) {
+        LambdaQueryWrapper<AgentEntity> q = new LambdaQueryWrapper<AgentEntity>()
+                .eq(AgentEntity::getWorkspaceId, workspaceId);
+        if (enabled != null) {
+            q.eq(AgentEntity::getEnabled, enabled);
+        }
+        return agentMapper.selectList(q.orderByDesc(AgentEntity::getCreateTime));
     }
 
     public AgentEntity getAgent(Long id) {

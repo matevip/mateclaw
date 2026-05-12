@@ -93,7 +93,12 @@ export const authApi = {
 
 // ==================== Agent ====================
 export const agentApi = {
-  list: () => http.get('/agents'),
+  /**
+   * @param params.enabled when `true`, restricts the result to enabled agents
+   *   (used by chat selectors so disabled agents disappear from the picker).
+   *   Omit to receive enabled + disabled (admin management page).
+   */
+  list: (params?: { enabled?: boolean }) => http.get('/agents', { params }),
   get: (id: string | number) => http.get(`/agents/${id}`),
   create: (data: any) => http.post('/agents', data),
   update: (id: string | number, data: any) => http.put(`/agents/${id}`, data),

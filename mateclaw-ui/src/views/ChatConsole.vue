@@ -1163,7 +1163,10 @@ watch(selectedAgentId, async (id) => {
 // ============ 方法 ============
 async function loadAgents() {
   try {
-    const res: any = await agentApi.list()
+    // Hide disabled agents from the picker — they cannot be chatted with
+    // (the chat endpoints reject disabled agents), so showing them invites
+    // a confusing failure path. The admin Agents view passes no filter.
+    const res: any = await agentApi.list({ enabled: true })
     agents.value = res.data || []
     // 只有在 URL 没有指定 agentId 且当前无选中时，才默认选第一个
     if (agents.value.length > 0 && !selectedAgentId.value && !route.query.agentId) {
