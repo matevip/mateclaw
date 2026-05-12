@@ -19,8 +19,8 @@ general:
 search:
   default_lang: "zh-CN"
   safe_search: 0
-  ban_time_on_fail: 5
-  max_ban_time_on_fail: 120
+  ban_time_on_fail: 30
+  max_ban_time_on_fail: 300
   formats:
     - html
     - json
@@ -42,6 +42,7 @@ engines:
     region: zh-CN
     disabled: false
     weight: 2
+    categories: [general, news]
     proxies:
       all://:
         - http://mihomo.zeabur.internal:10808
@@ -58,6 +59,7 @@ engines:
     region: zh-CN
     disabled: false
     weight: 2
+    categories: [general, news]
 
   - name: 360search
     engine: 360search
@@ -77,14 +79,20 @@ engines:
   - name: bing news
     engine: bing_news
     shortcut: bn
-    disabled: false
+    disabled: true
     categories: [news]
+    proxies:
+      all://:
+        - http://mihomo.zeabur.internal:10808
 
   - name: google news
     engine: google_news
     shortcut: gn
     region: zh-CN
-    disabled: false
+    google_domain: google.com
+    use_mobile_ui: true
+    timeout: 10.0
+    disabled: true
     categories: [news]
     proxies:
       all://:
