@@ -1,6 +1,8 @@
 use_default_settings:
   engines:
     keep_only:
+      - google
+      - google news
       - bing
       - 360search
       - sogou
@@ -34,6 +36,22 @@ ui:
   static_use_hash: true
 
 engines:
+  - name: google
+    engine: google
+    shortcut: g
+    region: zh-CN
+    disabled: false
+    weight: 2
+    proxies:
+      all://:
+        - http://mihomo.zeabur.internal:10808
+
+  - name: baidu
+    engine: baidu
+    shortcut: bd
+    disabled: false
+    weight: 2
+
   - name: bing
     engine: bing
     shortcut: b
@@ -44,37 +62,44 @@ engines:
   - name: 360search
     engine: 360search
     shortcut: "360"
-    categories:
-      - general
-      - news
+    categories: [general, news]
     disabled: false
     weight: 1
 
   - name: sogou
     engine: sogou
     shortcut: sg
-    categories:
-      - general
-      - news
+    categories: [general, news]
     timeout: 6.0
     disabled: false
+    weight: 1
 
   - name: bing news
     engine: bing_news
     shortcut: bn
     disabled: false
-    categories: news
+    categories: [news]
+
+  - name: google news
+    engine: google_news
+    shortcut: gn
+    region: zh-CN
+    disabled: false
+    categories: [news]
+    proxies:
+      all://:
+        - http://mihomo.zeabur.internal:10808
 
   - name: bilibili
     engine: bilibili
     shortcut: bil
     timeout: 5.0
     disabled: false
-    categories: videos
+    categories: [videos]
 
   - name: 微信公众号
     engine: sogou_weixin
     shortcut: wx
     timeout: 6.0
     disabled: false
-    categories: social media
+    categories: ["social media"]
