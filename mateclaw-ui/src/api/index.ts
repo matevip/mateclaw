@@ -675,6 +675,46 @@ export const wikiApi = {
   // RFC-032: Search preview
   searchPreview: (kbId: number, data: { query: string; mode?: string; topK?: number }) =>
     http.post(`/wiki/kb/${kbId}/search-preview`, data),
+
+  // Transformations: reusable prompt templates run over raw materials
+  listTransformations: (kbId?: number) =>
+    http.get('/wiki/transformations', kbId != null ? { params: { kbId } } : undefined),
+  getTransformation: (id: number) =>
+    http.get(`/wiki/transformations/${id}`),
+  createTransformation: (data: {
+    kbId?: number | null
+    name: string
+    title: string
+    description?: string
+    promptTemplate: string
+    applyDefault?: boolean
+    enabled?: boolean
+    modelId?: number | null
+    outputTarget?: 'none' | 'page'
+  }) =>
+    http.post('/wiki/transformations', data),
+  updateTransformation: (id: number, data: {
+    title?: string
+    description?: string
+    promptTemplate?: string
+    applyDefault?: boolean
+    enabled?: boolean
+    modelId?: number | null
+    outputTarget?: 'none' | 'page'
+  }) =>
+    http.put(`/wiki/transformations/${id}`, data),
+  deleteTransformation: (id: number) =>
+    http.delete(`/wiki/transformations/${id}`),
+  applyTransformation: (id: number, rawId: number, sync = true) =>
+    http.post(`/wiki/transformations/${id}/apply`, { rawId }, { params: { sync } }),
+  listTransformationRuns: (params: { rawId?: number; kbId?: number; transformationId?: number; limit?: number }) =>
+    http.get('/wiki/transformations/runs', { params }),
+  getTransformationRun: (runId: number) =>
+    http.get(`/wiki/transformations/runs/${runId}`),
+  deleteTransformationRun: (runId: number) =>
+    http.delete(`/wiki/transformations/runs/${runId}`),
+  saveTransformationRunAsPage: (runId: number) =>
+    http.post(`/wiki/transformations/runs/${runId}/save-as-page`),
 }
 
 // ==================== Workspace (Team) ====================
