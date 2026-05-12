@@ -301,6 +301,19 @@ public class AgentBindingService {
      *       → contribute nothing through this path; legacy SKILL.md prompt
      *       enhancement still runs separately.</li>
      * </ul>
+     *
+     * <p>Auto-included on every non-null result, in addition to the bound
+     * tools and skill-expanded tools:
+     * <ul>
+     *   <li>{@link #SYSTEM_LEVEL_TOOLS} — agent-wide primitives.</li>
+     *   <li>Every currently-bindable MCP tool (any tool with
+     *       {@code source="mcp"} and {@code available=true} in the picker).
+     *       MCP servers are administrator-level capabilities; once enabled
+     *       globally they should not be silently hidden from an agent that
+     *       happens to have any other binding. To deny a specific MCP tool
+     *       to a specific agent, use the tool-guard deny path applied
+     *       upstream in {@code AgentGraphBuilder}.</li>
+     * </ul>
      */
     public Set<String> getEffectiveToolNames(Long agentId) {
         Set<Long> boundSkillIds = getBoundSkillIds(agentId);
@@ -342,7 +355,39 @@ public class AgentBindingService {
         // (the LLM stops being able to write to LESSONS.md / MEMORY.md).
         merged.addAll(SYSTEM_LEVEL_TOOLS);
 
+        // Enabled MCP server tools auto-join the allowlist for the same
+        // reason SYSTEM_LEVEL_TOOLS does: MCP servers are an
+        // administrator-enabled capability, not a per-agent opt-in. Without
+        // this union, an agent with any skill or built-in tool bound would
+        // silently lose every MCP tool — users hit this when they bound one
+        // built-in tool, didn't tick the MCP rows, and observed "only
+        // built-in tools work". Operators who need to hide a specific MCP
+        // tool from a specific agent still have the tool-guard deny path
+        // (AgentGraphBuilder applies withDeniedToolsFiltered before this).
+        merged.addAll(getEnabledMcpToolNames());
+
         return merged;
+    }
+
+    /**
+     * Names of every currently-bindable MCP tool, sourced from the same
+     * picker that the agent edit screen reads. Failures (picker outage,
+     * cache parse error) yield an empty set so the caller's allowlist is
+     * strictly narrower, never wider, than the picker — never throws.
+     */
+    private Set<String> getEnabledMcpToolNames() {
+        try {
+            return availableToolService.listAvailable().stream()
+                    .filter(t -> "mcp".equals(t.getSource()))
+                    .filter(AvailableToolDTO::isAvailable)
+                    .map(AvailableToolDTO::getName)
+                    .filter(n -> n != null && !n.isBlank())
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+        } catch (Exception e) {
+            log.warn("AvailableToolService unavailable while computing effective tool allowlist; "
+                    + "MCP tools will be excluded for this resolve cycle: {}", e.getMessage());
+            return Collections.emptySet();
+        }
     }
 
     /**
@@ -403,6 +448,11 @@ public class AgentBindingService {
             "image_generate",
             "music_generate",
             "video_generate",
+            // HTML → PNG rasteriser. Closes the loop for HTML-producing skills
+            // (architecture-diagram, infographics, dashboards) so IM channels
+            // can deliver the artifact as a native image instead of a file or
+            // a dead markdown link.
+            "render_html_image",
             // Universal capabilities the global system prompts (SOUL.md /
             // AGENTS.md / "Web Search Capability" / "File Reading Guidelines")
             // explicitly tell the LLM exist. Pre-Phase-2b they were globally

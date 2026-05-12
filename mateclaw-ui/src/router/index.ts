@@ -40,6 +40,12 @@ const router = createRouter({
           meta: { title: 'Wiki' },
         },
         {
+          path: 'enterprise',
+          name: 'Enterprise',
+          component: () => import('@/views/Enterprise/index.vue'),
+          meta: { title: 'Enterprise Scenarios' },
+        },
+        {
           path: 'memory',
           name: 'Memory',
           component: () => import('@/views/Memory/index.vue'),

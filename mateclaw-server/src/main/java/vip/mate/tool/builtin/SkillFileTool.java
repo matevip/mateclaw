@@ -265,13 +265,24 @@ public class SkillFileTool {
     }
 
     @Tool(description = """
-        List all currently available Skills (documentation packages).
+        List currently available Skills (documentation packages).
 
         IMPORTANT: Skills are NOT directly callable as tools. Each name
         returned here is a `skillName` argument, not a tool name. To use
         a skill, call `readSkillFile(skillName="<name>", filePath="SKILL.md")`
         first to read its instructions, then follow what SKILL.md tells you.
         Calling a skill name as a tool will fail with "Tool not found".
+
+        Search strategy when looking for a specific skill:
+        - The default page is 20 of N — if "Showing: 20 of <larger>" appears
+          and you don't see what you're after, retry with `keyword=<name fragment>`
+          (matched against name + description, case-insensitive) or raise `limit`
+          up to 50.
+        - If the user mentions an exact skill name (e.g. "tencent-meeting-mcp"),
+          skip this tool and go straight to
+          `readSkillFile(skillName="<exact-name>", filePath="SKILL.md")` —
+          that bypasses the catalog truncation entirely and either returns
+          the skill's instructions or a clear "skill not found" error.
 
         Note: this returns Skills (vendor-installable docs), not Agents.
         For Agents, use `listAvailableAgents`.
@@ -280,7 +291,7 @@ public class SkillFileTool {
         """)
     public String listAvailableSkills(
         @JsonProperty(required = false)
-        @JsonPropertyDescription("Optional keyword matched against skill name or description")
+        @JsonPropertyDescription("Optional keyword matched against skill name or description (case-insensitive). Use this when a specific skill name was mentioned but didn't appear in the default page.")
         String keyword,
 
         @JsonProperty(required = false)
@@ -299,6 +310,16 @@ public class SkillFileTool {
 
         int safeLimit = limit == null || limit <= 0 ? 20 : Math.min(limit, 50);
         String kw = keyword == null ? "" : keyword.trim().toLowerCase();
+        // Push freshly installed skills to the top of the truncated page so
+        // a user who just installed something can still find it without
+        // remembering to pass keyword=. Same window the prompt catalog uses.
+        java.time.LocalDateTime recencyCutoff = java.time.LocalDateTime.now()
+                .minus(SkillRuntimeService.NEW_SKILL_BOOST_WINDOW);
+        // sortResolved gives the RECOMMENDED ordering; the secondary sort
+        // below uses the JDK's stable sort to lift recently-installed skills
+        // to the top while preserving RECOMMENDED order among same-recency
+        // entries — no need to thread the (package-private) recommended
+        // comparator back through here.
         List<ResolvedSkill> activeSkills = SkillCatalogSorter.sortResolved(
                 runtimeService.getActiveSkills().stream()
                         .filter(s -> SkillCatalogSorter.sourceMatches(s, source))
@@ -307,7 +328,10 @@ public class SkillFileTool {
                                 || containsIgnoreCase(s.getName(), kw)
                                 || containsIgnoreCase(s.getDescription(), kw))
                         .toList(),
-                SkillCatalogSort.RECOMMENDED);
+                SkillCatalogSort.RECOMMENDED).stream()
+                .sorted(java.util.Comparator.comparingInt((ResolvedSkill s) ->
+                        SkillRuntimeService.isRecentlyInstalled(s, recencyCutoff) ? 0 : 1))
+                .toList();
 
         if (activeSkills.isEmpty()) {
             return "No skills are currently available.";
@@ -338,8 +362,17 @@ public class SkillFileTool {
             }
             sb.append(" |\n");
         }
-        sb.append("\nShowing: ").append(Math.min(safeLimit, activeSkills.size()))
+        int shown = Math.min(safeLimit, activeSkills.size());
+        sb.append("\nShowing: ").append(shown)
                 .append(" of ").append(activeSkills.size()).append(" skill(s).");
+        if (shown < activeSkills.size()) {
+            // Surface the truncation hint so the LLM knows how to widen the
+            // search instead of concluding the missing skill doesn't exist.
+            sb.append(" Result truncated — retry with `keyword=<part of name>` ")
+                    .append("to search the full catalog, or `limit=50` to see more rows. ")
+                    .append("If the user gave an exact skill name, prefer ")
+                    .append("`readSkillFile(skillName=\"<name>\", filePath=\"SKILL.md\")` directly.");
+        }
         return sb.toString();
     }
 

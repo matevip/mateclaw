@@ -114,6 +114,15 @@ public class WikiProcessingService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private WikiLogService logService;
 
+    /**
+     * Optional. When present, every successful ingest triggers an async sweep
+     * of the KB's apply-default transformation templates. Missing in the
+     * legacy unit tests that wire this service directly.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private WikiTransformationExecutor transformationExecutor;
+
     /** Parallel chunk / material processing executor (JDK 21 virtual threads) */
     public static final ExecutorService WIKI_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -410,6 +419,14 @@ public class WikiProcessingService {
             // Stats rebuild above is sync; narrative regen runs after-commit.
             if (nonTerminalSideEffects) {
                 eventPublisher.publishEvent(new vip.mate.wiki.event.WikiKbDirtyEvent(this, kb.getId()));
+            }
+
+            // Run apply-default transformation templates against the newly
+            // ingested raw material. Fire-and-forget; failures are logged
+            // inside the executor and do not affect the ingest outcome.
+            if (transformationExecutor != null && nonTerminalSideEffects) {
+                Long wsId = kb.getWorkspaceId() == null ? 1L : kb.getWorkspaceId();
+                transformationExecutor.runDefaultsAsync(kb.getId(), wsId, rawId, "apply_default");
             }
 
             log.info("[Wiki] Processing completed for raw={}, kbId={}, generatedPages={}, totalPages={}",

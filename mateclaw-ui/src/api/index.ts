@@ -93,7 +93,12 @@ export const authApi = {
 
 // ==================== Agent ====================
 export const agentApi = {
-  list: () => http.get('/agents'),
+  /**
+   * @param params.enabled when `true`, restricts the result to enabled agents
+   *   (used by chat selectors so disabled agents disappear from the picker).
+   *   Omit to receive enabled + disabled (admin management page).
+   */
+  list: (params?: { enabled?: boolean }) => http.get('/agents', { params }),
   get: (id: string | number) => http.get(`/agents/${id}`),
   create: (data: any) => http.post('/agents', data),
   update: (id: string | number, data: any) => http.put(`/agents/${id}`, data),
@@ -198,6 +203,24 @@ export const skillApi = {
   getLessons: (id: string | number) => http.get(`/skills/${id}/lessons`),
   clearLessons: (id: string | number) => http.post(`/skills/${id}/lessons/clear`),
   employees: (id: string | number) => http.get(`/skills/${id}/employees`),
+  /**
+   * Per-skill secrets — env-var-shaped key/value pairs that get injected
+   * into the script subprocess at runtime. Plaintext values never leave
+   * the server; list returns masked previews only.
+   */
+  listSecrets: (id: string | number) => http.get(`/skills/${id}/secrets`),
+  putSecret: (id: string | number, key: string, value: string) =>
+    http.post(`/skills/${id}/secrets`, { key, value }),
+  deleteSecret: (id: string | number, key: string) =>
+    http.delete(`/skills/${id}/secrets/${encodeURIComponent(key)}`),
+}
+
+/** Shape returned by GET /skills/{id}/secrets. */
+export interface SkillSecretSummary {
+  key: string
+  /** Masked preview, e.g. "abc...xyz". Plaintext is never shipped. */
+  preview: string
+  updatedAt: string
 }
 
 // ==================== Activity Feed (RFC-090 §4.5) ====================
@@ -675,6 +698,56 @@ export const wikiApi = {
   // RFC-032: Search preview
   searchPreview: (kbId: number, data: { query: string; mode?: string; topK?: number }) =>
     http.post(`/wiki/kb/${kbId}/search-preview`, data),
+
+  // Transformations: reusable prompt templates run over raw materials
+  listTransformations: (kbId?: number) =>
+    http.get('/wiki/transformations', kbId != null ? { params: { kbId } } : undefined),
+  getTransformation: (id: number) =>
+    http.get(`/wiki/transformations/${id}`),
+  createTransformation: (data: {
+    kbId?: number | null
+    name: string
+    title: string
+    description?: string
+    promptTemplate: string
+    applyDefault?: boolean
+    enabled?: boolean
+    modelId?: number | null
+    outputTarget?: 'none' | 'page'
+    outputFormat?: 'markdown' | 'json'
+    outputSchema?: string | null
+  }) =>
+    http.post('/wiki/transformations', data),
+  updateTransformation: (id: number, data: {
+    title?: string
+    description?: string
+    promptTemplate?: string
+    applyDefault?: boolean
+    enabled?: boolean
+    modelId?: number | null
+    outputTarget?: 'none' | 'page'
+    outputFormat?: 'markdown' | 'json'
+    outputSchema?: string | null
+  }) =>
+    http.put(`/wiki/transformations/${id}`, data),
+  deleteTransformation: (id: number) =>
+    http.delete(`/wiki/transformations/${id}`),
+  applyTransformation: (id: number, rawId: number, sync = true) =>
+    http.post(`/wiki/transformations/${id}/apply`, { rawId }, { params: { sync } }),
+  applyTransformationToPage: (id: number, pageId: number, sync = true) =>
+    http.post(`/wiki/transformations/${id}/apply`, { pageId }, { params: { sync } }),
+  aggregateTransformation: (id: number, kbId: number) =>
+    http.post(`/wiki/transformations/${id}/aggregate`, undefined, { params: { kbId } }),
+  listTransformationRuns: (params: { rawId?: number; kbId?: number; transformationId?: number; limit?: number }) =>
+    http.get('/wiki/transformations/runs', { params }),
+  getTransformationRun: (runId: number) =>
+    http.get(`/wiki/transformations/runs/${runId}`),
+  deleteTransformationRun: (runId: number) =>
+    http.delete(`/wiki/transformations/runs/${runId}`),
+  saveTransformationRunAsPage: (runId: number) =>
+    http.post(`/wiki/transformations/runs/${runId}/save-as-page`),
+  cancelTransformationRun: (runId: number) =>
+    http.post(`/wiki/transformations/runs/${runId}/cancel`),
 }
 
 // ==================== Workspace (Team) ====================

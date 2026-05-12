@@ -240,6 +240,158 @@ public class SkillWorkspaceManager {
     }
 
     /**
+     * Outcome of {@link #applyBundleFiles}, exposing per-bucket counters so
+     * the installer can log a meaningful summary and the admin UI can show
+     * what actually changed.
+     */
+    public record ApplyBundleResult(
+            int referencesWritten,
+            int referencesPruned,
+            boolean referencesPreservedDueToEmptyBundle,
+            int scriptsWritten,
+            int scriptsPruned,
+            boolean scriptsPreservedDueToEmptyBundle
+    ) {}
+
+    /**
+     * Apply a bundle's references/ + scripts/ to the workspace using
+     * write-then-prune semantics:
+     * <ol>
+     *   <li>Write every entry from the bundle (overwrites same paths).</li>
+     *   <li>Delete any pre-existing file under references/ or scripts/ that
+     *       is NOT in the bundle.</li>
+     * </ol>
+     *
+     * <p>Empty-bundle safety: if the bundle has zero entries for a bucket
+     * AND the workspace already has files in that bucket, the bucket is
+     * left untouched (no pruning) unless {@code force=true}. This protects
+     * against malformed uploads, network truncation, and parser bugs that
+     * would otherwise wipe a user's scripts on reinstall — the same class
+     * of regression that an earlier patch fixed for SKILL.md.
+     *
+     * @param skillName  workspace owner
+     * @param references new bundle's references map (key = path under references/)
+     * @param scripts    new bundle's scripts map (key = path under scripts/)
+     * @param force      bypass the empty-bundle guard (admin-only switch)
+     * @return per-bucket apply summary (never null)
+     */
+    public ApplyBundleResult applyBundleFiles(String skillName,
+                                              Map<String, String> references,
+                                              Map<String, String> scripts,
+                                              boolean force) {
+        Path workspaceDir = resolveConventionPath(skillName);
+        try {
+            Files.createDirectories(workspaceDir.resolve("references"));
+            Files.createDirectories(workspaceDir.resolve("scripts"));
+        } catch (IOException e) {
+            log.warn("Failed to ensure data dirs for skill '{}': {}", skillName, e.getMessage());
+        }
+
+        int refsWritten = applyBucket(skillName, "references/", references);
+        int scriptsWritten = applyBucket(skillName, "scripts/", scripts);
+
+        var refsPrune = pruneBucket(workspaceDir.resolve("references"),
+                normalizeKeys(references), force, skillName, "references");
+        var scriptsPrune = pruneBucket(workspaceDir.resolve("scripts"),
+                normalizeKeys(scripts), force, skillName, "scripts");
+
+        return new ApplyBundleResult(
+                refsWritten, refsPrune.deleted(), refsPrune.preservedDueToEmpty(),
+                scriptsWritten, scriptsPrune.deleted(), scriptsPrune.preservedDueToEmpty()
+        );
+    }
+
+    private int applyBucket(String skillName, String bucketPrefix, Map<String, String> entries) {
+        if (entries == null || entries.isEmpty()) return 0;
+        int written = 0;
+        for (var e : entries.entrySet()) {
+            String key = e.getKey();
+            String relative = key.startsWith(bucketPrefix) ? key : (bucketPrefix + key);
+            try {
+                writeWorkspaceFile(skillName, relative, e.getValue());
+                written++;
+            } catch (RuntimeException ex) {
+                log.warn("Failed to write {} for skill '{}': {}", relative, skillName, ex.getMessage());
+            }
+        }
+        return written;
+    }
+
+    /** Strip a leading "<bucket>/" prefix so the key matches the path relative to the bucket dir. */
+    private Set<String> normalizeKeys(Map<String, String> entries) {
+        if (entries == null || entries.isEmpty()) return Collections.emptySet();
+        Set<String> out = new HashSet<>(entries.size() * 2);
+        for (String key : entries.keySet()) {
+            String k = key.replace('\\', '/');
+            int firstSlash = k.indexOf('/');
+            if (firstSlash > 0 && (k.startsWith("references/") || k.startsWith("scripts/"))) {
+                out.add(k.substring(firstSlash + 1));
+            } else {
+                out.add(k);
+            }
+        }
+        return out;
+    }
+
+    private record PruneOutcome(int deleted, boolean preservedDueToEmpty) {}
+
+    private PruneOutcome pruneBucket(Path bucketDir, Set<String> keep, boolean force,
+                                     String skillName, String bucketLabel) {
+        if (!Files.exists(bucketDir) || !Files.isDirectory(bucketDir)) {
+            return new PruneOutcome(0, false);
+        }
+
+        // Empty-bundle guard: if the new bundle has nothing for this bucket
+        // and there's at least one file on disk, refuse to prune unless the
+        // caller explicitly asked for it. Logged so the operator can see why
+        // their "clean install" didn't actually clean.
+        if (keep.isEmpty() && !force) {
+            try (var stream = Files.walk(bucketDir)) {
+                boolean hasAny = stream.filter(Files::isRegularFile).findFirst().isPresent();
+                if (hasAny) {
+                    log.warn("Refusing to prune {}/{}/ — new bundle is empty and would wipe existing files. " +
+                            "Pass force=true to override.", skillName, bucketLabel);
+                    return new PruneOutcome(0, true);
+                }
+            } catch (IOException e) {
+                log.warn("Failed to inspect {}/{}/: {}", skillName, bucketLabel, e.getMessage());
+                return new PruneOutcome(0, false);
+            }
+        }
+
+        int deleted = 0;
+        try (var stream = Files.walk(bucketDir)) {
+            List<Path> files = stream.filter(Files::isRegularFile).toList();
+            for (Path file : files) {
+                String relative = bucketDir.relativize(file).toString().replace('\\', '/');
+                if (!keep.contains(relative)) {
+                    try {
+                        Files.delete(file);
+                        deleted++;
+                    } catch (IOException e) {
+                        log.warn("Failed to prune {}/{}/{}: {}", skillName, bucketLabel, relative, e.getMessage());
+                    }
+                }
+            }
+            // Best-effort: tidy up emptied subdirs (leave the bucket root in place).
+            try (var dirs = Files.walk(bucketDir)) {
+                dirs.sorted(java.util.Comparator.reverseOrder())
+                        .filter(p -> Files.isDirectory(p) && !p.equals(bucketDir))
+                        .forEach(p -> {
+                            try (var children = Files.list(p)) {
+                                if (children.findAny().isEmpty()) Files.delete(p);
+                            } catch (IOException ignored) {
+                                /* leave non-empty / locked dirs in place */
+                            }
+                        });
+            }
+        } catch (IOException e) {
+            log.warn("Failed to prune {}/{}/: {}", skillName, bucketLabel, e.getMessage());
+        }
+        return new PruneOutcome(deleted, false);
+    }
+
+    /**
      * 验证写入路径安全性，防止路径逃逸
      *
      * @return 安全的绝对路径，不安全返回 null

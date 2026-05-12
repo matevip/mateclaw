@@ -6,6 +6,7 @@ import lombok.Data;
 import vip.mate.skill.manifest.SkillManifest;
 
 import java.nio.file.Path;
+import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -71,6 +72,16 @@ public class ResolvedSkill {
     /** 是否为内置技能 */
     @Builder.Default
     private boolean builtin = false;
+
+    /**
+     * Skill row create timestamp, copied from {@code mate_skill.create_time}.
+     * Used by the prompt-catalog ranker to surface freshly installed skills
+     * before they accumulate any usage stats — without this, a brand-new
+     * skill stays invisible behind the recent/frequent/alphabetical sort
+     * and the LLM ends up replying "no such skill" right after the user
+     * installed it. Null for virtual MCP/ACP skills that don't own a row.
+     */
+    private LocalDateTime createTime;
 
     // ==================== 安全扫描状态 ====================
 
