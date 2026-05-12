@@ -138,7 +138,19 @@ function riskLabel(r: 'high' | 'medium' | 'low'): string {
 </script>
 
 <style scoped>
-.approvals-shell { display: flex; flex-direction: column; gap: 14px; }
+.approvals-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  padding-bottom: 16px;
+}
+/* Stop the panels from being shrunk to fit the body — let them overflow
+   into the scroll area instead. */
+.approvals-shell > .panel { flex-shrink: 0; }
 
 .panel { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
 .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }

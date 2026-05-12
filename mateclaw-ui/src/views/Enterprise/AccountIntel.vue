@@ -269,6 +269,7 @@ function scoreToneFor(score: number): string {
 .account-shell {
   display: grid;
   grid-template-columns: 280px 1fr 340px;
+  grid-template-rows: minmax(0, 1fr);
   gap: 14px;
   flex: 1;
   min-height: 0;

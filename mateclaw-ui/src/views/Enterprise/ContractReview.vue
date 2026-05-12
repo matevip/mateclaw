@@ -86,9 +86,9 @@
           </li>
         </ol>
         <div class="chain-actions">
-          <button class="btn-secondary">{{ t('enterprise.contract.btnReject') }}</button>
-          <button class="btn-secondary">{{ t('enterprise.contract.btnRequestRevision') }}</button>
-          <button class="btn-primary">{{ t('enterprise.contract.btnApprove') }}</button>
+          <button class="btn-secondary chain-btn">{{ t('enterprise.contract.btnReject') }}</button>
+          <button class="btn-secondary chain-btn">{{ t('enterprise.contract.btnRequestRevision') }}</button>
+          <button class="btn-primary chain-btn">{{ t('enterprise.contract.btnApprove') }}</button>
         </div>
       </footer>
     </section>
@@ -339,6 +339,10 @@ function statusLabel(s: Case['status']): string {
 .review-shell {
   display: grid;
   grid-template-columns: 280px 1fr 340px;
+  /* Force the single row to the container height so each pane has a definite
+     height ceiling; minmax(0, 1fr) lets the pane shrink below its content
+     intrinsic size so its inner scrollable region kicks in. */
+  grid-template-rows: minmax(0, 1fr);
   gap: 14px;
   flex: 1;
   min-height: 0;
@@ -430,47 +434,105 @@ function statusLabel(s: Case['status']): string {
 .clause-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 18px;
   overflow-y: auto;
   flex: 1;
-  padding-right: 4px;
+  padding-right: 6px;
+  /* Stop the last card from butting against the approval-chain footer. */
+  padding-bottom: 8px;
 }
 .clause-card {
   border: 1px solid var(--mc-border-light);
-  border-radius: 12px;
-  padding: 14px 16px;
+  border-radius: 14px;
   background: var(--mc-bg-elevated);
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s, box-shadow 0.18s, transform 0.15s;
   display: flex;
   flex-direction: column;
-  gap: 10px;
   position: relative;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(58, 32, 19, 0.04);
 }
+.clause-card:hover { box-shadow: 0 4px 14px rgba(58, 32, 19, 0.08); }
 .clause-card.risk-high { border-left: 4px solid #ef4444; }
 .clause-card.risk-medium { border-left: 4px solid #f59e0b; }
 .clause-card.risk-low { border-left: 4px solid #84cc16; }
-.clause-card[data-active="true"] { box-shadow: var(--mc-shadow-soft); border-color: var(--mc-primary); }
+.clause-card[data-active="true"] {
+  box-shadow: 0 6px 22px rgba(217, 109, 70, 0.18);
+  border-color: var(--mc-primary);
+}
 
-.clause-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.clause-type { font-size: 13px; font-weight: 600; color: var(--mc-text-primary); }
-.clause-loc { font-size: 11px; color: var(--mc-text-tertiary); font-family: var(--mc-font-mono); }
+/* === head row — gets its own contrast band so each card has an obvious "start" === */
+.clause-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  background: var(--mc-bg-muted);
+  border-bottom: 1px solid var(--mc-border-light);
+}
+.clause-type { font-size: 14px; font-weight: 600; color: var(--mc-text-primary); }
+.clause-loc {
+  font-size: 11px;
+  color: var(--mc-text-tertiary);
+  font-family: var(--mc-font-mono);
+  margin-left: auto;
+  background: var(--mc-bg-elevated);
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--mc-border-light);
+}
 
-.clause-quote { font-size: 13px; color: var(--mc-text-primary); line-height: 1.55; margin: 0; padding: 8px 12px; background: var(--mc-bg-muted); border-radius: 8px; font-style: italic; }
-.clause-deviation { font-size: 12px; color: var(--mc-text-secondary); display: flex; gap: 8px; align-items: baseline; line-height: 1.5; }
-.dev-label, .suggest-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--mc-text-tertiary); white-space: nowrap; }
-.dev-label { color: #b45309; }
-.suggest-label { color: var(--mc-primary-hover); }
+/* === body — quote / deviation / suggestion stack with consistent padding === */
+.clause-card > .clause-quote,
+.clause-card > .clause-deviation,
+.clause-card > .clause-suggest { margin: 0 16px; }
+.clause-card > .clause-quote { margin-top: 14px; }
+.clause-card > .clause-deviation { margin-top: 10px; }
+.clause-card > .clause-suggest { margin: 12px 16px 16px; }
+
+.clause-quote {
+  font-size: 13px;
+  color: var(--mc-text-primary);
+  line-height: 1.6;
+  padding: 10px 14px;
+  background: var(--mc-bg);
+  border-radius: 8px;
+  font-style: italic;
+  border: 1px dashed var(--mc-border-light);
+}
+.clause-deviation {
+  font-size: 12px;
+  color: var(--mc-text-secondary);
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  line-height: 1.55;
+}
+.dev-label, .suggest-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mc-text-tertiary);
+  white-space: nowrap;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.dev-label { color: #b45309; background: #fef3c7; }
+.suggest-label { color: var(--mc-primary-hover); background: var(--mc-primary-bg); }
 
 .clause-suggest {
-  background: var(--mc-primary-bg);
-  border-radius: 8px;
-  padding: 10px 12px;
+  background: linear-gradient(180deg, var(--mc-primary-bg), rgba(246, 226, 215, 0.4));
+  border: 1px solid rgba(217, 109, 70, 0.18);
+  border-radius: 10px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
-.suggest-text { font-size: 13px; color: var(--mc-text-primary); line-height: 1.55; }
+.suggest-text { font-size: 13px; color: var(--mc-text-primary); line-height: 1.6; }
 
 /* === approval chain === */
 .approval-chain {
@@ -481,17 +543,39 @@ function statusLabel(s: Case['status']): string {
   gap: 12px;
 }
 .chain-title { font-size: 11px; font-weight: 700; color: var(--mc-text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; }
-.chain-list { list-style: none; margin: 0; padding: 0; display: flex; gap: 0; }
-.chain-step { flex: 1; display: flex; gap: 10px; align-items: flex-start; padding-right: 12px; position: relative; }
+
+/* Vertical stepper layout — bullet on top, body underneath, connector
+   between bullets at bullet-vertical-center. Mirrors the overview pipeline
+   so the two surfaces share a single stepper grammar. */
+.chain-list { list-style: none; margin: 0; padding: 0; display: flex; align-items: stretch; }
+.chain-step {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 0 8px;
+  position: relative;
+  min-width: 0;
+}
 .chain-step::after {
-  content: ''; position: absolute; top: 13px; right: 0; left: 38px; height: 2px; background: var(--mc-border-light);
+  content: '';
+  position: absolute;
+  top: 13px;
+  left: 50%;
+  right: -50%;
+  height: 2px;
+  background: var(--mc-border-light);
+  z-index: 0;
 }
 .chain-step.done::after { background: var(--mc-primary); }
 .chain-step:last-child::after { display: none; }
+
 .chain-bullet {
-  width: 26px; height: 26px;
+  width: 28px; height: 28px;
   border-radius: 50%;
-  background: var(--mc-bg-muted);
+  background: var(--mc-bg-elevated);
   color: var(--mc-text-tertiary);
   font-size: 12px;
   font-weight: 700;
@@ -505,12 +589,15 @@ function statusLabel(s: Case['status']): string {
 }
 .chain-step.done .chain-bullet { background: var(--mc-primary); color: white; border-color: var(--mc-primary); }
 .chain-step.active .chain-bullet { background: var(--mc-primary-bg); color: var(--mc-primary-hover); border-color: var(--mc-primary); }
-.chain-body { padding-top: 2px; min-width: 0; }
-.chain-who { font-size: 12px; font-weight: 600; color: var(--mc-text-primary); }
-.chain-note { font-size: 11px; color: var(--mc-text-secondary); margin-top: 2px; line-height: 1.4; }
-.chain-at { font-size: 10px; color: var(--mc-text-tertiary); margin-top: 2px; font-family: var(--mc-font-mono); }
 
-.chain-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.chain-body { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; max-width: 140px; }
+.chain-who { font-size: 12px; font-weight: 600; color: var(--mc-text-primary); line-height: 1.3; }
+.chain-step.active .chain-who { color: var(--mc-primary-hover); }
+.chain-note { font-size: 11px; color: var(--mc-text-secondary); line-height: 1.35; }
+.chain-at { font-size: 10px; color: var(--mc-text-tertiary); font-family: var(--mc-font-mono); margin-top: 1px; }
+
+.chain-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.chain-btn { white-space: nowrap; }
 .btn-primary, .btn-secondary {
   border-radius: 8px;
   padding: 7px 14px;

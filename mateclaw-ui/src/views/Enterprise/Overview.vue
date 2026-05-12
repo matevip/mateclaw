@@ -90,13 +90,12 @@
         </div>
       </header>
       <div class="pipeline">
-        <div class="pipeline-step" v-for="(s, i) in pipeline" :key="s.label">
-          <div class="step-bullet" :class="{ done: s.done, active: !s.done && i === firstActive }">{{ i + 1 }}</div>
-          <div class="step-body">
-            <div class="step-label">{{ s.label }}</div>
-            <div class="step-desc">{{ s.desc }}</div>
-          </div>
-          <div v-if="i < pipeline.length - 1" class="step-connector" :class="{ done: s.done }"></div>
+        <div class="pipeline-step"
+             v-for="(s, i) in pipeline" :key="s.label"
+             :class="{ done: s.done, active: !s.done && i === firstActive }">
+          <div class="step-bullet">{{ s.done ? '✓' : i + 1 }}</div>
+          <div class="step-label">{{ s.label }}</div>
+          <div class="step-desc">{{ s.desc }}</div>
         </div>
       </div>
     </article>
@@ -197,7 +196,28 @@ const firstActive = computed(() => pipeline.findIndex(s => !s.done))
 </script>
 
 <style scoped>
-.overview { display: flex; flex-direction: column; gap: 18px; }
+.overview {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Inset the scrollbar so it doesn't hug the cards, and give the last
+     card breathing room from the bottom edge of the body. */
+  padding-right: 4px;
+  padding-bottom: 16px;
+}
+/* Each panel inside an overflow-y flex column must opt out of the default
+   flex-shrink behaviour, otherwise the browser will compress them to fit
+   inside the visible body instead of letting them overflow into the
+   scrollable area. Without this the pipeline panel renders at ~38px tall
+   (= just its padding) and its content overflows below the visible card. */
+.overview > .panel,
+.overview > .metric-strip,
+.overview > .overview-grid {
+  flex-shrink: 0;
+}
 
 /* === metric strip === */
 .metric-strip {
@@ -373,13 +393,45 @@ const firstActive = computed(() => pipeline.findIndex(s => !s.done))
 .tag-playbook { background: var(--mc-primary-bg); color: var(--mc-primary-hover); }
 .tag-precedent { background: var(--mc-accent-soft); color: var(--mc-accent); }
 
-/* === pipeline === */
-.pipeline { display: flex; gap: 0; }
-.pipeline-step { display: flex; gap: 12px; flex: 1; align-items: flex-start; position: relative; }
+/* === pipeline ===
+   Centered horizontal stepper. The connector is a pseudo-element on each
+   step that spans from the bullet's right edge to the next step's bullet
+   (i.e. just past its left edge). Pulling it out of the flex flow lets the
+   label and desc sit cleanly below the bullet without colliding with the
+   horizontal line. */
+.pipeline {
+  display: flex;
+  align-items: stretch;
+  padding: 4px 8px;
+}
+.pipeline-step {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 0 8px;
+}
+.pipeline-step::after {
+  /* Connector drawn at the bullet's vertical centre, behind the bullet via
+     z-index. last-child has no connector. */
+  content: '';
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  right: -50%;
+  height: 2px;
+  background: var(--mc-border-light);
+  z-index: 0;
+}
+.pipeline-step.done::after { background: var(--mc-primary); }
+.pipeline-step:last-child::after { display: none; }
+
 .step-bullet {
   width: 32px; height: 32px;
   border-radius: 50%;
-  background: var(--mc-bg-muted);
+  background: var(--mc-bg-elevated);
   color: var(--mc-text-tertiary);
   font-size: 13px;
   font-weight: 700;
@@ -387,16 +439,28 @@ const firstActive = computed(() => pipeline.findIndex(s => !s.done))
   align-items: center;
   justify-content: center;
   border: 2px solid var(--mc-border-light);
+  position: relative;
+  z-index: 1;
+  margin-bottom: 10px;
   flex-shrink: 0;
 }
-.step-bullet.done { background: var(--mc-primary); color: white; border-color: var(--mc-primary); }
-.step-bullet.active { background: var(--mc-primary-bg); color: var(--mc-primary-hover); border-color: var(--mc-primary); }
-.step-body { flex: 1; padding-top: 5px; min-width: 0; padding-right: 12px; }
-.step-label { font-size: 13px; font-weight: 600; color: var(--mc-text-primary); }
-.step-desc { font-size: 11px; color: var(--mc-text-tertiary); margin-top: 2px; line-height: 1.4; }
-.step-connector { position: absolute; top: 16px; left: 32px; right: -12px; height: 2px; background: var(--mc-border-light); }
-.step-connector.done { background: var(--mc-primary); }
-.pipeline-step:last-child .step-connector { display: none; }
+.pipeline-step.done .step-bullet { background: var(--mc-primary); color: white; border-color: var(--mc-primary); }
+.pipeline-step.active .step-bullet { background: var(--mc-primary-bg); color: var(--mc-primary-hover); border-color: var(--mc-primary); }
+
+.step-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mc-text-primary);
+  line-height: 1.3;
+}
+.pipeline-step.active .step-label { color: var(--mc-primary-hover); }
+.step-desc {
+  font-size: 11px;
+  color: var(--mc-text-tertiary);
+  margin-top: 4px;
+  line-height: 1.45;
+  max-width: 180px;
+}
 
 @media (max-width: 1100px) {
   .overview-grid { grid-template-columns: 1fr; }

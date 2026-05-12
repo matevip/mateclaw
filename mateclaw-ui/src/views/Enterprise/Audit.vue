@@ -97,7 +97,17 @@ function kindLabel(k: Event['kind']): string { return t(`enterprise.audit.kind.$
 </script>
 
 <style scoped>
-.audit-shell { display: flex; flex-direction: column; }
+.audit-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  padding-bottom: 16px;
+}
+/* Stop the audit panel from being shrunk to fit the body. */
+.audit-shell > .panel { flex-shrink: 0; }
 
 .panel { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
 .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }

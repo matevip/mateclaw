@@ -63,6 +63,11 @@ function onOpenCase(id: string) {
   padding: 28px 32px 24px;
   gap: 18px;
   background: var(--mc-bg);
+  /* Constrain the inner body so each tab can decide how to overflow:
+     vertical-stack pages scroll the body itself, three-pane grid pages
+     keep each pane scrolling independently. Without this, content that
+     exceeds the viewport falls outside the layout box and is unreachable. */
+  overflow: hidden;
 }
 
 .enterprise-head { display: flex; flex-direction: column; gap: 4px; }
@@ -128,5 +133,14 @@ function onOpenCase(id: string) {
 }
 .enterprise-tab.active .tab-count { background: var(--mc-primary); color: white; }
 
-.enterprise-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* The body fills the remaining height and gives its single child a strict
+   height contract via flex. Page roots must declare `flex: 1; min-height: 0;`
+   so they consume that height and can choose their own overflow strategy. */
+.enterprise-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 </style>
