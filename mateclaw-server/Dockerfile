@@ -100,4 +100,5 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
 
 COPY --from=builder /build/target/*.jar app.jar
 EXPOSE 18088
+EXPOSE 1455
 ENTRYPOINT ["java", "-jar", "-Dspring.profiles.active=mysql", "app.jar"]
