@@ -122,16 +122,22 @@
 
         <!-- 工具审批状态（极简一行，操作在输入栏） -->
         <div v-if="pendingApproval" class="approval-inline">
-          <el-icon class="approval-inline__icon"><WarningFilled /></el-icon>
-          <span v-if="pendingApproval.status === 'pending_approval'" class="approval-inline__text">
-            {{ $t('chat.approvalWaiting') }} <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
-          </span>
-          <span v-else-if="pendingApproval.status === 'approved'" class="approval-inline__text approval-inline--approved">
-            {{ $t('chat.approved') }}: <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
-          </span>
-          <span v-else class="approval-inline__text approval-inline--denied">
-            {{ $t('chat.denied') }}: <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
-          </span>
+          <div class="approval-inline__main">
+            <el-icon class="approval-inline__icon"><WarningFilled /></el-icon>
+            <span v-if="pendingApproval.status === 'pending_approval'" class="approval-inline__text">
+              {{ $t('chat.approvalWaiting') }} <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
+            </span>
+            <span v-else-if="pendingApproval.status === 'approved'" class="approval-inline__text approval-inline--approved">
+              {{ $t('chat.approved') }}: <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
+            </span>
+            <span v-else class="approval-inline__text approval-inline--denied">
+              {{ $t('chat.denied') }}: <code>{{ getToolLabel(pendingApproval.toolName) }}</code>
+            </span>
+          </div>
+          <div v-if="showApprovalArguments" class="approval-inline__params">
+            <div class="approval-inline__params-label">{{ $t('chat.approvalParameters') }}</div>
+            <pre class="approval-inline__params-code">{{ formattedApprovalArguments }}</pre>
+          </div>
         </div>
 
         <!-- 主要内容 -->
@@ -411,6 +417,7 @@ import { useAuthenticatedAttachment } from '@/composables/useAuthenticatedAttach
 import { useToolLabel } from '@/composables/useToolLabel'
 import { http } from '@/api'
 import { copyToClipboard } from '@/utils/clipboard'
+import { formatToolArguments, shouldShowMcpToolArguments } from '@/utils/toolArguments'
 import TypingCursor from './TypingCursor.vue'
 import BrowserTimeline from './BrowserTimeline.vue'
 import ToolCallSegment from './ToolCallSegment.vue'
@@ -1086,6 +1093,11 @@ const pendingApproval = computed(() => {
   return approval
 })
 
+const formattedApprovalArguments = computed(() => formatToolArguments(pendingApproval.value?.arguments))
+const showApprovalArguments = computed(() =>
+  shouldShowMcpToolArguments(pendingApproval.value?.toolName, pendingApproval.value?.arguments)
+)
+
 const approvalSeverityClass = computed(() => {
   const sev = pendingApproval.value?.maxSeverity?.toLowerCase()
   if (!sev) return ''
@@ -1545,7 +1557,8 @@ watch(isGenerating, (generating) => {
 /* 极简审批状态（一行式） */
 .approval-inline {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 6px;
   padding: 8px 12px;
   margin-bottom: 8px;
@@ -1553,6 +1566,13 @@ watch(isGenerating, (generating) => {
   color: var(--mc-text-secondary, #64748b);
   background: var(--mc-bg-muted, #f9f7f5);
   border-radius: 8px;
+}
+
+.approval-inline__main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .approval-inline__icon {
@@ -1566,6 +1586,33 @@ watch(isGenerating, (generating) => {
   padding: 1px 5px;
   border-radius: 4px;
   font-weight: 500;
+}
+
+.approval-inline__params {
+  min-width: 0;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: var(--mc-bg-sunken, #f1f5f9);
+  border: 1px solid var(--mc-border-light, #e5e7eb);
+}
+
+.approval-inline__params-label {
+  margin-bottom: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mc-text-secondary, #64748b);
+}
+
+.approval-inline__params-code {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--mc-text-primary, #1e293b);
 }
 
 .approval-inline--approved {

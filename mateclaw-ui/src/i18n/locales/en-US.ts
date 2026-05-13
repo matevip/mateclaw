@@ -350,6 +350,7 @@ export default {
     // Approval bar
     approvalAllow: 'Allow',
     approvalExecute: 'to execute?',
+    approvalParameters: 'Parameters',
     // Time format
     timeJustNow: 'Just now',
     timeMinutesAgo: '{n}m ago',
