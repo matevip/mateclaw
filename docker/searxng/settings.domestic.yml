@@ -75,7 +75,7 @@ engines:
     disabled: false
     weight: 1
 
-  - name: google_news_rss
+  - name: google-news
     engine: google_news_rss
     shortcut: gnrss
     categories: [news]

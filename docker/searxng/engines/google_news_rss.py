@@ -34,7 +34,14 @@ def request(query, params):
 def response(resp):
     results = []
 
-    root = ET.fromstring(resp.text)
+    if not resp.text:
+        return results
+
+    try:
+        root = ET.fromstring(resp.text)
+    except ET.ParseError:
+        return results
+
     channel = root.find("channel")
     if channel is None:
         return results
