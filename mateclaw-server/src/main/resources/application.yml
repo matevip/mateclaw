@@ -229,10 +229,13 @@ mate:
       excluded-tools:
         - read_file
         - read_workspace_memory_file
-      # Spill files are deleted after this many days. Set to 0 to disable the
-      # scheduled sweep entirely (files still get purged when the conversation
-      # is deleted explicitly via ConversationService.deleteConversation).
-      retention-days: 7
+      # Spill files are deleted after this many days. Default 0 disables the
+      # scheduled sweep entirely so a summary/preview that points at a spill
+      # path stays valid for the whole life of the conversation. Files are
+      # still purged when the conversation is deleted explicitly via
+      # ConversationService.deleteConversation. Raise to a positive value if
+      # disk pressure outweighs recoverability for your deployment.
+      retention-days: 0
       cleanup-cron: "0 0 3 * * ?"
     conversation:
       window:

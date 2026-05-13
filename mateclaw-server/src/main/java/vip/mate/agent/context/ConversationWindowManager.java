@@ -22,6 +22,7 @@ import vip.mate.workspace.conversation.ConversationService;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -131,6 +132,21 @@ public class ConversationWindowManager {
         this.toolResultStorage = toolResultStorage;
     }
 
+    /**
+     * Optional stream tracker for broadcasting {@code compact_status}
+     * SSE events. Wired via setter so unit tests can leave it {@code null}
+     * without dragging in the channel layer. When present, every
+     * compaction emits start/skipped/summarize/done events so the
+     * frontend can render a boundary card and a status line in real
+     * time.
+     */
+    private vip.mate.channel.web.ChatStreamTracker streamTracker;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setStreamTracker(vip.mate.channel.web.ChatStreamTracker streamTracker) {
+        this.streamTracker = streamTracker;
+    }
+
     // ==================== 状态 ====================
 
     /** 摘要缓存：key = "conversationId:oldMessageCount" */
@@ -205,6 +221,8 @@ public class ConversationWindowManager {
         if (messages == null || messages.isEmpty()) {
             return messages;
         }
+        long spillsAtEntry = (toolResultStorage != null) ? toolResultStorage.getSpillCount() : 0L;
+
         messages = pruneOldToolResultsForModelInput(messages, conversationId, workspaceBasePath);
 
         int effectiveMax = (maxInputTokens != null && maxInputTokens > 0)
@@ -229,7 +247,7 @@ public class ConversationWindowManager {
 
         // 可用于历史的 token 预算 = max - system - currentMsg - tools - 安全余量
         int reservedTokens = systemTokens + currentMsgTokens + toolsTokens + (int) (effectiveMax * 0.05);
-        // RFC-025 Change 1: reserve 硬封顶到 effectiveMax 的 50%。
+        // 预留 reserve 硬封顶到 effectiveMax 的 50%。
         // 小上下文模型（Ollama 16K、本地 8K）下，systemTokens + currentMsgTokens 很容易
         // 接近或超过 effectiveMax，不封顶会让 historyBudget 变负数导致死循环压缩
         // （压缩目标比压缩前还大 → 压缩后又触发压缩）。
@@ -244,7 +262,8 @@ public class ConversationWindowManager {
         // 尾部保护 token 预算：阈值的 20%（与 Hermes 一致）
         int tailTokenBudget = (int) (triggerThreshold * 0.20);
 
-        return compactMessages(messages, historyBudget, tailTokenBudget, chatModel, conversationId, agentId);
+        return compactMessages(messages, historyBudget, tailTokenBudget, chatModel,
+                conversationId, agentId, totalTokens, spillsAtEntry);
     }
 
     /**
@@ -260,15 +279,40 @@ public class ConversationWindowManager {
 
     // ==================== 核心压缩逻辑 ====================
 
+    /** Broadcast a single compact_status event; silent no-op when no tracker is wired. */
+    private void broadcastCompactStatus(String conversationId, String status, Map<String, Object> extra) {
+        if (streamTracker == null || conversationId == null || conversationId.isEmpty()) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new java.util.LinkedHashMap<>();
+            payload.put("status", status);
+            payload.put("timestamp", System.currentTimeMillis());
+            if (extra != null) payload.putAll(extra);
+            streamTracker.broadcastObject(conversationId, "compact_status", payload);
+        } catch (Exception e) {
+            log.debug("[ConversationWindow] broadcast compact_status failed: {}", e.getMessage());
+        }
+    }
+
     private List<Message> compactMessages(List<Message> messages, int historyBudget,
                                           int tailTokenBudget, ChatModel chatModel,
-                                          String conversationId, Long agentId) {
+                                          String conversationId, Long agentId,
+                                          int preTokens, long spillsAtEntry) {
+        broadcastCompactStatus(conversationId, "start", Map.of(
+                "preTokens", preTokens,
+                "messagesIn", messages.size(),
+                "trigger", "token_threshold"
+        ));
+
         // 动态计算尾部保护边界（替代固定 preserveRecentPairs）
         int headEnd = 0; // 头部保护：暂不保护（system prompt 已在外部计算）
         int tailStart = findTailBoundary(messages, headEnd, tailTokenBudget);
 
         if (tailStart <= headEnd) {
             log.debug("[ConversationWindow] 消息数不足以拆分，跳过压缩");
+            broadcastCompactStatus(conversationId, "skipped",
+                    Map.of("reason", "insufficient_messages"));
             return messages;
         }
 
@@ -281,7 +325,13 @@ public class ConversationWindowManager {
         // turn.
         int pairSafeCut = enforcePairSafeBoundary(messages, headEnd, tailStart);
         if (pairSafeCut <= headEnd) {
+            broadcastCompactStatus(conversationId, "skipped",
+                    Map.of("reason", "pair_boundary_collapsed"));
             return messages;
+        }
+        if (pairSafeCut != tailStart) {
+            broadcastCompactStatus(conversationId, "pair_safe", Map.of(
+                    "movedFrom", tailStart, "movedTo", pairSafeCut));
         }
         tailStart = pairSafeCut;
 
@@ -340,13 +390,20 @@ public class ConversationWindowManager {
         // 计算动态摘要预算
         int summaryBudget = computeSummaryBudget(forSummary);
 
+        broadcastCompactStatus(conversationId, "summarize", Map.of(
+                "messagesToSummarize", oldMessages.size(),
+                "summaryBudget", summaryBudget
+        ));
+
         // 检查缓存
         String cacheKey = conversationId + ":" + oldMessages.size();
         CachedSummary cached = summaryCache.get(cacheKey);
         String summary;
+        boolean fromCache = false;
 
         if (cached != null && !cached.isExpired(CACHE_TTL_MS)) {
             summary = cached.summary();
+            fromCache = true;
             log.debug("[ConversationWindow] 命中摘要缓存, conv={}", conversationId);
         } else {
             summary = generateSummary(forSummary, chatModel, conversationId, summaryBudget, memoryExtraContext);
@@ -355,21 +412,12 @@ public class ConversationWindowManager {
                 int count = compressionCounts.merge(conversationId, 1, Integer::sum);
                 log.info("[ConversationWindow] 生成结构化摘要 ({} 字符, 第 {} 次压缩), 压缩 {} 条旧消息, conv={}",
                         summary.length(), count, oldMessages.size(), conversationId);
-
-                // 持久化摘要到 DB：下次加载历史时可直接从摘要位置开始，跳过重复压缩
-                if (conversationService != null) {
-                    try {
-                        conversationService.saveCompressionSummary(
-                                conversationId, SUMMARY_PREFIX + summary, oldMessages.size());
-                    } catch (Exception e) {
-                        log.warn("[ConversationWindow] Failed to persist compression summary: {}", e.getMessage());
-                    }
-                }
             }
         }
 
         // 组装结果
         List<Message> result = new ArrayList<>();
+        boolean anchored = false;
         if (summary != null && !summary.isBlank()) {
             result.add(new UserMessage(SUMMARY_PREFIX + summary));
 
@@ -380,11 +428,16 @@ public class ConversationWindowManager {
             Message anchor = buildFirstUserAnchor(oldMessages);
             if (anchor != null) {
                 result.add(anchor);
+                anchored = true;
             }
         } else if (!oldMessages.isEmpty()) {
             log.warn("[ConversationWindow] 摘要生成失败，降级为保留最近 4 条旧消息, conv={}", conversationId);
             int fallbackKeep = Math.min(4, oldMessages.size());
             result.addAll(oldMessages.subList(oldMessages.size() - fallbackKeep, oldMessages.size()));
+            broadcastCompactStatus(conversationId, "failed", Map.of(
+                    "reason", "summary_generation_failed",
+                    "fallbackKept", fallbackKeep
+            ));
         }
         result.addAll(recentMessages);
 
@@ -393,6 +446,42 @@ public class ConversationWindowManager {
         if (resultTokens > historyBudget && result.size() > 2) {
             log.warn("[ConversationWindow] 压缩后仍超预算: {} > {}, 执行二次裁剪", resultTokens, historyBudget);
             result = trimToFit(result, historyBudget);
+            resultTokens = TokenEstimator.estimateTokens(result);
+        }
+
+        // Persist the boundary + announce completion only when the summary
+        // actually wrote a row. Failed-summary fallback already broadcast
+        // its own event above.
+        if (summary != null && !summary.isBlank() && conversationService != null && !fromCache) {
+            long spillsThisTurn = (toolResultStorage != null)
+                    ? Math.max(0L, toolResultStorage.getSpillCount() - spillsAtEntry)
+                    : 0L;
+            Map<String, Object> boundaryMetadata = new java.util.LinkedHashMap<>();
+            boundaryMetadata.put("trigger", "token_threshold");
+            boundaryMetadata.put("preTokens", preTokens);
+            boundaryMetadata.put("postTokens", resultTokens);
+            boundaryMetadata.put("messagesSummarized", oldMessages.size());
+            boundaryMetadata.put("tailKept", recentMessages.size());
+            boundaryMetadata.put("toolResultsSpilled", spillsThisTurn);
+            boundaryMetadata.put("anchored", anchored);
+            try {
+                conversationService.saveCompressionSummary(
+                        conversationId, SUMMARY_PREFIX + summary, oldMessages.size(),
+                        boundaryMetadata);
+            } catch (Exception e) {
+                log.warn("[ConversationWindow] Failed to persist compression boundary: {}", e.getMessage());
+            }
+            broadcastCompactStatus(conversationId, "done", boundaryMetadata);
+        } else if (summary != null && !summary.isBlank() && fromCache) {
+            // Cached summary path — no new DB row, but emit done so the
+            // frontend status bar still updates.
+            broadcastCompactStatus(conversationId, "done", Map.of(
+                    "preTokens", preTokens,
+                    "postTokens", resultTokens,
+                    "messagesSummarized", oldMessages.size(),
+                    "tailKept", recentMessages.size(),
+                    "fromCache", true
+            ));
         }
 
         return result;
@@ -780,15 +869,36 @@ public class ConversationWindowManager {
     }
 
     /**
-     * Phase 1 - Soft trim：对工具结果做 head+tail 裁剪（保留首尾各 200 字符）。
+     * Spill-marker responses already point at an on-disk full copy via
+     * {@code path=...} in their body. Trimming, replacing, or pre-pruning
+     * them would destroy the very pointer the model needs to recover the
+     * original output with {@code read_file} — which is the whole reason
+     * we spilled in the first place. All three compaction phases consult
+     * this guard before touching a response.
      */
-    private int softTrimToolResults(List<Message> messages) {
+    static boolean isSpillMarker(ToolResponseMessage.ToolResponse r) {
+        return r != null
+                && r.responseData() != null
+                && r.responseData().startsWith(ToolResultStorage.SPILL_MARKER_PREFIX);
+    }
+
+    /**
+     * Phase 1 - Soft trim：对工具结果做 head+tail 裁剪（保留首尾各 200 字符）。
+     * <p>Spill-marker responses are left untouched so their on-disk pointer
+     * survives intact across compaction.
+     */
+    int softTrimToolResults(List<Message> messages) {
         int trimmed = 0;
         for (int i = 0; i < messages.size(); i++) {
             if (messages.get(i) instanceof ToolResponseMessage trm) {
                 List<ToolResponseMessage.ToolResponse> newResponses = new ArrayList<>();
                 boolean changed = false;
                 for (ToolResponseMessage.ToolResponse r : trm.getResponses()) {
+                    if (isSpillMarker(r)) {
+                        // Pointer + preview already; trimming would lose the path.
+                        newResponses.add(r);
+                        continue;
+                    }
                     String data = r.responseData();
                     if (data != null && data.length() > 500) {
                         String head = data.substring(0, 200);
@@ -811,16 +921,28 @@ public class ConversationWindowManager {
 
     /**
      * Phase 2 - Hard clear：将所有旧工具结果替换为占位符。
+     * <p>Spill-marker responses are left untouched so the on-disk pointer
+     * survives — a placeholder here would force the model to abandon a
+     * tool output it could otherwise recover via {@code read_file}.
      */
-    private int hardClearToolResults(List<Message> messages) {
+    int hardClearToolResults(List<Message> messages) {
         int cleared = 0;
         for (int i = 0; i < messages.size(); i++) {
             if (messages.get(i) instanceof ToolResponseMessage trm) {
-                List<ToolResponseMessage.ToolResponse> placeholders = trm.getResponses().stream()
-                        .map(r -> new ToolResponseMessage.ToolResponse(r.id(), r.name(), "[tool result removed]"))
-                        .toList();
-                messages.set(i, ToolResponseMessage.builder().responses(placeholders).build());
-                cleared++;
+                boolean changed = false;
+                List<ToolResponseMessage.ToolResponse> replaced = new ArrayList<>(trm.getResponses().size());
+                for (ToolResponseMessage.ToolResponse r : trm.getResponses()) {
+                    if (isSpillMarker(r)) {
+                        replaced.add(r);
+                        continue;
+                    }
+                    replaced.add(new ToolResponseMessage.ToolResponse(r.id(), r.name(), "[tool result removed]"));
+                    changed = true;
+                }
+                if (changed) {
+                    messages.set(i, ToolResponseMessage.builder().responses(replaced).build());
+                    cleared++;
+                }
             }
         }
         return cleared;
@@ -828,18 +950,27 @@ public class ConversationWindowManager {
 
     /**
      * Phase 3 Pre-prune：在 LLM 摘要前，将工具输出替换为占位符（减少摘要输入 token）。
+     * <p>Spill-marker responses are left untouched so the summary input
+     * still has the on-disk path the model might cite back in its summary.
      */
-    private int prePruneForSummary(List<Message> messages) {
+    int prePruneForSummary(List<Message> messages) {
         int pruned = 0;
         for (int i = 0; i < messages.size(); i++) {
             if (messages.get(i) instanceof ToolResponseMessage trm) {
                 boolean hasSubstantial = trm.getResponses().stream()
-                        .anyMatch(r -> r.responseData() != null && r.responseData().length() > 200);
+                        .anyMatch(r -> !isSpillMarker(r)
+                                && r.responseData() != null
+                                && r.responseData().length() > 200);
                 if (hasSubstantial) {
-                    List<ToolResponseMessage.ToolResponse> placeholders = trm.getResponses().stream()
-                            .map(r -> new ToolResponseMessage.ToolResponse(r.id(), r.name(),
-                                    "[旧工具输出已清理以节省上下文空间]"))
-                            .toList();
+                    List<ToolResponseMessage.ToolResponse> placeholders = new ArrayList<>(trm.getResponses().size());
+                    for (ToolResponseMessage.ToolResponse r : trm.getResponses()) {
+                        if (isSpillMarker(r)) {
+                            placeholders.add(r);
+                            continue;
+                        }
+                        placeholders.add(new ToolResponseMessage.ToolResponse(r.id(), r.name(),
+                                "[旧工具输出已清理以节省上下文空间]"));
+                    }
                     messages.set(i, ToolResponseMessage.builder().responses(placeholders).build());
                     pruned++;
                 }

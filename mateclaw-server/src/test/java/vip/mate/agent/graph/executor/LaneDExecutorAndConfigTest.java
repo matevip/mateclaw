@@ -104,6 +104,20 @@ class LaneDExecutorAndConfigTest {
         }
 
         @Test
+        @DisplayName("retentionDays defaults to 0 so spill files outlive their conversation")
+        void retentionDaysDefaultsToZero() {
+            // The recoverability invariant: a summary or preview that cites
+            // a spill path must keep working for the whole life of the
+            // conversation. Time-based deletion is opt-in; operators with
+            // disk pressure can raise this value explicitly.
+            ToolResultProperties props = new ToolResultProperties();
+            assertEquals(0, props.getRetentionDays(),
+                    "retentionDays must default to 0 — time-based purge is opt-in to preserve recoverability");
+            assertTrue(props.getCleanupCron() != null && !props.getCleanupCron().isBlank(),
+                    "cleanupCron stays defined; it is a no-op while retentionDays=0");
+        }
+
+        @Test
         @DisplayName("Per-result threshold matches the executor inline hard cap so spill and truncate share one ladder")
         void thresholdMatchesExecutorHardCap() throws Exception {
             ToolResultProperties props = new ToolResultProperties();

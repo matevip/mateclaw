@@ -428,18 +428,65 @@ public class ConversationService {
     }
 
     /**
-     * 将压缩摘要持久化为 role=system 的特殊消息。
-     * 下次加载历史时识别此消息，跳过它之前的已压缩消息。
+     * Persist a compaction boundary as a role=system message. The body is
+     * the summary text; the metadata describes <em>what happened</em> at
+     * this boundary (trigger, pre/post tokens, how many messages were
+     * summarised, how many spill files were produced, how many tail
+     * messages survived). On the next load this row is the cut-off — older
+     * messages are skipped, the model picks up from the summary forward.
+     *
+     * <p>Backward-compat overload: legacy callers that only know the row
+     * count still work and produce a minimal metadata block.
      */
     public void saveCompressionSummary(String conversationId, String summary, int compressedCount) {
+        saveCompressionSummary(conversationId, summary, compressedCount, Map.of());
+    }
+
+    /**
+     * Same as the 3-arg overload but accepts extra structured fields that
+     * are merged into the boundary's metadata JSON. Fields the frontend
+     * and observability pipeline care about:
+     * <ul>
+     *   <li>{@code trigger} — what fired this boundary
+     *       ({@code token_threshold}, {@code user_compact}, etc.)</li>
+     *   <li>{@code preTokens} / {@code postTokens} — context size before
+     *       and after, for the in-prompt status row</li>
+     *   <li>{@code messagesSummarized} / {@code tailKept} — partition
+     *       counts the user sees in the boundary card</li>
+     *   <li>{@code toolResultsSpilled} — how many bodies the spill store
+     *       absorbed during this boundary</li>
+     *   <li>{@code summaryId} — stable id (the inserted message id) for
+     *       deep-linking from the SSE event</li>
+     * </ul>
+     * <p>{@code type=compression_summary} is always present — the loader
+     * keys off it. {@code compressedCount} is kept for backward compat.
+     */
+    public void saveCompressionSummary(String conversationId, String summary, int compressedCount,
+                                       Map<String, Object> extraMetadata) {
         MessageEntity entity = new MessageEntity();
         entity.setConversationId(conversationId);
         entity.setRole("system");
         entity.setContent(summary);
         entity.setStatus("completed");
-        entity.setMetadata("{\"type\":\"compression_summary\",\"compressedCount\":" + compressedCount + "}");
+
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        metadata.put("type", "compression_summary");
+        metadata.put("compressedCount", compressedCount);
+        if (extraMetadata != null) {
+            extraMetadata.forEach((k, v) -> {
+                if (v != null) metadata.put(k, v);
+            });
+        }
+        try {
+            entity.setMetadata(objectMapper.writeValueAsString(metadata));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            log.warn("[Conversation] Failed to serialise compaction metadata, falling back to minimal: {}",
+                    e.getMessage());
+            entity.setMetadata("{\"type\":\"compression_summary\",\"compressedCount\":" + compressedCount + "}");
+        }
         messageMapper.insert(entity);
-        log.info("[Conversation] Saved compression summary for conv={}, compressedCount={}", conversationId, compressedCount);
+        log.info("[Conversation] Saved compression boundary conv={}, compressedCount={}, metadata={}",
+                conversationId, compressedCount, entity.getMetadata());
     }
 
     public List<MessageVO> listMessageViews(String conversationId) {

@@ -99,12 +99,17 @@ public class ToolResultProperties {
 
     /**
      * Days to retain spill files before the scheduled cleanup deletes them.
-     * Spill files exist to let the model recover full tool output via
-     * {@code read_file} during the active conversation; once the conversation
-     * is dormant for this many days the agent is extremely unlikely to ever
-     * read the file again, and disk pressure starts to matter.
+     * <p><b>Default 0 means time-based cleanup is disabled</b> — spill files
+     * stay on disk until the owning conversation is explicitly deleted (which
+     * fires {@code purgeConversation} via {@code ConversationService}).
+     * This preserves the "recoverable" invariant: a summary or preview that
+     * cites a spill path will keep working for the whole life of the
+     * conversation, no matter how long it sits dormant.
+     * <p>Set to a positive value if disk pressure outweighs recoverability
+     * for your deployment. The scheduled sweep will then delete files whose
+     * mtime falls outside the retention horizon.
      */
-    private int retentionDays = 7;
+    private int retentionDays = 0;
 
     /**
      * Cron expression for the spill-cleanup task. Defaults to once a day at
