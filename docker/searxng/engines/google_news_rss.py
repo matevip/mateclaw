@@ -1,12 +1,12 @@
 # engines/google_news_rss.py
 
 import re
+import urllib.request
 from html import unescape
 import xml.etree.ElementTree as ET
 from urllib.parse import quote_plus
 from datetime import datetime
 
-# SearXNG 引擎元数据
 about = {
     "website": "https://news.google.com",
     "language": "zh-CN",
@@ -18,30 +18,36 @@ paging = False
 time_range_support = False
 
 base_url = "https://news.google.com/rss/search"
+proxy_url = "http://mihomo.zeabur.internal:10808"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+
+
+def _make_opener():
+    proxy = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+    return urllib.request.build_opener(proxy)
 
 
 def request(query, params):
     params["url"] = (
-        f"{base_url}?q={quote_plus(query)}&hl=zh-CN&gl=US&ceid=US:en"
+        f"{base_url}?q={quote_plus(query)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans&num=50"
     )
-    params["headers"]["User-Agent"] = (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-    )
-    params["proxies"] = {
-        "all://": ["http://mihomo.zeabur.internal:10808"]
-    }
     return params
 
 
 def response(resp):
     results = []
 
-    if not resp.text:
+    url = str(resp.url)
+    opener = _make_opener()
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    try:
+        with opener.open(req, timeout=15) as r:
+            xml_text = r.read().decode("utf-8")
+    except Exception:
         return results
 
     try:
-        root = ET.fromstring(resp.text)
+        root = ET.fromstring(xml_text)
     except ET.ParseError:
         return results
 
@@ -49,32 +55,35 @@ def response(resp):
     if channel is None:
         return results
 
-    for item in channel.findall("item"):
+    for item in channel.findall("item")[:50]:
         title = item.findtext("title") or ""
-        url = item.findtext("link") or item.findtext("guid") or ""
+        article_url = item.findtext("link") or ""
         description = item.findtext("description") or ""
         pub_date = item.findtext("pubDate") or ""
 
-        # 清理 HTML 标签
+        source_el = item.find("source")
+        source_name = ""
+        source_url = ""
+        if source_el is not None:
+            source_name = source_el.text or ""
+            source_url = source_el.get("url", "")
+
         content = unescape(re.sub(r"<[^>]+>", "", description)).strip()
 
-        # 解析发布时间
         published_date = None
         if pub_date:
             try:
-                published_date = datetime.strptime(
-                    pub_date, "%a, %d %b %Y %H:%M:%S %Z"
-                )
+                published_date = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %Z")
             except ValueError:
                 pass
 
-        results.append(
-            {
-                "title": title,
-                "url": url,
-                "content": content,
-                "publishedDate": published_date,
-            }
-        )
+        results.append({
+            "title": title,
+            "url": article_url,
+            "content": content,
+            "publishedDate": published_date,
+            "source": source_name,
+            "source_url": source_url,
+        })
 
     return results
