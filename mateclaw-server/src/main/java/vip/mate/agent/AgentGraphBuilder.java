@@ -1063,6 +1063,7 @@ public class AgentGraphBuilder {
                 Do not assume you cannot access local resources - try calling the appropriate tool first.
                 If a tool requires approval due to security policies, the system will prompt the user for confirmation.
                 Only state you cannot access something if no relevant tool is available.
+                Do not claim a tool-generated file, URL, UUID, path, task id, or success result before the corresponding tool call has completed. If a tool is needed, call the tool first, then report only the actual returned result.
 
                 ## Multi-Part Question Guidelines
                 When the user asks multiple questions or requests multiple tasks in a single message:
