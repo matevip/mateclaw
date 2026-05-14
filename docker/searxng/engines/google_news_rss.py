@@ -40,7 +40,7 @@ def request(query, params):
     if time_range and time_range in _time_range_map:
         query = f"{query} {_time_range_map[time_range]}"
     params["url"] = (
-        f"{base_url}?q={quote_plus(query)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans&num=50"
+        f"{base_url}?q={quote_plus(query)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
     )
     return params
 
@@ -66,7 +66,7 @@ def response(resp):
     if channel is None:
         return results
 
-    for item in channel.findall("item")[:50]:
+    for item in channel.findall("item")[:100]:
         title = item.findtext("title") or ""
         article_url = item.findtext("link") or ""
         description = item.findtext("description") or ""
