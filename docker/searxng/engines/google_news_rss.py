@@ -15,7 +15,15 @@ about = {
 
 categories = ["news"]
 paging = False
-time_range_support = False
+time_range_support = True
+
+# Maps SearXNG time_range → Google News when: query modifier
+_time_range_map = {
+    "day": "when:1d",
+    "week": "when:7d",
+    "month": "when:1m",
+    "year": "when:1y",
+}
 
 base_url = "https://news.google.com/rss/search"
 proxy_url = "http://mihomo.zeabur.internal:10808"
@@ -28,6 +36,9 @@ def _make_opener():
 
 
 def request(query, params):
+    time_range = params.get("time_range")
+    if time_range and time_range in _time_range_map:
+        query = f"{query} {_time_range_map[time_range]}"
     params["url"] = (
         f"{base_url}?q={quote_plus(query)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans&num=50"
     )
