@@ -96,6 +96,11 @@ RUN apt-get update \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Playwright Python bindings so Python-based browser tools
+# (browser_use, etc.) can reuse the bundled browsers under
+# PLAYWRIGHT_BROWSERS_PATH without re-downloading them.
+RUN pip3 install --break-system-packages playwright
+
 # Tell Playwright Java where Microsoft's image stored the browsers.
 # BrowserLauncher's BUNDLED strategy will then succeed without extra config.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
