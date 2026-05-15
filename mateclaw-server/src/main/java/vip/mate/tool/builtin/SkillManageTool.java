@@ -47,9 +47,25 @@ public class SkillManageTool {
 
     @vip.mate.tool.ConcurrencyUnsafe("create/edit/patch/delete on the shared skill registry; concurrent ops on the same skill name race")
     @Tool(description = """
-        Manage reusable skills: create, edit, patch, or delete skill procedures (SKILL.md format).
+        Manage the canonical SKILL.md content for a reusable skill: create, edit, patch,
+        or delete the skill itself (its body, version, description, frontmatter).
 
-        Use this tool to save successful approaches, workflows, and solutions as reusable skills.
+        USE THIS TOOL when the user (or you) wants to change WHAT a skill is:
+        - Create a new skill from scratch
+        - Rewrite an existing skill's body or steps
+        - Bump the version field in YAML frontmatter
+        - Fix a typo, outdated command, or wrong instruction inside SKILL.md
+        - Delete a skill
+
+        DO NOT use this tool to record a tip, observation, or lesson learned while USING
+        a skill — that belongs in record_lesson (per-skill LESSONS.md) or remember
+        (cross-skill memory). Lessons are notes ABOUT a skill; this tool rewrites the
+        skill itself.
+
+        Quick rule of thumb:
+        - "Update / fix / rewrite / change version of skill X"  → skill_manage
+        - "Remember that X works better when..." / "Note: ..."  → record_lesson or remember
+
         When to create a skill:
         - After completing a complex task (5+ tool calls)
         - After fixing a tricky error with a non-obvious solution
@@ -61,8 +77,8 @@ public class SkillManageTool {
 
         Actions:
         - create: Create a new skill with SKILL.md content (YAML frontmatter + markdown body)
-        - edit: Replace entire skill content (for major rewrites)
-        - patch: Find-and-replace a specific section (for small fixes)
+        - edit: Replace entire skill content (for major rewrites; preferred when changing version + body together)
+        - patch: Find-and-replace a specific section (for small targeted fixes)
         - delete: Remove a skill
 
         SKILL.md format example:
