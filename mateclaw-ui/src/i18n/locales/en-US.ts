@@ -510,6 +510,7 @@ export default {
   },
   doctor: {
     title: 'System Diagnostics',
+    subtitle: 'Local instance health snapshot',
     checking: 'Checking...',
     allGood: 'All systems healthy',
     hasWarnings: '{count} warning(s)',
@@ -517,6 +518,8 @@ export default {
     refresh: 'Re-check',
     lastChecked: 'Checked {time} ago',
     diagnose: 'Diagnose',
+    checksPassed: '{healthy}/{total} checks passed',
+    checksLoading: 'Sampling system signals',
   },
   // Issue #81: provider-level hint / status text shared across chat popup and ModelSelector.
   provider: {

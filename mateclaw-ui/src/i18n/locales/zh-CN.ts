@@ -1823,6 +1823,7 @@ export default {
   },
   doctor: {
     title: '系统诊断',
+    subtitle: '本地实例健康概览',
     checking: '检查中...',
     allGood: '所有系统正常',
     hasWarnings: '{count} 个警告',
@@ -1830,6 +1831,8 @@ export default {
     refresh: '重新检查',
     lastChecked: '{time} 前检查',
     diagnose: '诊断问题',
+    checksPassed: '{healthy}/{total} 项检查通过',
+    checksLoading: '正在采样系统指标',
   },
   wiki: {
     kicker: '知识引擎',
