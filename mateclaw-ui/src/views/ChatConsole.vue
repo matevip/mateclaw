@@ -1150,6 +1150,12 @@ function applyPendingRouteAction() {
 // 轮询定时器：让 ChatConsole 能实时感知外部渠道（WeChat/DingTalk/…）推进来的新消息，
 // 无需 F5 即可看到侧栏列表更新和选中会话的消息/流状态。
 let activityPollTimer: number | null = null
+// Reentrancy guard: setInterval fires every ACTIVITY_POLL_MS regardless of
+// whether the previous async pollActivity has finished. If one cycle runs long
+// (slow reconnectStream / sluggish backend), unguarded ticks stack up and run
+// concurrently, multiplying in-flight requests. This flag keeps one cycle at a
+// time — late ticks become no-ops until the running cycle returns.
+let activityPolling = false
 const ACTIVITY_POLL_MS = 4000
 
 // Cron progress placeholder: when a cron job is mid-run on the currently
@@ -1223,39 +1229,46 @@ function hasLocalOnlyFailedTail(): boolean {
 async function pollActivity() {
   // 页面不可见时不轮询，避免切到别的标签还在空耗
   if (typeof document !== 'undefined' && document.hidden) return
+  // Skip when the previous cycle is still running so slow polls can't stack.
+  if (activityPolling) return
+  activityPolling = true
   try {
-    await loadConversations()
-  } catch {
-    // 静默失败，下一轮再试
-  }
-  // 自己没在生成时才刷新当前选中会话的消息 + 探测是否该接入流
-  if (currentConversationId.value && !isGenerating.value && streamPhase.value !== 'awaiting_approval') {
-    const cid = currentConversationId.value
     try {
-      const statusRes: any = await conversationApi.getStatus(cid)
-      if (currentConversationId.value !== cid) return
-      const running = statusRes?.data?.streamStatus === 'running'
-      if (running) {
-        // 外部渠道正在跑：
-        // 1. 先从 DB 拉消息，把刚插入的 user 消息（"你在干什么"之类）带进来，
-        //    否则只接入流的话前端只能看到 assistant content_delta，看不到用户问题。
-        // 2. 再接入流，让后续 content_delta 实时累积到 assistant 气泡。
-        await refreshCurrentConversationMessages(cid)
-        if (currentConversationId.value !== cid || isGenerating.value) return
-        await reconnectStream(cid)
-      } else if (!hasLocalOnlyFailedTail()) {
-        // 不在跑：从 DB 对齐消息（新 user 消息 / 刚落库 assistant 会合并进来）。
-        // 但若末尾是本地失败气泡（SSE setup 失败一类，后端从未持久化过），
-        // 就跳过对齐 —— 不然这次的 user/失败 assistant 会被 DB 快照覆盖掉，
-        // 用户除了上面的 toast 看不到任何痕迹。
-        await refreshCurrentConversationMessages(cid)
-      }
+      await loadConversations()
     } catch {
-      // 忽略探测失败
+      // 静默失败，下一轮再试
     }
-    // Cron progress placeholder — independent of streamStatus because cron
-    // runs use the non-streaming chat() path, so streamStatus stays idle.
-    await refreshActiveCronRuns(cid)
+    // 自己没在生成时才刷新当前选中会话的消息 + 探测是否该接入流
+    if (currentConversationId.value && !isGenerating.value && streamPhase.value !== 'awaiting_approval') {
+      const cid = currentConversationId.value
+      try {
+        const statusRes: any = await conversationApi.getStatus(cid)
+        if (currentConversationId.value !== cid) return
+        const running = statusRes?.data?.streamStatus === 'running'
+        if (running) {
+          // 外部渠道正在跑：
+          // 1. 先从 DB 拉消息，把刚插入的 user 消息（"你在干什么"之类）带进来，
+          //    否则只接入流的话前端只能看到 assistant content_delta，看不到用户问题。
+          // 2. 再接入流，让后续 content_delta 实时累积到 assistant 气泡。
+          await refreshCurrentConversationMessages(cid)
+          if (currentConversationId.value !== cid || isGenerating.value) return
+          await reconnectStream(cid)
+        } else if (!hasLocalOnlyFailedTail()) {
+          // 不在跑：从 DB 对齐消息（新 user 消息 / 刚落库 assistant 会合并进来）。
+          // 但若末尾是本地失败气泡（SSE setup 失败一类，后端从未持久化过），
+          // 就跳过对齐 —— 不然这次的 user/失败 assistant 会被 DB 快照覆盖掉，
+          // 用户除了上面的 toast 看不到任何痕迹。
+          await refreshCurrentConversationMessages(cid)
+        }
+      } catch {
+        // 忽略探测失败
+      }
+      // Cron progress placeholder — independent of streamStatus because cron
+      // runs use the non-streaming chat() path, so streamStatus stays idle.
+      await refreshActiveCronRuns(cid)
+    }
+  } finally {
+    activityPolling = false
   }
 }
 
