@@ -62,7 +62,7 @@ public class WikiController {
     public R<List<WikiKnowledgeBaseEntity>> listKBs(
             @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
         long wsId = workspaceId != null ? workspaceId : 1L;
-        return R.ok(kbService.listByWorkspace(wsId));
+        return R.ok(withLivePageCount(kbService.listByWorkspace(wsId)));
     }
 
     @RequireWorkspaceRole("viewer")
@@ -73,7 +73,26 @@ public class WikiController {
         verifyKBWorkspace(id, workspaceId);
         WikiKnowledgeBaseEntity kb = kbService.getById(id);
         if (kb == null) return R.fail("Knowledge base not found");
-        return R.ok(kb);
+        return R.ok(withLivePageCount(kb));
+    }
+
+    /**
+     * Overlay the live page count onto knowledge bases before returning them.
+     * The {@code pageCount} column is denormalized and only refreshed by the
+     * processing pipeline, so system-page generation (overview/log) and other
+     * out-of-band mutations leave it stale. Recomputing on read keeps the count
+     * the UI shows consistent with the page list.
+     */
+    private List<WikiKnowledgeBaseEntity> withLivePageCount(List<WikiKnowledgeBaseEntity> kbs) {
+        kbs.forEach(this::withLivePageCount);
+        return kbs;
+    }
+
+    private WikiKnowledgeBaseEntity withLivePageCount(WikiKnowledgeBaseEntity kb) {
+        if (kb != null && kb.getId() != null) {
+            kb.setPageCount(pageService.countByKbId(kb.getId()));
+        }
+        return kb;
     }
 
     @RequireWorkspaceRole("viewer")
@@ -84,9 +103,9 @@ public class WikiController {
         long wsId = workspaceId != null ? workspaceId : 1L;
         // 按 agent 查询后，过滤出属于当前 workspace 的知识库
         List<WikiKnowledgeBaseEntity> kbs = kbService.listByAgentId(agentId);
-        return R.ok(kbs.stream()
+        return R.ok(withLivePageCount(kbs.stream()
                 .filter(kb -> kb.getWorkspaceId() == null || kb.getWorkspaceId().equals(wsId))
-                .toList());
+                .collect(java.util.stream.Collectors.toList())));
     }
 
     @RequireWorkspaceRole("member")
