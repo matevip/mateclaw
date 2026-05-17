@@ -18,7 +18,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.util.StringUtils;
 import vip.mate.agent.AgentToolSet;
 import vip.mate.agent.GraphEventPublisher;
-import vip.mate.agent.ThinkingLevelHolder;
+import vip.mate.llm.chatmodel.ThinkingLevelHolder;
 import vip.mate.agent.graph.NodeStreamingChatHelper;
 import vip.mate.agent.context.ConversationWindowManager;
 import vip.mate.agent.context.RuntimeContextInjector;

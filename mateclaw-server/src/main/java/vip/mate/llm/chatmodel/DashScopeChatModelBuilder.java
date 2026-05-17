@@ -1,4 +1,4 @@
-package vip.mate.agent.chatmodel;
+package vip.mate.llm.chatmodel;
 
 import com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeConnectionProperties;
 import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
@@ -12,7 +12,6 @@ import org.springframework.retry.support.RetryTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import vip.mate.exception.MateClawException;
-import vip.mate.llm.chatmodel.ChatModelBuilder;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.model.ModelProtocol;
 import vip.mate.llm.model.ModelProviderEntity;
@@ -26,8 +25,8 @@ import java.util.Map;
  *
  * <p>Owns all DashScope-specific construction logic (api + options) plus the
  * fallback-chain helpers for resolving API key / Base URL when the provider
- * row is incomplete. PR-0b moved this code out of {@code AgentGraphBuilder}
- * so the agent package no longer carries any DashScope schema knowledge.</p>
+ * row is incomplete, so the agent package no longer carries any DashScope
+ * schema knowledge.</p>
  *
  * <p>DashScopeChatModel is injected via ObjectProvider so that the builder
  * degrades gracefully when DashScope auto-configuration is disabled or the
@@ -35,13 +34,13 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-public class AgentDashScopeChatModelBuilder implements ChatModelBuilder {
+public class DashScopeChatModelBuilder implements ChatModelBuilder {
 
     private final ObjectProvider<DashScopeChatModel> dashScopeChatModelProvider;
     private final DashScopeConnectionProperties dashScopeConnectionProperties;
     private final ModelProviderService modelProviderService;
 
-    public AgentDashScopeChatModelBuilder(ObjectProvider<DashScopeChatModel> dashScopeChatModelProvider,
+    public DashScopeChatModelBuilder(ObjectProvider<DashScopeChatModel> dashScopeChatModelProvider,
                                           DashScopeConnectionProperties dashScopeConnectionProperties,
                                           ModelProviderService modelProviderService) {
         this.dashScopeChatModelProvider = dashScopeChatModelProvider;

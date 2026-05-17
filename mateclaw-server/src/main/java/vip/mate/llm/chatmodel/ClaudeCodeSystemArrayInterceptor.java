@@ -1,4 +1,4 @@
-package vip.mate.agent.chatmodel;
+package vip.mate.llm.chatmodel;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

@@ -15,6 +15,7 @@ import vip.mate.agent.binding.repository.AgentToolBindingMapper;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.repository.AgentMapper;
 import vip.mate.exception.MateClawException;
+import vip.mate.llm.routing.AgentBindingResolver;
 import vip.mate.skill.acp.AcpSkillBridge;
 import vip.mate.skill.mcp.McpSkillBridge;
 import vip.mate.skill.model.SkillEntity;
@@ -41,7 +42,7 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
-public class AgentBindingService {
+public class AgentBindingService implements AgentBindingResolver {
 
     private final AgentSkillBindingMapper skillBindingMapper;
     private final AgentToolBindingMapper toolBindingMapper;
@@ -112,6 +113,7 @@ public class AgentBindingService {
      * 获取 Agent 绑定的 enabled skill ID 集合。
      * 返回 null 表示该 agent 没有自定义绑定（使用全局默认）。
      */
+    @Override
     public Set<Long> getBoundSkillIds(Long agentId) {
         List<AgentSkillBinding> bindings = listSkillBindings(agentId);
         if (bindings.isEmpty()) {
@@ -668,6 +670,7 @@ public class AgentBindingService {
      * <p>Used by {@code AgentGraphBuilder.buildFallbackChain} to bias the
      * fallback chain order per agent.</p>
      */
+    @Override
     public List<String> getPreferredProviderIds(Long agentId) {
         if (agentId == null) return Collections.emptyList();
         return listProviderPreferences(agentId).stream()

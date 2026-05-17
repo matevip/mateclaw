@@ -1,4 +1,4 @@
-package vip.mate.agent;
+package vip.mate.llm.chatmodel;
 
 import java.util.List;
 import java.util.UUID;
@@ -7,8 +7,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Relays per-request assistant {@code reasoning_content} from the producer
  * ({@code NodeStreamingChatHelper}, which sees {@code AssistantMessage.metadata})
- * to the consumer ({@code AgentGraphBuilder.patchReasoningContent}, which rebuilds
- * the outbound {@code ChatCompletionRequest}).
+ * to the consumer ({@link OpenAiRequestRewriter#patchReasoningContent}, which
+ * rebuilds the outbound {@code ChatCompletionRequest}).
  *
  * <p>Why not {@link ThreadLocal}: {@code OpenAiChatModel.stream()} hops to
  * {@code boundedElastic} via {@code subscribeOn}, so a {@code ThreadLocal} on the

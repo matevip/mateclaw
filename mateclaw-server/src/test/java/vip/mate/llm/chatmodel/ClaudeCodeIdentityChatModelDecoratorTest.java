@@ -1,4 +1,4 @@
-package vip.mate.agent.chatmodel;
+package vip.mate.llm.chatmodel;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

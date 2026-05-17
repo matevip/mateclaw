@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import vip.mate.auth.service.AuthService;
 import vip.mate.memory.model.DreamReportEntity;
 import vip.mate.memory.model.MemoryRecallEntity;
 import vip.mate.memory.repository.DreamReportMapper;
@@ -36,13 +37,14 @@ class HilEditValidationTest {
     @Mock private MorningCardService morningCardService;
     @Mock private MemoryHilService hilService;
     @Mock private DreamEventBroadcaster eventBroadcaster;
+    @Mock private AuthService authService;
 
     private DreamController controller;
 
     @BeforeEach
     void setUp() {
         controller = new DreamController(dreamReportMapper, recallMapper,
-                morningCardService, hilService, eventBroadcaster);
+                morningCardService, hilService, eventBroadcaster, authService);
     }
 
     @Test

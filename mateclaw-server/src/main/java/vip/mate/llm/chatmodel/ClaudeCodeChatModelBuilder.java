@@ -1,4 +1,4 @@
-package vip.mate.agent.chatmodel;
+package vip.mate.llm.chatmodel;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.observation.ObservationRegistry;
@@ -16,13 +16,12 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.reactive.function.client.WebClient;
 import vip.mate.llm.anthropic.oauth.ClaudeCodeApiHeaders;
 import vip.mate.llm.anthropic.oauth.ClaudeCodeOAuthService;
-import vip.mate.llm.chatmodel.ChatModelBuilder;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.model.ModelProtocol;
 import vip.mate.llm.model.ModelProviderEntity;
 
 /**
- * RFC-062: Strategy implementation for {@link ModelProtocol#ANTHROPIC_CLAUDE_CODE}.
+ * Strategy implementation for {@link ModelProtocol#ANTHROPIC_CLAUDE_CODE}.
  *
  * <p>Sends Anthropic Messages API requests authenticated with the user's
  * Claude Code OAuth subscription token instead of an API key — letting users
@@ -56,9 +55,9 @@ import vip.mate.llm.model.ModelProviderEntity;
  */
 @Slf4j
 @Component
-public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
+public class ClaudeCodeChatModelBuilder implements ChatModelBuilder {
 
-    private final AgentAnthropicChatModelBuilder anthropicBuilder;
+    private final AnthropicChatModelBuilder anthropicBuilder;
     private final ClaudeCodeOAuthService oauthService;
     private final ClaudeCodeApiHeaders apiHeaders;
     private final ObjectProvider<RestClient.Builder> restClientBuilderProvider;
@@ -66,8 +65,8 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
     private final ObjectProvider<ObservationRegistry> observationRegistryProvider;
     private final ObjectMapper objectMapper;
 
-    public AgentClaudeCodeChatModelBuilder(
-            AgentAnthropicChatModelBuilder anthropicBuilder,
+    public ClaudeCodeChatModelBuilder(
+            AnthropicChatModelBuilder anthropicBuilder,
             ClaudeCodeOAuthService oauthService,
             ClaudeCodeApiHeaders apiHeaders,
             ObjectProvider<RestClient.Builder> restClientBuilderProvider,
@@ -126,7 +125,7 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
     }
 
     /**
-     * RFC-03 Lane B1 overload — same OAuth-stamped Anthropic client, with a
+     * Overload — same OAuth-stamped Anthropic client, with a
      * per-model read-timeout override threaded through to the underlying
      * RestClient + WebClient timeouts.
      */
@@ -141,9 +140,8 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
         // `anthropic-dangerous-direct-browser-access: true` on every request.
         // Spring AI's Java client doesn't, so Anthropic's edge fingerprint
         // sees the missing headers and treats the traffic as suspicious —
-        // rate-limited harder than spec'd. Reference: openclaw
-        // anthropic-transport-stream.ts:567-574.
-        RestClient.Builder restClientBuilder = AgentAnthropicChatModelBuilder.applyHttpTimeouts(
+        // rate-limited harder than spec'd.
+        RestClient.Builder restClientBuilder = AnthropicChatModelBuilder.applyHttpTimeouts(
                         restClientBuilderProvider.getIfAvailable(RestClient::builder), readTimeoutOverride)
                 .defaultHeader(HttpHeaders.AUTHORIZATION, authHeader)
                 .defaultHeader(HttpHeaders.USER_AGENT, userAgent)
@@ -161,7 +159,7 @@ public class AgentClaudeCodeChatModelBuilder implements ChatModelBuilder {
                 // staring at SDK internals.
                 .requestInterceptor(new RateLimitDiagnosticInterceptor());
 
-        WebClient.Builder webClientBuilder = AgentAnthropicChatModelBuilder.applyHttpTimeoutsToWebClient(
+        WebClient.Builder webClientBuilder = AnthropicChatModelBuilder.applyHttpTimeoutsToWebClient(
                         webClientBuilderProvider.getIfAvailable(WebClient::builder), readTimeoutOverride)
                 .defaultHeader(HttpHeaders.AUTHORIZATION, authHeader)
                 .defaultHeader(HttpHeaders.USER_AGENT, userAgent)

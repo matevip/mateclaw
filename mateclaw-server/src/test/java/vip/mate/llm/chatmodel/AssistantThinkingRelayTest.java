@@ -1,4 +1,4 @@
-package vip.mate.agent;
+package vip.mate.llm.chatmodel;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,9 +16,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * RFC-049 PR-2: {@link AssistantThinkingRelay} — RelayEntry carries both
- * per-assistant thinking and the caller's original {@code user} field, so the
- * consumer can restore it when rebuilding the outbound request.
+ * {@link AssistantThinkingRelay} — RelayEntry carries both per-assistant thinking
+ * and the caller's original {@code user} field, so the consumer can restore it
+ * when rebuilding the outbound request.
  */
 class AssistantThinkingRelayTest {
 

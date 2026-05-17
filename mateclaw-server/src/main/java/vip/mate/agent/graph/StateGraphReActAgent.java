@@ -501,7 +501,7 @@ public class StateGraphReActAgent extends BaseAgent implements StructuredStreamC
         // 迭代控制：深度思考模式允许更多迭代（思考需要更多轮工具调用）
         // maxIterations<=0 表示软上限解除（由 LLM 自己决定何时收尾），加分要短路，
         // 否则 thinking-on 会把"无限"误算成 5（变成"5 步就停"）。
-        String thinkingLevel = vip.mate.agent.ThinkingLevelHolder.get();
+        String thinkingLevel = vip.mate.llm.chatmodel.ThinkingLevelHolder.get();
         boolean thinkingOn = thinkingLevel != null && !"off".equalsIgnoreCase(thinkingLevel);
         int effectiveMaxIterations = (maxIterations <= 0)
                 ? 0

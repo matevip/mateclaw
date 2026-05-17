@@ -1,4 +1,4 @@
-package vip.mate.agent.chatmodel;
+package vip.mate.llm.chatmodel;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,7 +12,6 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
-import vip.mate.agent.ThinkingLevelHolder;
 
 import java.util.HashMap;
 import java.util.List;
@@ -109,8 +108,8 @@ class DeepSeekV4ThinkingDecoratorTest {
     @Test
     @DisplayName("mapEffort: low/medium/high passthrough; max collapses to high; unknown → medium")
     void mapEffort_levels() {
-        // openclaw resolveDeepSeekV4ReasoningEffort folds "max" into "high"
-        // because DeepSeek doesn't expose a max tier. Pin both ends of the rule.
+        // "max" folds into "high" because DeepSeek doesn't expose a max tier.
+        // Pin both ends of the rule.
         assertEquals("low", DeepSeekV4ThinkingDecorator.mapEffort("low"));
         assertEquals("medium", DeepSeekV4ThinkingDecorator.mapEffort("medium"));
         assertEquals("high", DeepSeekV4ThinkingDecorator.mapEffort("high"));

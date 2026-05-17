@@ -1,4 +1,4 @@
-package vip.mate.agent.chatmodel;
+package vip.mate.llm.chatmodel;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -10,7 +10,6 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
-import vip.mate.agent.ThinkingLevelHolder;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -19,7 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * RFC: DeepSeek V4 thinking-mode payload patcher applied to every
+ * DeepSeek V4 thinking-mode payload patcher applied to every
  * {@code deepseek-v4-flash} / {@code deepseek-v4-pro} request.
  *
  * <p>DeepSeek V4 extends OpenAI's chat-completions wire format with two
@@ -40,13 +39,10 @@ import java.util.Map;
  * {@code reasoning_content} must be stripped or DeepSeek echoes the old
  * thinking back into the response.
  *
- * <p>Reference: openclaw {@code plugin-sdk/provider-stream-shared.ts}
- * lines 185-213 ({@code createDeepSeekV4OpenAICompatibleThinkingWrapper}).
- *
  * <h2>Pipeline (per request)</h2>
  * <ol>
  *   <li>Read {@link ThinkingLevelHolder} for the current request's thinking
- *       level (set by AgentService before the call).</li>
+ *       level (set by the agent service before the call).</li>
  *   <li>Clone {@link OpenAiChatOptions} and patch its {@code extraBody} +
  *       {@code reasoningEffort} fields. Spring AI sends {@code extraBody}
  *       verbatim in the JSON body, so the {@code thinking} key lands where
@@ -57,10 +53,6 @@ import java.util.Map;
  *       entry to satisfy V4's replay contract.</li>
  *   <li>Delegate to the wrapped {@link ChatModel}.</li>
  * </ol>
- *
- * <p>Spring AI 1.1.4's {@link OpenAiChatOptions} exposes a public
- * {@code extraBody: Map<String, Object>} (verified via {@code javap}). No
- * byte-level body patching needed — the simple path works.
  */
 @Slf4j
 public class DeepSeekV4ThinkingDecorator implements ChatModel {
@@ -116,9 +108,8 @@ public class DeepSeekV4ThinkingDecorator implements ChatModel {
 
     /**
      * Map MateClaw's thinking levels (off/low/medium/high/max) to DeepSeek's
-     * accepted reasoning_effort values. Aligns with openclaw
-     * {@code resolveDeepSeekV4ReasoningEffort}: max collapses into high since
-     * DeepSeek doesn't expose a "max" tier on V4.
+     * accepted reasoning_effort values: max collapses into high since DeepSeek
+     * does not expose a "max" tier on V4.
      */
     static String mapEffort(String level) {
         if (level == null || level.isBlank()) return "medium";
