@@ -929,6 +929,12 @@ export interface WorkflowSummary {
   draftJson?: string
   draftUpdatedAt?: string
   latestRevisionId?: number
+  /** Human version number of the latest published revision (1, 2, 3…) — shown
+   *  as "v3" instead of the latestRevisionId snowflake. Null when unpublished. */
+  latestRevisionNumber?: number
+  /** Latest published revision's graph JSON — populated by GET /workflows/{id}
+   *  so the editor can render a published workflow whose draft was cleared. */
+  publishedGraphJson?: string
   createTime: string
   updateTime: string
 }
