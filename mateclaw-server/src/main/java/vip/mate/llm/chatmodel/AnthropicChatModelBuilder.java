@@ -1,4 +1,4 @@
-package vip.mate.agent.chatmodel;
+package vip.mate.llm.chatmodel;
 
 import io.micrometer.observation.ObservationRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -13,10 +13,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.reactive.function.client.WebClient;
-import vip.mate.agent.ThinkingLevelHolder;
 import vip.mate.exception.MateClawException;
 import vip.mate.llm.cache.AnthropicCacheOptionsFactory;
-import vip.mate.llm.chatmodel.ChatModelBuilder;
 import vip.mate.llm.model.ModelConfigEntity;
 import vip.mate.llm.model.ModelProtocol;
 import vip.mate.llm.model.ModelProviderEntity;
@@ -30,12 +28,11 @@ import java.time.Duration;
  *
  * <p>Owns the full Anthropic construction logic — API client + chat options
  * including the extended-thinking budget mapping (low/medium/high/max →
- * 4k/8k/16k/32k thinking tokens) and prompt-cache options. PR-0b moved this
- * out of {@code AgentGraphBuilder}.</p>
+ * 4k/8k/16k/32k thinking tokens) and prompt-cache options.</p>
  */
 @Slf4j
 @Component
-public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
+public class AnthropicChatModelBuilder implements ChatModelBuilder {
 
     private final ModelProviderService modelProviderService;
     private final ObjectProvider<RestClient.Builder> restClientBuilderProvider;
@@ -43,7 +40,7 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
     private final ObjectProvider<ObservationRegistry> observationRegistryProvider;
     private final AnthropicCacheOptionsFactory anthropicCacheOptionsFactory;
 
-    public AgentAnthropicChatModelBuilder(
+    public AnthropicChatModelBuilder(
             ModelProviderService modelProviderService,
             ObjectProvider<RestClient.Builder> restClientBuilderProvider,
             ObjectProvider<WebClient.Builder> webClientBuilderProvider,
@@ -78,7 +75,7 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
     }
 
     /**
-     * RFC-03 Lane B1 overload — accepts a per-model read-timeout override
+     * Overload — accepts a per-model read-timeout override
      * (seconds). Null falls back to the default 180s.
      */
     AnthropicApi buildAnthropicApi(ModelProviderEntity provider, Integer readTimeoutOverride) {
@@ -108,8 +105,7 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
     }
 
     /**
-     * Substrings used to detect Claude 4.7 model variants. Reference:
-     * hermes-agent {@code anthropic_adapter._NO_SAMPLING_PARAMS_SUBSTRINGS}.
+     * Substrings used to detect Claude 4.7 model variants.
      * Claude 4.7 returns HTTP 400 if any of {@code temperature}, {@code top_p},
      * or {@code top_k} are set to non-default values, AND introduces an
      * "xhigh" thinking effort level between high and max.
@@ -173,7 +169,7 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
                 log.debug("Ignoring temperature/top_p for Claude 4.7 model {} (API rejects sampling params)",
                         modelName);
             }
-            // RFC-025: Anthropic rejects non-positive maxTokens — clamp here so a bad config
+            // Anthropic rejects non-positive maxTokens — clamp here so a bad config
             // surfaces as a logged warning instead of an opaque API 400 mid-conversation.
             Integer configuredMax = runtimeModel.getMaxTokens();
             if (configuredMax != null && configuredMax > 0) {
@@ -186,7 +182,7 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
                 builder.maxTokens(4096);
             }
         }
-        // RFC-014: prompt cache (system / tools / conversation history) — Spring AI 1.1.4+ first-class.
+        // Prompt cache (system / tools / conversation history) — Spring AI 1.1.4+ first-class.
         builder.cacheOptions(anthropicCacheOptionsFactory.build());
 
         return builder.internalToolExecutionEnabled(false).build();
@@ -197,16 +193,16 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
      * where nginx caps the gateway at 60s but a real long thinking response
      * needs more — the upper retry layer takes over once we time out.
      *
-     * <p>Package-private + static so {@code AgentClaudeCodeChatModelBuilder}
-     * (RFC-062) can apply the same timeouts to its OAuth RestClient without
-     * duplicating the snippet.</p>
+     * <p>Package-private + static so {@code ClaudeCodeChatModelBuilder} can
+     * apply the same timeouts to its OAuth RestClient without duplicating
+     * the snippet.</p>
      */
     static RestClient.Builder applyHttpTimeouts(RestClient.Builder builder) {
         return applyHttpTimeouts(builder, null);
     }
 
     /**
-     * RFC-03 Lane B1 overload — accepts a per-model read-timeout override
+     * Overload — accepts a per-model read-timeout override
      * (seconds). Null / zero / negative falls back to {@link vip.mate.llm.chatmodel.HttpTimeouts#DEFAULT_READ_TIMEOUT}
      * so unset model configs keep the historical 180s.
      */
@@ -226,16 +222,16 @@ public class AgentAnthropicChatModelBuilder implements ChatModelBuilder {
      * stalled provider could hang the agent thread indefinitely while the
      * failover chain idles (no exception = no signal).
      * <p>
-     * Mirrors AgentGraphBuilder.applyHttpTimeoutsToWebClient: same JDK
-     * HttpClient + JdkClientHttpConnector path, so the dependency surface
-     * doesn't pull in reactor-netty (excluded by this project's pom).
+     * Uses the same JDK HttpClient + JdkClientHttpConnector path, so the
+     * dependency surface doesn't pull in reactor-netty (excluded by this
+     * project's pom).
      */
     static WebClient.Builder applyHttpTimeoutsToWebClient(WebClient.Builder builder) {
         return applyHttpTimeoutsToWebClient(builder, null);
     }
 
     /**
-     * RFC-03 Lane B1 overload — same per-model override semantics as
+     * Overload — same per-model override semantics as
      * {@link #applyHttpTimeouts(RestClient.Builder, Integer)}.
      */
     static WebClient.Builder applyHttpTimeoutsToWebClient(WebClient.Builder builder, Integer readTimeoutOverride) {

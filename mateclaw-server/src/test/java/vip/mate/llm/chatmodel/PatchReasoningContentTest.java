@@ -1,4 +1,4 @@
-package vip.mate.agent;
+package vip.mate.llm.chatmodel;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,8 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 /**
- * RFC-049 PR-2 consumer-side tests for
- * {@link AgentGraphBuilder#patchReasoningContent(ChatCompletionRequest, ModelProviderEntity)}.
+ * Consumer-side tests for
+ * {@link OpenAiRequestRewriter#patchReasoningContent(ChatCompletionRequest, ModelProviderEntity)}.
  *
  * <p>Covers four orthogonal dimensions:
  * <ul>
@@ -101,7 +101,7 @@ class PatchReasoningContentTest {
         ), "caller-user-1");
 
         // model is "test-model" which maps to STANDARD family → requiresReasoningContentPatch returns false
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("deepseek"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("deepseek"));
         assertSame(req, out, "no thinking signal → no rebuild");
         assertEquals("caller-user-1", out.user(), "user field untouched");
     }
@@ -117,7 +117,7 @@ class PatchReasoningContentTest {
                 assistantPlain("hi")
         ), fakeToken);
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("openai"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("openai"));
         assertNotSame(req, out, "rebuild expected to strip leaked token");
         assertNull(out.user(), "leaked token must be sanitized to null");
     }
@@ -136,7 +136,7 @@ class PatchReasoningContentTest {
                 assistantToolCall("a1", null)        // i=2, position 1 in thinkings → "in-turn-think"
         ), token);
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("deepseek"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("deepseek"));
 
         assertEquals("original-caller-42", out.user(), "sanitizedUser must equal entry.originalUser()");
         assertEquals("in-turn-think", out.messages().get(2).reasoningContent(),
@@ -167,7 +167,7 @@ class PatchReasoningContentTest {
                 assistantToolCall("a2", null)        // i=4, in-turn (4 > 3)
         ), token);
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("deepseek"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("deepseek"));
 
         assertEquals(" ", out.messages().get(2).reasoningContent(),
                 "cross-turn A1 gets ' ' fallback so DeepSeek thinking-mode validation passes");
@@ -193,7 +193,7 @@ class PatchReasoningContentTest {
                 assistantToolCall("a4", null)    // i=5 in-turn
         ), token);
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("deepseek"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("deepseek"));
 
         // DEEPSEEK patchCrossTurn=true: cross-turn now also gets ' ' fallback.
         // Iterator alignment is preserved: A1/A2 consume the empty entries '',
@@ -220,7 +220,7 @@ class PatchReasoningContentTest {
                 assistantToolCall("a1", null)  // in-turn
         ), token);
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("deepseek"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("deepseek"));
 
         assertEquals(" ", out.messages().get(1).reasoningContent(),
                 "DeepSeek: ' ' fallback restores forward progress when relay has no real value");
@@ -243,7 +243,7 @@ class PatchReasoningContentTest {
                 null, null, null, null, null, null
         );
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("kimi-cn"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("kimi-cn"));
 
         assertEquals(" ", out.messages().get(1).reasoningContent(),
                 "Kimi tolerates ' ' — preserve legacy behavior");
@@ -266,7 +266,7 @@ class PatchReasoningContentTest {
                 null, null, null, null, null, null
         );
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("custom-gateway"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("custom-gateway"));
 
         assertEquals(" ", out.messages().get(1).reasoningContent(),
                 "DEFAULT keeps legacy ' ' for unrecognized providers — avoid regressing self-hosted backends");
@@ -285,7 +285,7 @@ class PatchReasoningContentTest {
                 assistantPlain("plain answer")  // no tool_calls
         ), token);
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("deepseek"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("deepseek"));
 
         assertEquals("thinking-for-plain", out.messages().get(1).reasoningContent(),
                 "DeepSeek contract requires reasoning_content even on non-tool_call assistants when in thinking mode");
@@ -307,7 +307,7 @@ class PatchReasoningContentTest {
                 null, null, null, null, null, null
         );
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("kimi-cn"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("kimi-cn"));
 
         assertNull(out.messages().get(1).reasoningContent(),
                 "Kimi only patches tool_call assistants; plain assistants are untouched");
@@ -326,7 +326,7 @@ class PatchReasoningContentTest {
                 assistantToolCall("a1", "pre-existing-real-thinking")  // already has a value
         ), token);
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("deepseek"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("deepseek"));
 
         assertEquals("pre-existing-real-thinking", out.messages().get(1).reasoningContent(),
                 "non-blank existing reasoning_content must not be overwritten by relay");
@@ -338,7 +338,7 @@ class PatchReasoningContentTest {
     @DisplayName("Empty messages list: no-op, returns same instance")
     void emptyMessages_noop() {
         ChatCompletionRequest req = request(List.of(), null);
-        assertSame(req, AgentGraphBuilder.patchReasoningContent(req, provider("deepseek")));
+        assertSame(req, OpenAiRequestRewriter.patchReasoningContent(req, provider("deepseek")));
     }
 
     @Test
@@ -349,7 +349,7 @@ class PatchReasoningContentTest {
                 null, null, null, null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null
         );
-        assertSame(req, AgentGraphBuilder.patchReasoningContent(req, provider("deepseek")));
+        assertSame(req, OpenAiRequestRewriter.patchReasoningContent(req, provider("deepseek")));
     }
 
     // ---------- Fewer relay entries than assistants: defensive policy fallback ----------
@@ -368,7 +368,7 @@ class PatchReasoningContentTest {
                 assistantToolCall("a2", null)
         )), token);
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("deepseek"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("deepseek"));
 
         assertEquals("real-1", out.messages().get(1).reasoningContent());
         assertEquals(" ", out.messages().get(2).reasoningContent(),
@@ -394,7 +394,7 @@ class PatchReasoningContentTest {
                 assistantToolCall("a2", null)        // i=3, in-turn (3 > 2)
         ), token);
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("kimi-cn"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("kimi-cn"));
 
         assertNull(out.messages().get(1).reasoningContent(),
                 "KIMI does not patch cross-turn — thinking resets across user turns");
@@ -420,7 +420,7 @@ class PatchReasoningContentTest {
                 new ChatCompletionMessage("plain a2", Role.ASSISTANT)
         ), token);
 
-        ChatCompletionRequest out = AgentGraphBuilder.patchReasoningContent(req, provider("deepseek"));
+        ChatCompletionRequest out = OpenAiRequestRewriter.patchReasoningContent(req, provider("deepseek"));
 
         assertEquals(" ", out.messages().get(1).reasoningContent(),
                 "DEEPSEEK plain prior-turn assistant gets ' ' so request validates");

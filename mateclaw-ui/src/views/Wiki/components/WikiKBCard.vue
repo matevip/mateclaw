@@ -9,6 +9,7 @@
     @keydown.space.prevent="$emit('open', kb.id)"
   >
     <button
+      v-if="canManageWiki"
       type="button"
       class="kb-card-delete"
       :title="t('wiki.library.deleteKB')"
@@ -61,6 +62,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { WikiKB } from '@/stores/useWikiStore'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { kbAccent, kbAccentFg, kbInitial, relativeTime } from '../utils/kbVisual'
 
 const props = defineProps<{
@@ -74,6 +76,10 @@ defineEmits<{
 }>()
 
 const { t, locale } = useI18n()
+const workspace = useWorkspaceStore()
+
+// Deleting a knowledge base requires manage:wiki; hide it from read-only viewers.
+const canManageWiki = computed(() => workspace.can('manage:wiki'))
 
 const failedJobCount = computed(() => props.failedJobCount ?? 0)
 const initial = computed(() => kbInitial(props.kb))

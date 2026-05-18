@@ -1,4 +1,4 @@
-package vip.mate.agent.chatmodel;
+package vip.mate.llm.chatmodel;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
@@ -24,8 +24,8 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * RFC-062: Claude Code OAuth identity transform applied to every Anthropic
- * request when the underlying auth is a Claude Code OAuth token.
+ * Claude Code OAuth identity transform applied to every Anthropic request
+ * when the underlying auth is a Claude Code OAuth token.
  *
  * <p>Anthropic's OAuth edge enforces an anti-abuse path that rate-limits
  * (and intermittently 5xxs) requests claiming Claude Code identity but
@@ -38,10 +38,6 @@ import java.util.Set;
  *       (genuine quota exhaustion carries a descriptive message).</li>
  *   <li>Sporadic 500s on the first call after a long idle period.</li>
  * </ul>
- *
- * <p>Reference: hermes-agent {@code anthropic_adapter._build_anthropic_messages_request}
- * lines 1571-1607 — same transforms applied unconditionally on
- * {@code is_oauth=True} requests.
  *
  * <h2>Transforms applied per call</h2>
  * <ol>

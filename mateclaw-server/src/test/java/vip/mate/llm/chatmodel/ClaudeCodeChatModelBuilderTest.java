@@ -1,4 +1,4 @@
-package vip.mate.agent.chatmodel;
+package vip.mate.llm.chatmodel;
 
 import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,17 +38,17 @@ import static org.mockito.Mockito.when;
  * tests can exercise the full assembly path without mocking the API client.
  */
 @ExtendWith(MockitoExtension.class)
-class AgentClaudeCodeChatModelBuilderTest {
+class ClaudeCodeChatModelBuilderTest {
 
     @Mock
-    private AgentAnthropicChatModelBuilder anthropicBuilder;
+    private AnthropicChatModelBuilder anthropicBuilder;
 
     @Mock
     private ClaudeCodeOAuthService oauthService;
 
     private ClaudeCodeApiHeaders apiHeaders;
 
-    private AgentClaudeCodeChatModelBuilder builder;
+    private ClaudeCodeChatModelBuilder builder;
 
     @BeforeEach
     void setUp() {
@@ -60,7 +60,7 @@ class AgentClaudeCodeChatModelBuilderTest {
         };
         apiHeaders = new ClaudeCodeApiHeaders(detector);
 
-        builder = new AgentClaudeCodeChatModelBuilder(
+        builder = new ClaudeCodeChatModelBuilder(
                 anthropicBuilder,
                 oauthService,
                 apiHeaders,
@@ -82,7 +82,7 @@ class AgentClaudeCodeChatModelBuilderTest {
         // Sanity check: the NoopApiKey path passes Spring AI's notNull assertion
         // and the OAuth headers attach without throwing. If this test ever
         // fails, the most likely cause is a Spring AI upgrade tightening the
-        // ApiKey contract — see AgentClaudeCodeChatModelBuilder javadoc.
+        // ApiKey contract — see ClaudeCodeChatModelBuilder javadoc.
         AnthropicApi api = builder.buildOauthAnthropicApi("sk-ant-oat01-test-token");
         assertNotNull(api);
     }

@@ -17,6 +17,9 @@ import vip.mate.memory.repository.MemoryRecallMapper;
 import vip.mate.memory.service.MorningCardService;
 import vip.mate.memory.service.MemoryHilService;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
+import vip.mate.auth.model.UserEntity;
+import vip.mate.auth.service.AuthService;
+import vip.mate.exception.MateClawException;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -38,6 +41,7 @@ public class DreamController {
     private final MorningCardService morningCardService;
     private final MemoryHilService hilService;
     private final DreamEventBroadcaster eventBroadcaster;
+    private final AuthService authService;
 
     @Operation(summary = "List dream reports (paginated, newest first)")
     @GetMapping("/reports")
@@ -94,7 +98,6 @@ public class DreamController {
     @RequireWorkspaceRole("member")
     public R<Map<String, Object>> getMorningCard(@PathVariable Long agentId, Authentication auth) {
         Long userId = resolveUserId(auth);
-        if (userId == null) return R.fail("Not authenticated");
         Map<String, Object> card = morningCardService.getCardFor(userId, agentId);
         return R.ok(card); // null = no card to show
     }
@@ -106,7 +109,6 @@ public class DreamController {
                                         @RequestBody Map<String, Object> body,
                                         Authentication auth) {
         Long userId = resolveUserId(auth);
-        if (userId == null) return R.fail("Not authenticated");
         Long reportId = body.get("reportId") != null
                 ? Long.valueOf(body.get("reportId").toString()) : null;
         morningCardService.markSeen(userId, agentId, reportId);
@@ -178,17 +180,19 @@ public class DreamController {
         return R.ok(null);
     }
 
+    /**
+     * Resolve the authenticated user's id from the JWT principal. The auth
+     * filter exposes the username via {@link Authentication#getName()}, so the
+     * id is looked up by username — matching AgentController / WorkspaceController.
+     */
     private Long resolveUserId(Authentication auth) {
-        if (auth == null) return null;
-        try {
-            Object principal = auth.getPrincipal();
-            if (principal instanceof vip.mate.auth.model.UserEntity user) {
-                return user.getId();
-            }
-            // No stable user ID available — refuse rather than fabricate
-            return null;
-        } catch (Exception e) {
-            return null;
+        if (auth == null) {
+            throw new MateClawException("err.auth.unauthenticated", 401, "Not authenticated");
         }
+        UserEntity user = authService.findByUsername(auth.getName());
+        if (user == null) {
+            throw new MateClawException("err.auth.user_not_found", 401, "User not found: " + auth.getName());
+        }
+        return user.getId();
     }
 }
