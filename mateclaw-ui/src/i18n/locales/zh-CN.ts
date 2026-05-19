@@ -388,7 +388,7 @@ export default {
     workspace: '工作区',
     agentContext: '智能体上下文',
     skills: '技能',
-    wiki: 'Wiki 知识库',
+    wiki: '知识库',
     enterprise: '企业场景',
     tools: '工具',
     plugins: '插件',

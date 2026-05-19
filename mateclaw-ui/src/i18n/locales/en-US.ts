@@ -385,7 +385,7 @@ export default {
     workspace: 'Workspace',
     agentContext: 'Agent Context',
     skills: 'Skills',
-    wiki: 'Wiki KB',
+    wiki: 'Wiki',
     enterprise: 'Enterprise',
     tools: 'Tools',
     plugins: 'Plugins',
