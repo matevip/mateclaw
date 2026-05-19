@@ -370,6 +370,7 @@ export default {
     // 审批栏
     approvalAllow: '允许',
     approvalExecute: '执行？',
+    approvalParameters: '参数',
     // 时间格式
     timeJustNow: '刚刚',
     timeMinutesAgo: '{n} 分钟前',

@@ -59,31 +59,37 @@
 
     <!-- 审批栏：有待审批时替换输入区域 -->
     <div v-if="pendingApproval?.status === 'pending_approval'" class="approval-bar">
-      <div class="approval-bar__info">
-        <span class="approval-bar__icon">
-          <el-icon><WarningFilled /></el-icon>
-        </span>
-        <span class="approval-bar__label">{{ t('chat.approvalAllow') }}</span>
-        <span class="approval-bar__tool">{{ getToolLabel(pendingApproval.toolName) }}</span>
-        <span class="approval-bar__label">{{ t('chat.approvalExecute') }}</span>
+      <div class="approval-bar__top">
+        <div class="approval-bar__info">
+          <span class="approval-bar__icon">
+            <el-icon><WarningFilled /></el-icon>
+          </span>
+          <span class="approval-bar__label">{{ t('chat.approvalAllow') }}</span>
+          <span class="approval-bar__tool">{{ getToolLabel(pendingApproval.toolName) }}</span>
+          <span class="approval-bar__label">{{ t('chat.approvalExecute') }}</span>
+        </div>
+        <div class="approval-bar__actions">
+          <button
+            type="button"
+            class="approval-bar__btn approval-bar__btn--deny"
+            @click="emit('deny', pendingApproval.pendingId)"
+          >
+            <el-icon><CloseBold /></el-icon>
+            {{ t('chat.deny') }}
+          </button>
+          <button
+            type="button"
+            class="approval-bar__btn approval-bar__btn--approve"
+            @click="emit('approve', pendingApproval.pendingId)"
+          >
+            <el-icon><Select /></el-icon>
+            {{ t('chat.approve') }}
+          </button>
+        </div>
       </div>
-      <div class="approval-bar__actions">
-        <button
-          type="button"
-          class="approval-bar__btn approval-bar__btn--deny"
-          @click="emit('deny', pendingApproval.pendingId)"
-        >
-          <el-icon><CloseBold /></el-icon>
-          {{ t('chat.deny') }}
-        </button>
-        <button
-          type="button"
-          class="approval-bar__btn approval-bar__btn--approve"
-          @click="emit('approve', pendingApproval.pendingId)"
-        >
-          <el-icon><Select /></el-icon>
-          {{ t('chat.approve') }}
-        </button>
+      <div v-if="showApprovalArguments" class="approval-bar__params">
+        <div class="approval-bar__params-label">{{ t('chat.approvalParameters') }}</div>
+        <pre class="approval-bar__params-code">{{ formattedApprovalArguments }}</pre>
       </div>
     </div>
 
@@ -206,6 +212,7 @@ import { ref, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CloseBold, MagicStick, Microphone, Paperclip, Promotion, Select, Timer, WarningFilled } from '@element-plus/icons-vue'
 import { useToolLabel } from '@/composables/useToolLabel'
+import { formatToolArguments, shouldShowMcpToolArguments } from '@/utils/toolArguments'
 import type { ChatAttachment, PendingApprovalMeta, StreamPhase, QueuedMessage } from '@/types'
 
 interface Props {
@@ -309,6 +316,11 @@ const inputPlaceholder = computed(() => {
   }
   return props.placeholder
 })
+
+const formattedApprovalArguments = computed(() => formatToolArguments(props.pendingApproval?.arguments))
+const showApprovalArguments = computed(() =>
+  shouldShowMcpToolArguments(props.pendingApproval?.toolName, props.pendingApproval?.arguments)
+)
 
 // 处理提交
 const handleSubmit = () => {
@@ -681,14 +693,21 @@ defineExpose({
 /* 审批栏 */
 .approval-bar {
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--mc-input-bg, #ffffff);
+  border-radius: 16px;
+  padding: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(217, 119, 87, 0.3);
+  min-height: 50px;
+}
+
+.approval-bar__top {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  background: var(--mc-input-bg, #ffffff);
-  border-radius: 16px;
-  padding: 8px 8px 8px 12px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(217, 119, 87, 0.3);
-  min-height: 50px;
+  width: 100%;
 }
 
 .approval-bar__info {
@@ -732,6 +751,34 @@ defineExpose({
   gap: 8px;
   align-items: center;
   flex-shrink: 0;
+}
+
+.approval-bar__params {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px 8px;
+  border-radius: 10px;
+  background: var(--mc-bg-sunken, #f1f5f9);
+  border: 1px solid var(--mc-border-light, #e5e7eb);
+}
+
+.approval-bar__params-label {
+  margin-bottom: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mc-text-secondary, #64748b);
+}
+
+.approval-bar__params-code {
+  margin: 0;
+  max-height: 150px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--mc-text-primary, #1e293b);
 }
 
 .approval-bar__btn {
@@ -810,6 +857,16 @@ defineExpose({
   .chat-textarea {
     min-height: 34px;
     line-height: 1.55;
+  }
+
+  .approval-bar__top {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .approval-bar__actions {
+    justify-content: flex-end;
   }
 
   .action-btn {
