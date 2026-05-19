@@ -1978,6 +1978,8 @@ function handleCodeCopy(e: MouseEvent) {
 }
 
 .agent-badge-icon {
+  display: flex;
+  align-items: center;
   font-size: 14px;
 }
 
