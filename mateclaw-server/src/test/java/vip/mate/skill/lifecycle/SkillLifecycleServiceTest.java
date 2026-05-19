@@ -11,6 +11,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import vip.mate.audit.service.AuditEventService;
+import vip.mate.exception.MateClawException;
 import vip.mate.skill.model.SkillEntity;
 import vip.mate.skill.repository.SkillMapper;
 import vip.mate.skill.runtime.SkillRuntimeService;
@@ -21,6 +22,7 @@ import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -124,6 +126,107 @@ class SkillLifecycleServiceTest {
     void freshSkillStaysActive() {
         SkillEntity s = skill("dynamic", "active", now.minusDays(3));
         assertEquals(LifecycleTransition.NONE, service.planTransition(s, now));
+    }
+
+    @Test
+    void alreadyStaleSkillWithinArchiveWindowStaysPut() {
+        // A skill already 'stale' and idle 50d (>= stale, < archive) yields
+        // NONE — a second sweep makes no further change (idempotency).
+        SkillEntity s = skill("dynamic", "stale", now.minusDays(50));
+        assertEquals(LifecycleTransition.NONE, service.planTransition(s, now));
+    }
+
+    // ==================== bumpActivity / setPinned ====================
+
+    @Test
+    void bumpActivityWritesTheActivityAnchor() {
+        service.bumpActivity(7L);
+        verify(skillMapper).update(any(), any());
+    }
+
+    @Test
+    void bumpActivityWithNullIdIsANoOp() {
+        service.bumpActivity(null);
+        verify(skillMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void setPinnedUpdatesTheRow() {
+        SkillEntity s = skill("dynamic", "active", now.minusDays(1));
+        when(skillMapper.selectById(1L)).thenReturn(s);
+        service.setPinned(1L, true);
+        verify(skillMapper).update(any(), any());
+    }
+
+    @Test
+    void setPinnedThrowsWhenSkillMissing() {
+        when(skillMapper.selectById(99L)).thenReturn(null);
+        assertThrows(MateClawException.class, () -> service.setPinned(99L, true));
+    }
+
+    // ==================== restore ====================
+
+    private SkillEntity archivedSkill() {
+        SkillEntity s = skill("dynamic", "archived", now.minusDays(100));
+        s.setSkillContent("---\nname: demo-skill\n---\n# body");
+        return s;
+    }
+
+    @Test
+    void restoreMovesWorkspaceBackAndFlipsTheRow() {
+        when(skillMapper.selectById(1L)).thenReturn(archivedSkill());
+        when(workspaceManager.restoreWorkspace("demo-skill"))
+                .thenReturn(SkillWorkspaceManager.RestoreResult.MOVED);
+
+        service.restore(1L);
+
+        verify(skillMapper).update(any(), any());
+        verify(runtimeService).refreshActiveSkills();
+    }
+
+    @Test
+    void restoreDbOnlySkillFlipsRowWithoutWorkspace() {
+        when(skillMapper.selectById(1L)).thenReturn(archivedSkill());
+        when(workspaceManager.restoreWorkspace("demo-skill"))
+                .thenReturn(SkillWorkspaceManager.RestoreResult.MISSING);
+
+        service.restore(1L);
+
+        verify(skillMapper).update(any(), any());
+    }
+
+    @Test
+    void restoreRejectsUnrecoverableSkill() {
+        SkillEntity s = archivedSkill();
+        s.setSkillContent("   ");
+        when(skillMapper.selectById(1L)).thenReturn(s);
+        when(workspaceManager.restoreWorkspace("demo-skill"))
+                .thenReturn(SkillWorkspaceManager.RestoreResult.MISSING);
+
+        assertThrows(MateClawException.class, () -> service.restore(1L));
+        verify(skillMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void restoreRejectsWhenWorkspaceMoveBackFails() {
+        when(skillMapper.selectById(1L)).thenReturn(archivedSkill());
+        when(workspaceManager.restoreWorkspace("demo-skill"))
+                .thenReturn(SkillWorkspaceManager.RestoreResult.FAILED);
+
+        assertThrows(MateClawException.class, () -> service.restore(1L));
+        verify(skillMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void restoreRejectsSkillThatIsNotArchived() {
+        when(skillMapper.selectById(1L)).thenReturn(skill("dynamic", "active", now));
+        assertThrows(MateClawException.class, () -> service.restore(1L));
+    }
+
+    @Test
+    void restoreThrowsWhenSkillMissing() {
+        when(skillMapper.selectById(1L)).thenReturn(null);
+        assertThrows(MateClawException.class, () -> service.restore(1L));
     }
 
     // ==================== archive atomicity ====================
