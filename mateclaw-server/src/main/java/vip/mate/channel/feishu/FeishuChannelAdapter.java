@@ -187,8 +187,13 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
 
         this.httpClient = null;
         this.tenantAccessToken = null;
-        this.botOpenId = null;
-        this.botOpenIdLastFailureMs = 0L;
+        // Reset bot-open-id state under the same lock getBotOpenId uses, so a
+        // dispatch thread mid-fetch sees a consistent (cleared) view rather than
+        // a torn write that could re-cache a stale id.
+        synchronized (botOpenIdLock) {
+            this.botOpenId = null;
+            this.botOpenIdLastFailureMs = 0L;
+        }
         this.processedMessageIds.clear();
         this.nicknameCache.clear();
         this.quotedMessageCache.clear();
@@ -1339,39 +1344,43 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
             HttpResponse<InputStream> response = httpClient.send(request,
                     HttpResponse.BodyHandlers.ofInputStream());
 
-            if (response.statusCode() != 200) {
-                log.debug("[feishu] Download resource failed: status={}", response.statusCode());
-                return null;
-            }
-
-            // 构建目标目录
-            Path mediaDir = Path.of(System.getProperty("user.home"), ".mateclaw", "media", "feishu");
-            Files.createDirectories(mediaDir);
-
-            // 安全文件名
-            String safeKey = fileKey.replaceAll("[^a-zA-Z0-9_]", "");
-            if (safeKey.isEmpty()) safeKey = "file";
-
-            // 推断扩展名
-            String ext = "bin";
-            String contentType = response.headers().firstValue("Content-Type").orElse("");
-            if (contentType.contains("jpeg") || contentType.contains("jpg")) ext = "jpg";
-            else if (contentType.contains("png")) ext = "png";
-            else if (contentType.contains("gif")) ext = "gif";
-            else if (contentType.contains("webp")) ext = "webp";
-            else if (contentType.contains("pdf")) ext = "pdf";
-            else if (fileNameHint != null && fileNameHint.contains(".")) {
-                ext = fileNameHint.substring(fileNameHint.lastIndexOf('.') + 1);
-            }
-
-            Path filePath = mediaDir.resolve(messageId + "_" + safeKey + "." + ext);
-
+            // BodyHandlers.ofInputStream does NOT auto-close the response body —
+            // callers must consume or close it on every path, including non-2xx
+            // and early-return-after-content-type. Use try-with-resources around
+            // the entire post-send block so failed downloads don't leak file
+            // descriptors during sustained traffic.
             try (InputStream is = response.body()) {
-                Files.copy(is, filePath, StandardCopyOption.REPLACE_EXISTING);
-            }
+                if (response.statusCode() != 200) {
+                    log.debug("[feishu] Download resource failed: status={}", response.statusCode());
+                    return null;
+                }
 
-            log.debug("[feishu] Downloaded resource to: {}", filePath);
-            return filePath.toAbsolutePath().toString();
+                // 构建目标目录
+                Path mediaDir = Path.of(System.getProperty("user.home"), ".mateclaw", "media", "feishu");
+                Files.createDirectories(mediaDir);
+
+                // 安全文件名
+                String safeKey = fileKey.replaceAll("[^a-zA-Z0-9_]", "");
+                if (safeKey.isEmpty()) safeKey = "file";
+
+                // 推断扩展名
+                String ext = "bin";
+                String contentType = response.headers().firstValue("Content-Type").orElse("");
+                if (contentType.contains("jpeg") || contentType.contains("jpg")) ext = "jpg";
+                else if (contentType.contains("png")) ext = "png";
+                else if (contentType.contains("gif")) ext = "gif";
+                else if (contentType.contains("webp")) ext = "webp";
+                else if (contentType.contains("pdf")) ext = "pdf";
+                else if (fileNameHint != null && fileNameHint.contains(".")) {
+                    ext = fileNameHint.substring(fileNameHint.lastIndexOf('.') + 1);
+                }
+
+                Path filePath = mediaDir.resolve(messageId + "_" + safeKey + "." + ext);
+                Files.copy(is, filePath, StandardCopyOption.REPLACE_EXISTING);
+
+                log.debug("[feishu] Downloaded resource to: {}", filePath);
+                return filePath.toAbsolutePath().toString();
+            }
 
         } catch (Exception e) {
             log.debug("[feishu] Download resource failed: {}", e.getMessage());
@@ -1380,6 +1389,23 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
     }
 
     // ==================== 消息发送 ====================
+
+    /**
+     * Maps a Feishu target identifier to the corresponding
+     * {@code receive_id_type} query parameter expected by the Open API.
+     * <p>
+     * Targets prefixed with {@code "ou_"} are user open_ids; everything else
+     * (group chat_ids start with {@code "oc_"}, but any non-{@code ou_} value
+     * is treated as a chat_id by default) is sent with
+     * {@code receive_id_type=chat_id}. Keeping this routing in one place
+     * keeps {@link #sendOneTextChunk}, {@link #sendCard},
+     * {@link #sendFeishuMedia} and {@link #proactiveSend} from drifting —
+     * silently misrouting the text-fallback after a failed card send to an
+     * individual was the previous regression.
+     */
+    private static String resolveReceiveIdType(String targetId) {
+        return targetId != null && targetId.startsWith("ou_") ? "open_id" : "chat_id";
+    }
 
     /**
      * Conservative per-message char ceiling. Feishu's documented limit is on
@@ -1426,6 +1452,7 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
 
     private void sendOneTextChunk(String targetId, String content) {
         String apiBase = getApiBaseUrl();
+        String receiveIdType = resolveReceiveIdType(targetId);
         try {
             String jsonBody = objectMapper.writeValueAsString(Map.of(
                     "receive_id", targetId,
@@ -1434,7 +1461,7 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
             ));
 
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(apiBase + "/open-apis/im/v1/messages?receive_id_type=chat_id"))
+                    .uri(URI.create(apiBase + "/open-apis/im/v1/messages?receive_id_type=" + receiveIdType))
                     .header("Content-Type", "application/json; charset=utf-8")
                     .header("Authorization", "Bearer " + tenantAccessToken)
                     .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
@@ -1444,7 +1471,7 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
             if (response.statusCode() != 200) {
                 log.warn("[feishu] Send message failed: status={}, body={}", response.statusCode(), response.body());
             } else {
-                log.debug("[feishu] Message sent to chat_id={} ({} chars)", targetId, content.length());
+                log.debug("[feishu] Message sent to {}={} ({} chars)", receiveIdType, targetId, content.length());
             }
 
         } catch (Exception e) {
@@ -1466,6 +1493,9 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
      * (null inputs, channel stopped, payload oversized) or the HTTP request
      * itself failed — letting {@link #sendMessage(String, String)} fall back
      * to plain text instead of going silent.
+     *
+     * <p>{@code targetId} format follows {@link #resolveReceiveIdType}:
+     * {@code "ou_"} prefix → open_id (1:1), anything else → chat_id (group).
      */
     public boolean sendCard(String targetId, Map<String, Object> cardJson) {
         if (httpClient == null) {
@@ -1478,7 +1508,7 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
         }
         ensureTokenValid();
         String apiBase = getApiBaseUrl();
-        String receiveIdType = targetId.startsWith("ou_") ? "open_id" : "chat_id";
+        String receiveIdType = resolveReceiveIdType(targetId);
         try {
             String cardContent = objectMapper.writeValueAsString(cardJson);
             int cardBytes = cardContent.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
@@ -1624,17 +1654,18 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
         }
     }
 
-    private void sendFeishuMedia(String chatId, String msgType, Map<String, Object> content) {
+    private void sendFeishuMedia(String targetId, String msgType, Map<String, Object> content) {
         String apiBase = getApiBaseUrl();
+        String receiveIdType = resolveReceiveIdType(targetId);
         try {
             String jsonBody = objectMapper.writeValueAsString(Map.of(
-                    "receive_id", chatId,
+                    "receive_id", targetId,
                     "msg_type", msgType,
                     "content", objectMapper.writeValueAsString(content)
             ));
 
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(apiBase + "/open-apis/im/v1/messages?receive_id_type=chat_id"))
+                    .uri(URI.create(apiBase + "/open-apis/im/v1/messages?receive_id_type=" + receiveIdType))
                     .header("Content-Type", "application/json; charset=utf-8")
                     .header("Authorization", "Bearer " + tenantAccessToken)
                     .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
@@ -1673,14 +1704,7 @@ public class FeishuChannelAdapter extends AbstractChannelAdapter {
 
         ensureTokenValid();
         String apiBase = getApiBaseUrl();
-
-        // 根据 targetId 前缀判断 receive_id_type
-        String receiveIdType;
-        if (targetId.startsWith("ou_")) {
-            receiveIdType = "open_id";
-        } else {
-            receiveIdType = "chat_id";
-        }
+        String receiveIdType = resolveReceiveIdType(targetId);
 
         try {
             String jsonBody = objectMapper.writeValueAsString(Map.of(
