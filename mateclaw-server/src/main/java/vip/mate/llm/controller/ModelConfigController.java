@@ -3,6 +3,7 @@ package vip.mate.llm.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import vip.mate.common.result.R;
 import vip.mate.llm.model.*;
@@ -22,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import vip.mate.workspace.core.annotation.RequireWorkspaceRole;
 
+@Slf4j
 @Tag(name = "模型配置管理")
 @RestController
 @RequestMapping("/api/v1/models")
@@ -264,6 +266,7 @@ public class ModelConfigController {
             result.put("model", config.getModelName());
             result.put("message", "连通性测试成功");
         } catch (Exception e) {
+            log.error("[EmbeddingTest] modelId={} test failed", modelId, e);
             result.put("success", false);
             result.put("message", e.getMessage());
         }
